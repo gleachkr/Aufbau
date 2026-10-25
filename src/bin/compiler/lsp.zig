@@ -560,6 +560,7 @@ fn outcomeForPlaceholder(
 /// availability, and inline expected-goal inference.
 fn applicableRuleCompletions(
     arena: std.mem.Allocator,
+    work_allocator: std.mem.Allocator,
     snapshot: *const LspIndex.Snapshot,
     proof_src: []const u8,
     offset: usize,
@@ -581,6 +582,7 @@ fn applicableRuleCompletions(
         .{
             .max_results = completions.len,
             .apply_at_offset = true,
+            .work_allocator = work_allocator,
         },
     ) catch |err| switch (err) {
         error.OutOfMemory => return err,
@@ -961,6 +963,7 @@ pub const Handler = struct {
         {
             completions = try applicableRuleCompletions(
                 arena,
+                self.allocator,
                 nav.snapshot,
                 nav.side().joined.text,
                 offset,
@@ -1148,6 +1151,7 @@ pub const Handler = struct {
                 .exact_result_limit = 1,
                 .generate = .{ .enabled = true },
                 .status_detail = true,
+                .work_allocator = self.allocator,
             },
         ) catch |err| switch (err) {
             error.OutOfMemory => return err,

@@ -20,6 +20,7 @@ comptime {
     // here happens to reference them (scripts/check-test-wiring.mjs).
     _ = @import("./frontend/acui_support.zig");
     _ = @import("./frontend/arena_allocator.zig");
+    _ = @import("./frontend/reclaiming_allocator.zig");
     _ = @import("./frontend/binding_validation.zig");
     _ = @import("./frontend/checked_ir.zig");
     _ = @import("./frontend/debug.zig");

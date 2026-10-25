@@ -281,13 +281,18 @@ Parsing, output, and debug helpers:
 - `proof_script.zig`
 - `compiler/mmb_writer.zig`
 - `view_trace.zig`
-- `containers.zig`, `text_util.zig` and `arena_allocator.zig`
+- `containers.zig`, `text_util.zig`, `arena_allocator.zig` and
+  `reclaiming_allocator.zig`
 
 `containers.zig` clones hash maps; `text_util.zig` truncates text without
 splitting a UTF-8 character. `arena_allocator.zig` is the single-threaded
 arena every frontend arena uses; Zig 0.17's `std.heap.ArenaAllocator` pays
 for atomics on each allocation, which the compiler, on one thread, does not
-need. `src/trusted` keeps the std arena.
+need. `src/trusted` keeps the std arena. `reclaiming_allocator.zig` backs
+one search call (`search/source.zig`): power-of-two size classes with free
+lists over that arena, so a long search reuses what it frees, and `deinit`
+releases whatever is still live. A free must name the allocator, length and
+alignment the block was allocated with; safe builds check this.
 
 `parse_recovery.zig` is the frontend's facade over the trusted MM0
 parser: it re-exports the core statement types, collects annotations,

@@ -1,5 +1,5 @@
 const std = @import("std");
-const ArenaAllocator = @import("../../arena_allocator.zig").ArenaAllocator;
+const ReclaimingAllocator = @import("../../reclaiming_allocator.zig").ReclaimingAllocator;
 const types = @import("./types.zig");
 const tunables = @import("./tunables.zig");
 const miss = @import("./miss.zig");
@@ -80,7 +80,7 @@ pub fn suggestionsAtSourceOffset(
         timer.nanoTimestamp()
     else
         0;
-    // A single per-call work arena backs the ENTIRE search: the fixture (the
+    // One per-call work allocator backs the ENTIRE search: the fixture (the
     // whole compiled environment — parser, env, registry, rule catalog, the
     // view/fresh/freshen maps, sort vars), the theorem context and its clones,
     // the label/checked/scratch/cache scaffolding, and every transient
@@ -91,14 +91,18 @@ pub fn suggestionsAtSourceOffset(
     // def_ops contexts all draw from `work`, the `internAppOwned` ownership
     // contract (shared allocator == interner allocator) holds uniformly.
     // Registered first so LIFO frees it LAST, after the `deinit` calls below
-    // that still read through arena-backed structures. Without this, every call
-    // (LSP code action, bench frontier run) retained its transient search state;
-    // the depth corpus grew to ~20 GiB live across theorems — a diffuse per-call
-    // leak spread across the parser, diagnostics, def_ops, and inference layers,
-    // not any one site.
-    var work_arena = ArenaAllocator.init(allocator);
-    defer work_arena.deinit();
-    const work = work_arena.allocator();
+    // that still read through `work`-backed structures.
+    //
+    // It reuses what the search frees, so freed clones and scratch don't
+    // pile up (a bump arena here held them all until the call ended: memory
+    // grew with the work, to gigabytes on retried searches), and it releases
+    // whatever is still live when the call ends, since the transient state is
+    // spread across the parser, diagnostics, def_ops and inference layers and
+    // not all of it is freed (the depth corpus once grew to ~20 GiB across
+    // theorems from that).
+    var work_state = ReclaimingAllocator.init(caller_options.work_allocator orelse allocator);
+    defer work_state.deinit();
+    const work = work_state.allocator();
 
     const target = try findSearchLine(
         work,
@@ -432,7 +436,7 @@ pub fn suggestionsAtSourceOffset(
                 }
             }
         }
-        // `suggestions` lives on the work arena; hand the caller an owned copy.
+        // `suggestions` lives on the work allocator; hand the caller an owned copy.
         return try copyOutSuggestions(allocator, suggestions);
     }
 
@@ -477,7 +481,7 @@ pub fn suggestionsAtSourceOffset(
             options.generate,
         );
     }
-    // `apply_suggestions` lives on the work arena; hand the caller an owned copy.
+    // `apply_suggestions` lives on the work allocator; hand the caller an owned copy.
     return try copyOutSuggestions(allocator, apply_suggestions);
 }
 
@@ -525,9 +529,9 @@ fn appendGeneratedSuggestions(
     var items = std.ArrayListUnmanaged(SourceSuggestion).empty;
     errdefer deinitSourceSuggestionItems(allocator, items.items);
     // Seed with the already-rendered direct suggestions. `existing` and its
-    // strings live on the per-call work arena (as does everything appended
+    // strings live on the per-call work allocator (as does everything appended
     // below), so there is no ownership hand-off to manage: the caller receives a
-    // deep copy at the return boundary, and the arena reclaims the rest.
+    // deep copy at the return boundary, and the work allocator reclaims the rest.
     try items.appendSlice(allocator, existing.items);
 
     if (items.items.len >= options.max_results) {
@@ -1132,8 +1136,8 @@ fn deinitSourceSuggestionItems(
     }
 }
 
-/// Deep-copy `src` (built on the per-call work arena) onto `allocator`, the
-/// caller's allocator, so the result survives the arena's release. Only the
+/// Deep-copy `src` (built on the per-call work allocator) onto `allocator`, the
+/// caller's allocator, so the result survives the work allocator's release. Only the
 /// title/replacement strings are heap-owned; spans are values. On failure every
 /// partial allocation is unwound so nothing leaks.
 pub fn copyOutSuggestions(

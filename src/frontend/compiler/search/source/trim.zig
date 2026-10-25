@@ -35,7 +35,7 @@ pub fn withNeededBindings(
 /// result has been validated. Null, with `app` unchecked, when it has no
 /// bindings, the checks budget runs out, or the oracle check fails; the last
 /// counts as untrimmed (`SearchCounters.untrimmed`), which no corpus line may
-/// be. Allocates on the per-call work arena and frees nothing.
+/// be. Allocates on the per-call work allocator and frees nothing.
 pub fn trimBindings(
     allocator: std.mem.Allocator,
     site: SuggestionSite,

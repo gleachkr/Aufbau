@@ -11,4 +11,5 @@ test {
     _ = @import("fuzz/shapes.zig");
     _ = @import("fuzz/theory.zig");
     _ = @import("fuzz/mmb_mutate.zig");
+    _ = @import("fuzz/allocator.zig");
 }

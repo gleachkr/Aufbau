@@ -23,6 +23,12 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Changed
 
+- A search reuses the memory it frees instead of holding all of it until it
+  returns, so its peak memory no longer grows with the work it does. On a
+  Pelletier problem it was about 85 MB per unit of `budget`: 740 MB at the
+  default, 20 GB for a retry at `budget: 300`; it is now 100 MB and 1.6 GB.
+  Retried searches no longer run the machine (or a browser tab's 4 GB) out
+  of memory, and results and work counts are unchanged.
 - `auto?` harvests `@auto trigger` seeds before the search starts and keeps
   them in its reference pool for every phase, instead of running a second
   search over them after a miss. Goals that need a seed no longer pay for

@@ -34,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [compile, kernel, lsp, search, shapes, theory]
+        target: [compile, kernel, lsp, search, shapes, theory, allocator]
 
     steps:
       - name: Checkout

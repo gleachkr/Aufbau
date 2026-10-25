@@ -11,6 +11,7 @@ toolchain and checks what comes back:
 | `lsp` | a language-server session over lsp-kit's own message loop: initialize with a random position encoding, open a proof case (maybe edited), then up to 32 events (insertions, deletions, whole-document replacements, typing a token a character at a time, hover, completion, definition, implementation, references, highlights, prepare-rename, rename to a fresh name, symbols, code actions, applying a returned code action's edit, closing, reopening, malformed messages) | every server message is JSON; a well-formed request never fails; every returned range lies inside its document, on a code-point boundary of the negotiated encoding; a rename replaces one name, and the analysis after it reports the same kinds of diagnostics as before |
 | `search` | a proof case that compiles cleanly, with up to three proof steps (whole lines or inline sub-proofs, on lines without holes) replaced by `auto?`, `exact?`, `apply?` or `conversion?`, searched by the driver behind `abc search` with a small work budget | no marker's search fails; every suggestion comes back trimmed; each found proof in place of its marker, and the original proof back where none was found, compiles and verifies |
 | `shapes` | a generated pair of one shape at a fuzzer-chosen size: deep inline proofs, parentheses, prefix operators, conclusions grown behind holes, nested definitions, doubling chains (on holes, holey shapes, inline, through a definition), an ACU context of identical members | the `compile` oracles; too deep is a diagnostic, never a signal; time and memory stay within the limits at any size; a shape valid by construction compiles while it is small |
+| `allocator` | a script of up to 4096 calls to the search's work allocator (`src/frontend/reclaiming_allocator.zig`): allocations on both sides of its 64 KiB small/large boundary at alignments up to 4096, and frees, resizes and remaps of live blocks | every live block keeps its contents and alignment through every call, and `deinit` returns whatever the script left live |
 | `theory` | a generated theory: sorts, terms with random arities and infix or prefix notations, definitions, axioms with hypotheses, and theorems that are substitution instances of the axioms, proved in one step with some bindings left to inference | the `compile` oracles, and every pair compiles, since each is valid by construction; the binary also passes mm0-c when it is on PATH |
 
 Every target must also not panic, leak, write after free, run longer than
@@ -74,7 +75,8 @@ generated to `.zig-cache/f/crash.<target>/`:
 - `lsp`: the client's messages, one per line, in session.jsonl;
 - `search`: case.mm0, the proof with markers as case.auf, and with the
   found proofs in place as filled.auf;
-- `shapes`, `theory`: case.mm0 and case.auf.
+- `shapes`, `theory`: case.mm0 and case.auf;
+- `allocator`: the call script, one call per line, in ops.txt.
 
 Without `-Dfuzz-target`, every target reads the same file and writes its
 own directory.

@@ -231,7 +231,7 @@ pub fn searchStatus(
 /// limits cut it short, how far the generation ladder got, how many
 /// candidates were validated vs. accepted, and the per-call parameters to
 /// raise together (`miss.retryFor`). Built on the caller's allocator (the
-/// per-call work arena; `copyOutSuggestions` deep-copies it out). Purely
+/// per-call work allocator; `copyOutSuggestions` deep-copies it out). Purely
 /// observational: reads the same counters the search already fills, never
 /// influences it.
 pub fn buildStatusDetail(

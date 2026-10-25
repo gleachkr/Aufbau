@@ -1508,4 +1508,9 @@ pub const SourceSuggestionOptions = struct {
     /// counters block, when the caller supplies none). Off by default so
     /// the bench and programmatic callers pay nothing.
     status_detail: bool = false,
+    /// Backs the search's working memory, which it frees as it goes; null
+    /// uses the caller's allocator. A caller whose allocator is an arena (the
+    /// LSP's per-request one) passes the allocator under it here, or the
+    /// search's frees reclaim nothing until the request ends.
+    work_allocator: ?std.mem.Allocator = null,
 };
