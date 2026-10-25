@@ -38,6 +38,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   symbol of the fact, not only its open instance. The bench corpus is
   unchanged; in the natural-deduction battery with a forward modus-ponens
   joiner, Pelletier 32 is found and Pelletier 28 takes 85% less work.
+- `auto?` no longer re-applies a `@recover` rule that keeps its principal,
+  such as `∀` on the left, when the context already holds an instance whose
+  witness is still open and used nowhere else: the new instance would be a
+  copy of it. A proof that needs a second instance still opens it, at the
+  point it first uses it. The bench corpus and the Pelletier battery find
+  the same proofs; a Pelletier 30 sub-goal that keeps re-opening its `∀`s
+  takes 30% less work, and one that missed is now found.
 - When none of a rule's remaining premises can be met by a known fact,
   `auto?` now searches first the premise whose structure fixes variables
   the other premises share, such as an elimination rule's major premise,

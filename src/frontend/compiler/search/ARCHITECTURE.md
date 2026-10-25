@@ -653,6 +653,18 @@ check names it from the pool as it would a `fresh_bound` slot's, the view
 bindings being the only place it survives. Guard: the `vac_` depth rows of
 `nd_fol`.
 
+A `@recover` rule that keeps its principal (nd_fol's `all_left`, whose premise
+is its conclusion plus the instance) can be re-applied to the same `∀` while
+an earlier instance `φ[?m]` is still untouched. `openSlotViaView` skips the
+slot when naming the new witness `?m` would make the premise equal the
+conclusion modulo ACUI and `?m` occurs nowhere else in the bindings
+(`addsOnlyACopy`): the two instances are interchangeable until one is used,
+and a proof that needs both opens the second where it first uses it, at the
+same depth. A goal-replacing view (`ex_intro`) never matches. The meta test
+reads the leaf's placeholder class, since a target's metas reach the child
+search unregistered in its slot stores. Guard: the prune test "copy-instance
+prune keeps a proof that needs two instances".
+
 A hidden variable inside a fixed binding of the premise qualifies the same
 way: a kept seed meta a bound binder still holds (`ih`, when no ref pinned
 it), or one inside a kept term (`reflt`'s `t := λ x. x` when the goal `G ⊩ T`

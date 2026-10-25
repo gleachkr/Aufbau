@@ -625,6 +625,10 @@ pub const SearchCounters = struct {
     /// (`context_prune.zig`): a hypothesis context contributes more rigid members
     /// absent from the goal context than the view discharges.
     context_prunes: usize = 0,
+    /// `@recover` open slots skipped because their premise would only add a
+    /// copy of an untouched instance already in the goal
+    /// (`open_slot.addsOnlyACopy`).
+    copy_instance_prunes: usize = 0,
     conclusion_probes: usize = 0,
     ref_pool_size: usize = 0,
     per_hyp_filtered_ref_list_total: usize = 0,

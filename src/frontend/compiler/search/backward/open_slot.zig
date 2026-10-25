@@ -22,6 +22,7 @@ const PlaceholderId = @import("../../../expr.zig").PlaceholderId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const RuleDecl = @import("../../../env.zig").RuleDecl;
 const ArgInfo = @import("../../../parse_recovery.zig").ArgInfo;
+const RecoverDecl = @import("../../../derived_bindings.zig").RecoverDecl;
 const rules_mod = @import("../../../rules.zig");
 const isEigenvariable = rules_mod.isEigenvariable;
 const allEigenvariables = rules_mod.allEigenvariables;
@@ -521,6 +522,10 @@ fn openSlotViaView(slot: *OpenSlot, view: types.ViewDecl) anyerror!void {
             // the choice can matter), and `tryPoolWitnesses` fills it if not.
             const bound = view.arg_infos[rec.target_view_idx].bound;
             if (bound and !isEigenvariable(view.arg_infos, rec.target_view_idx)) break :blk false;
+            if (!bound and try addsOnlyACopy(slot, view, view_bindings, rec, pattern, hole)) {
+                if (slot.ctx.counters) |counters| counters.copy_instance_prunes += 1;
+                return;
+            }
             const meta = try slot.store.mint(
                 theorem,
                 view.arg_infos[rec.target_view_idx].sort_name,
@@ -552,6 +557,93 @@ fn openSlotViaView(slot: *OpenSlot, view: types.ViewDecl) anyerror!void {
     // subsumes it: corpus byte-identical with the enumeration removed) and a
     // smell (it fired `rex`/`lall` even on purely propositional goals).
     try instantiateAndEmitView(slot, view, view_bindings, excluded);
+}
+
+/// The premise would only add a copy of an instance already present: some
+/// unassigned meta `?m` of the bindings occurs only in `pattern[hole := ?m]`,
+/// and with the new witness named `?m` the premise equals the conclusion
+/// modulo ACUI. A fresh witness `?n` is then interchangeable with `?m` until
+/// one of them is used, and a proof that needs both can open the second
+/// instance where it first uses it, at the same depth. `all_left` re-opening
+/// a `∀` whose earlier instance is untouched is the case this cuts; a view
+/// whose premise replaces the goal (`ex_intro`) never equals its conclusion.
+fn addsOnlyACopy(
+    slot: *OpenSlot,
+    view: types.ViewDecl,
+    view_bindings: []const ?ExprId,
+    rec: RecoverDecl,
+    pattern: ExprId,
+    hole: ExprId,
+) !bool {
+    const theorem = &slot.ctx.candidate.theorem;
+    const allocator = slot.ctx.context.allocator;
+    const holes = countLeaf(theorem, pattern, hole);
+    if (holes == 0) return false;
+    var metas: std.ArrayListUnmanaged(ExprId) = .empty;
+    defer metas.deinit(allocator);
+    for (view_bindings, 0..) |maybe, idx| {
+        if (idx == rec.target_view_idx or idx == rec.source_view_idx) continue;
+        if (maybe) |value| try collectOpenWitnesses(slot.store, theorem, rec.target_sort_name, value, &metas, allocator);
+    }
+    if (metas.items.len == 0) return false;
+    const trial = try allocator.dupe(?ExprId, view_bindings);
+    defer allocator.free(trial);
+    for (metas.items) |meta| {
+        var occurrences: usize = 0;
+        for (view_bindings, 0..) |maybe, idx| {
+            if (idx == rec.target_view_idx or idx == rec.source_view_idx) continue;
+            if (maybe) |value| occurrences += countLeaf(theorem, value, meta);
+        }
+        if (occurrences != holes) continue;
+        trial[rec.target_view_idx] = meta;
+        trial[rec.source_view_idx] = try forward.leafSwap(theorem, pattern, hole, meta);
+        const premise = (try OpenTerms.instantiateTemplateConcrete(theorem, view.hyps[slot.at.hyp_index], trial)) orelse continue;
+        const concl = (try OpenTerms.instantiateTemplateConcrete(theorem, view.concl, trial)) orelse continue;
+        if (try acui.canonicalizeAcui(slot.ctx.context, theorem, premise) ==
+            try acui.canonicalizeAcui(slot.ctx.context, theorem, concl)) return true;
+    }
+    return false;
+}
+
+/// The unassigned witness metas of sort `sort_name` that `expr` mentions,
+/// each once. A target's metas reach a child search as `.meta` leaves its
+/// slot stores never register (`hookSolveOpen`), so the leaf's class decides;
+/// a meta this store does know must be an unassigned existential.
+fn collectOpenWitnesses(
+    store: *const MetaStore,
+    theorem: *const TheoremContext,
+    sort_name: []const u8,
+    expr: ExprId,
+    out: *std.ArrayListUnmanaged(ExprId),
+    allocator: std.mem.Allocator,
+) !void {
+    switch (theorem.interner.node(expr).*) {
+        .variable => {},
+        .placeholder => |id| {
+            const leaf = theorem.placeholderInfo(id) orelse return;
+            if (leaf.class != .meta or !std.mem.eql(u8, leaf.sort_name, sort_name)) return;
+            if (store.info(id)) |meta| {
+                if (meta.kind != .existential or store.lookup(id) != null) return;
+            }
+            if (std.mem.indexOfScalar(ExprId, out.items, expr) != null) return;
+            try out.append(allocator, expr);
+        },
+        .app => |app| for (app.args) |arg| {
+            try collectOpenWitnesses(store, theorem, sort_name, arg, out, allocator);
+        },
+    }
+}
+
+fn countLeaf(theorem: *const TheoremContext, expr: ExprId, leaf: ExprId) usize {
+    if (expr == leaf) return 1;
+    return switch (theorem.interner.node(expr).*) {
+        .app => |app| blk: {
+            var count: usize = 0;
+            for (app.args) |arg| count += countLeaf(theorem, arg, leaf);
+            break :blk count;
+        },
+        .variable, .placeholder => 0,
+    };
 }
 
 /// Defer the remaining open view binders of the slot's hypothesis as
