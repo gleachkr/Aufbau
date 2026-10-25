@@ -263,6 +263,19 @@ pub const RuleAttemptDiagnostic = struct {
 
 pub const max_search_diagnostics: usize = 256;
 
+/// A sort whose `@vars` pool ran out during a search
+/// (`SearchCounters.vars_pool_exhausted`).
+pub const VarsPoolExhaustion = struct {
+    sort_name: InlineName = .{},
+    pool_size: usize = 0,
+
+    pub fn of(sort_name: []const u8, pool_size: usize) VarsPoolExhaustion {
+        var out: VarsPoolExhaustion = .{ .pool_size = pool_size };
+        out.sort_name.set(sort_name);
+        return out;
+    }
+};
+
 /// Scope-stable canonical content hash of an expression: hashes what the
 /// expression MEANS, never a raw `ExprId`, so the result survives a
 /// `hookSolveOpen` interner-scope discard (raw ids are ABA-unstable there — a
@@ -639,6 +652,11 @@ pub const SearchCounters = struct {
     /// stop on the shared global budget sets `work_budget_exhausted` instead.
     /// Read by `miss.MissReport`.
     phase_fuel_exhausted: bool = false,
+    /// The last `@vars` pool fill that found no variable it could use: every
+    /// pool name was already taken by the instance or rejected for the meta.
+    /// No limit reaches a branch that dies there, so the miss report names
+    /// the pool (`source/report.zig`).
+    vars_pool_exhausted: ?VarsPoolExhaustion = null,
     /// Set when the call-stack guard stopped the generation descent: one
     /// branch recursed close enough to the runtime stack limit that
     /// continuing would risk overflow (on wasm, silent linear-memory

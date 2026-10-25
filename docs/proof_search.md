@@ -314,6 +314,14 @@ request code actions on the placeholder again to run the larger search.
 If that search fails too, its report suggests the next step up.
 `abc search --retry N` takes up to N of these steps by itself.
 
+Either kind of miss can add **"Some branches ran out of `obj` variables:
+all N names of its `@vars` pool were in use there"**. A branch that needs
+a variable (a witness, or the fresh eigenvariable of a quantifier rule)
+takes it from the sort's `@vars` pool, and dies when every name is
+already used; no limit reaches it. A deep search can use up any pool in
+some branch, so this is not always the cause of the miss, but if the
+proof needs more distinct variables than the pool has, declare more.
+
 Failure reports end with a **"Most-tried rules"** list — each entry
 shows how many times a rule was *tried* against how many attempts were
 *accepted*. A rule tried hundreds of times with zero accepts is a

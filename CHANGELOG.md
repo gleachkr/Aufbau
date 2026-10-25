@@ -13,6 +13,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   intended case: searched through, it enumerates which context members to
   forget; as a bridge it costs one lookup and still closes a sub-goal from
   a fact stated for a smaller context. The rule must have a hypothesis.
+- A failed `auto?` reports when some branch needed a variable and found
+  every name of the sort's `@vars` pool in use there, with the pool's size.
+  No limit reaches such a branch, so the report used to blame only the
+  limits. The `nd_fol` bench fixture's pool grows from six names to nine
+  (`z1 z2 z3`, after the six it had, so their order is unchanged):
+  Pelletier problems with four bound variables and two eigenvariables had
+  run out, and two more of them are now found.
 
 ### Changed
 

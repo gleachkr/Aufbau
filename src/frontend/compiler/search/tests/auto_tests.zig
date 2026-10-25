@@ -928,6 +928,41 @@ test "auto global budget stop is not reported as a phase fuel-out" {
     try std.testing.expectEqual(@as(?u64, null), retry.fuel);
 }
 
+/// The drinker on nd_fol with its `@vars` line replaced by `vars`.
+fn drinkerWithVars(arena: *std.heap.ArenaAllocator, vars: []const u8) !types.SourceSuggestions {
+    const allocator = arena.allocator();
+    const fixture = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/nd_fol.mm0", allocator, .unlimited);
+    const line = "--| @vars x y z u v w z1 z2 z3\n";
+    const at = std.mem.indexOf(u8, fixture, line) orelse return error.MissingVarsLine;
+    const mm0_src = try std.mem.concat(allocator, u8, &.{ fixture[0..at], vars, fixture[at + line.len ..] });
+    const proof_src =
+        \\drinker
+        \\-------
+        \\l1: $ ∅ ⊢ ∃ x (P x → ∀ y P y) $ by auto?
+    ;
+    return suggestionsAtNeedle(arena, mm0_src, proof_src, "auto?", .{
+        .status_detail = true,
+        .generate = .{ .enabled = true },
+    });
+}
+
+test "auto miss report names a @vars pool that ran out" {
+    // The theorem's own `x` and `y` are the whole pool, so `all_intro` finds
+    // no name for its eigenvariable: no limit explains that miss, the pool
+    // does.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var miss = try drinkerWithVars(&arena, "--| @vars x y\n");
+    defer miss.deinit();
+    try std.testing.expectEqual(@as(usize, 0), miss.items.len);
+    const detail = miss.status_detail orelse return error.MissingStatusDetail;
+    try std.testing.expect(std.mem.indexOf(u8, detail, "ran out of `obj` variables: all 2 names") != null);
+
+    var found = try drinkerWithVars(&arena, "--| @vars x y u v\n");
+    defer found.deinit();
+    try std.testing.expect(found.items.len > 0);
+}
+
 // `@auto eager` set-commit cut. `e1` reaches its subgoal `A` (via `aD`)
 // and fails; `n1` proves the goal through `bC`.
 fn eagerCutSuggestions(

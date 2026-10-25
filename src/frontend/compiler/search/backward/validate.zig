@@ -432,7 +432,7 @@ pub fn validateSelectedRefs(
             const filled = if (hint) |goal_expr| (if (context.views.contains(candidate.rule_id))
                 try withRecoveredFromHint(allocator, context, candidate, bindings, goal_expr)
             else
-                try withFreshBoundVars(allocator, context, candidate, theorem_vars, bindings, goal_expr)) else null;
+                try withFreshBoundVars(allocator, context, candidate, theorem_vars, bindings, goal_expr, counters)) else null;
             defer if (filled) |named| allocator.free(named);
             const retry_bindings = renderAllResolvedBindings(
                 allocator,
@@ -728,7 +728,8 @@ fn recoverFromOpenSource(
 /// `g , ?x : A ⊢ ?x : A`) just says the meta is a variable; the slot that
 /// minted the meta names it. Returns a copy of `bindings` with every null
 /// binder named, or null when some null binder does not qualify (the
-/// candidate then fails) or no pool variable fits. Caller frees.
+/// candidate then fails) or no pool variable fits (recorded in
+/// `vars_pool_exhausted`). Caller frees.
 fn withFreshBoundVars(
     allocator: std.mem.Allocator,
     context: *const Context,
@@ -736,6 +737,7 @@ fn withFreshBoundVars(
     theorem_vars: *const NameExprMap,
     bindings: []const ?ExprId,
     goal_expr: ExprId,
+    counters: ?*SearchCounters,
 ) !?[]?ExprId {
     const rule = &context.env.rules.items[candidate.rule_id];
     const theorem = &candidate.theorem;
@@ -770,6 +772,9 @@ fn withFreshBoundVars(
         );
         defer pool.deinit();
         const fresh = (try pool.nextAvoiding(taken)) orelse {
+            if (pool.tokens.len != 0) {
+                if (counters) |c| c.vars_pool_exhausted = .of(rule.args[idx].sort_name, pool.tokens.len);
+            }
             allocator.free(named);
             return null;
         };

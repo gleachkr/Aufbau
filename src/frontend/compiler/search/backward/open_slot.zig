@@ -1673,7 +1673,8 @@ fn boundAvoid(kind: OpenTerms.MetaKind, taken: *u55) ?*u55 {
 /// (generate.zig) and registered in `theorem_vars`; reinterning the parser var
 /// here is dependency-free. A successful `assign` records a trail entry; a
 /// rejected one records nothing, so the caller's single mark/rollback covers
-/// the whole loop.
+/// the whole loop. When the sort has a pool but no dummy of it fits, the
+/// pool is recorded in `vars_pool_exhausted` for the miss report.
 fn assignPoolWitness(
     slot: *OpenSlot,
     theorem: *TheoremContext,
@@ -1693,6 +1694,9 @@ fn assignPoolWitness(
         slot.store.assign(theorem, meta_id, pool_var.expr) catch continue;
         if (avoid) |taken| taken.* |= pool_var.deps;
         return true;
+    }
+    if (pool.tokens.len != 0) {
+        if (slot.ctx.counters) |c| c.vars_pool_exhausted = .of(sort_name, pool.tokens.len);
     }
     return false;
 }

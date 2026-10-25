@@ -397,6 +397,18 @@ fn writeStatusDetail(
         },
     }
 
+    // No limit reaches a branch that needed a variable and found every pool
+    // name in use, so name the pool. Some branch of a deep search can use up
+    // any pool, so this says what happened, not that it caused the miss.
+    if (counters.vars_pool_exhausted) |*pool| {
+        try w.print(
+            " Some branches ran out of `{s}` variables: all {d} names of its " ++
+                "`@vars` pool were in use there. If the proof needs more " ++
+                "distinct variables, declare more names.",
+            .{ pool.sort_name.slice(), pool.pool_size },
+        );
+    }
+
     // Where the work went: the most-tried rules with their accept counts
     // (attempts ≠ accepts — a rule tried 500 times with 0 accepted is a
     // reject-flood, the usual budget sink). Only recorded under `collect`.
