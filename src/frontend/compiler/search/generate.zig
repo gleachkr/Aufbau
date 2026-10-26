@@ -1521,31 +1521,6 @@ fn collectOpenProofs(
         driver.scratch.free(key);
         return;
     }
-    // Per-call cost budget: bound long generation stretches between
-    // `Fuel.spend` sites too (candidate assembly/enumeration burns ticks
-    // without spending fuel). Checked only where real exploration begins, so
-    // memoized skips stay free, mirroring the node budget above.
-    if (driver.fuel.global) |budget| {
-        budget.check() catch |err| {
-            driver.scratch.free(key);
-            return err;
-        };
-    }
-    if (driver.nodes >= driver.options.max_nodes) {
-        driver.node_cap_trips += 1;
-        driver.scratch.free(key);
-        return;
-    }
-    driver.nodes += 1;
-    const trips_at_entry = driver.node_cap_trips;
-    try driver.visited_open.put(driver.scratch, key, driver.path_height);
-    const path_entry = enterPath(driver);
-    defer {
-        leavePath(driver, path_entry);
-        _ = driver.visited_open.remove(key);
-        driver.scratch.free(key);
-    }
-
     // Interner scope: everything this call interns into the work theorem —
     // the fresh-meta hint below, the child search's candidate assemblies and
     // canonical forms, generation-local dummies — goes into a discardable COW
@@ -1579,7 +1554,37 @@ fn collectOpenProofs(
         &meta_map,
         driver.scratch,
         target,
-    )) orelse return;
+    )) orelse {
+        // A placeholder `store` does not own (a meta carried in from an
+        // enclosing open slot that a `.constrained` slot leaves unregistered)
+        // cannot be lifted: no child search can run, so skip it uncharged.
+        driver.scratch.free(key);
+        return;
+    };
+    // Per-call cost budget: bound long generation stretches between
+    // `Fuel.spend` sites too (candidate assembly/enumeration burns ticks
+    // without spending fuel). Checked only where real exploration begins, so
+    // memoized skips stay free, mirroring the node budget above.
+    if (driver.fuel.global) |budget| {
+        budget.check() catch |err| {
+            driver.scratch.free(key);
+            return err;
+        };
+    }
+    if (driver.nodes >= driver.options.max_nodes) {
+        driver.node_cap_trips += 1;
+        driver.scratch.free(key);
+        return;
+    }
+    driver.nodes += 1;
+    const trips_at_entry = driver.node_cap_trips;
+    try driver.visited_open.put(driver.scratch, key, driver.path_height);
+    const path_entry = enterPath(driver);
+    defer {
+        leavePath(driver, path_entry);
+        _ = driver.visited_open.remove(key);
+        driver.scratch.free(key);
+    }
     const saved_focus = driver.hook.focus;
     const saved_target = driver.node_target;
     driver.hook.focus = if (focus_premise) |premise|

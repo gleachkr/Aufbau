@@ -50,6 +50,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   found at depth 7 instead of 8. Results on the bench corpus are unchanged,
   at about 0.3% more work; one unannotated Pelletier problem that was found
   just under the default budget now runs out just over it.
+- `auto?` no longer counts against its node limit a sub-goal it cannot
+  search: one whose unknowns include a witness carried in from an enclosing
+  rule that this part of the search does not solve. Such sub-goals made up
+  most of the nodes of the deep phases on Pelletier problems. On the bench
+  corpus one more theorem closes at every depth and nine more depths are
+  found (one theorem loses five), at about 2.5% more work on the goals found
+  before; a search that fails now runs to its other limits, about 6% longer.
 - `auto?` harvests `@auto trigger` seeds before the search starts and keeps
   them in its reference pool for every phase, instead of running a second
   search over them after a miss. Goals that need a seed no longer pay for
