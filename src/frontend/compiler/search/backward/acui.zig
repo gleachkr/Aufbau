@@ -12,6 +12,7 @@ const templateNeedsSemantic = semantic.templateNeedsSemantic;
 const isRigidHead = semantic.isRigidHead;
 const lockstep = @import("./lockstep.zig");
 const bag = @import("./bag.zig");
+const acui_support = @import("../../../acui_support.zig");
 const def_match = @import("./def_match.zig");
 const OpenTerms = @import("../../inference/open_terms.zig");
 const DeepVerdictCache = types.DeepVerdictCache;
@@ -843,6 +844,9 @@ pub fn normalizeAcuiUnits(
 /// The result is used *only* as a hash key, never as a proof term, so its own
 /// identity is irrelevant beyond equality — the replayed proof is relabeled to
 /// the caller's exact target, not to this canonical form.
+///
+/// Members are ordered by content, so the key also agrees across interner
+/// scopes, where the same members can carry different ids.
 pub fn canonicalizeAcui(
     context: *const Context,
     theorem: *TheoremContext,
@@ -851,11 +855,28 @@ pub fn canonicalizeAcui(
     return rebuildAcuiShared(context, theorem, expr_id, .memo_key);
 }
 
+/// `canonicalizeAcui` with members ordered by id, the order they were
+/// interned in, for a result compared only inside one interner scope. The
+/// forward pool uses it for fact shapes, which are terms the matchers then
+/// explore: by id, a fact keeps its members in about the order it was
+/// written, which the matchers explore well (the content order made one
+/// euclid line 30x dearer to find). It is not a cross-scope key.
+pub fn canonicalizeAcuiInScope(
+    context: *const Context,
+    theorem: *TheoremContext,
+    expr_id: ExprId,
+) error{ OutOfMemory, TooManyTheoremExprs }!ExprId {
+    return rebuildAcuiShared(context, theorem, expr_id, .in_scope);
+}
+
 const AcuiForm = enum {
     /// Association flattened and this combiner's units dropped.
     unit_free,
-    /// `unit_free`, with members sorted under C and deduped under C and I.
+    /// `unit_free`, with members sorted by content under C and deduped under
+    /// C and I.
     memo_key,
+    /// `memo_key`, but sorted by id.
+    in_scope,
 };
 
 /// The rebuilt ids of the app nodes a rebuild has done, so a shared subterm
@@ -957,8 +978,14 @@ fn rebuildAcuiCombiner(
     // C (only when commutative): order is immaterial, so sort to collide
     // order-variant regions. Under a non-commutative subset (AU/AUI) order is
     // significant and must be preserved — we leave the members as written.
-    if (form == .memo_key and combiner.law.isCommutative()) {
-        std.mem.sort(ExprId, kept[0..kept_n], {}, std.sort.asc(ExprId));
+    // A memo key orders by content (child searches intern into their own
+    // scopes, where the same members can carry different ids); an in-scope
+    // form orders by id.
+    if (form != .unit_free and combiner.law.isCommutative()) {
+        if (form == .memo_key)
+            std.mem.sort(ExprId, kept[0..kept_n], theorem, memberLessThan)
+        else
+            std.mem.sort(ExprId, kept[0..kept_n], {}, std.sort.asc(ExprId));
         // I (only when also commutative): collapse duplicates, now adjacent after
         // the sort. We deliberately do NOT dedup an idempotent-but-non-commutative
         // (AUI) combiner: collapsing only *adjacent* duplicates there would be a
@@ -979,6 +1006,17 @@ fn rebuildAcuiCombiner(
 
     // Every member was a unit ⇒ the whole region is the unit element.
     return (try combiner.build(theorem, kept[0..kept_n])) orelse expr_id;
+}
+
+/// Content order with placeholders compared blind (fresh meta ids differ
+/// across scopes too), then id, which only splits members that differ in
+/// placeholders alone. Equal ids stay adjacent for the idempotent dedup.
+fn memberLessThan(theorem: *TheoremContext, lhs: ExprId, rhs: ExprId) bool {
+    return switch (acui_support.compareExprIdsBy(theorem, lhs, rhs, .blind)) {
+        .lt => true,
+        .gt => false,
+        .eq => lhs < rhs,
+    };
 }
 
 // Unit law: in an ACUI monoid with a unit, `combine(a, b, …) = unit` forces

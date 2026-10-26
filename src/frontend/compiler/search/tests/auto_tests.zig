@@ -1807,6 +1807,35 @@ test "templateDefiniteMismatch compares a binder-introducing def by its argument
     ));
 }
 
+/// The canonicalizeAcui tests' theory: `join` is full ACUI, `bag` ACU,
+/// `seq` AU.
+const acui_subsets_mm0 =
+    \\delimiter $ ( ) , $;
+    \\strict provable sort wff;
+    \\sort ctx;
+    \\term ctx_eq (G H: ctx): wff;
+    \\infixl ctx_eq: $=$ prec 10;
+    \\term emp: ctx;
+    \\term bemp: ctx;
+    \\term semp: ctx;
+    \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+    \\term join (G H: ctx): ctx;
+    \\--| @acui bag_assoc bag_comm bemp _
+    \\term bag (G H: ctx): ctx;
+    \\--| @acui seq_assoc _ semp _
+    \\term seq (G H: ctx): ctx;
+    \\term ca: ctx;
+    \\term cb: ctx;
+    \\term cc: ctx;
+    \\axiom ctx_assoc (G H K: ctx): $ G = G $;
+    \\axiom ctx_comm (G H: ctx): $ G = G $;
+    \\axiom ctx_idem (G: ctx): $ G = G $;
+    \\axiom bag_assoc (G H K: ctx): $ G = G $;
+    \\axiom bag_comm (G H: ctx): $ G = G $;
+    \\axiom seq_assoc (G H K: ctx): $ G = G $;
+    \\theorem t (G: ctx): $ G = G $;
+;
+
 test "canonicalizeAcui respects the registered combiner subset" {
     // The success/failure memo keys (`generate.zig` `canonicalKey`) collapse
     // ACUI-equal subgoals via `canonicalizeAcui`. It must collapse only the laws
@@ -1815,37 +1844,11 @@ test "canonicalizeAcui respects the registered combiner subset" {
     // exercise the distinguishing subset cells: `join` is full ACUI; `bag` is ACU
     // (commutative but NOT idempotent — sort, but keep duplicates); `seq` is AU
     // (NOT commutative, not idempotent — keep order and duplicates).
-    const mm0_src =
-        \\delimiter $ ( ) , $;
-        \\strict provable sort wff;
-        \\sort ctx;
-        \\term ctx_eq (G H: ctx): wff;
-        \\infixl ctx_eq: $=$ prec 10;
-        \\term emp: ctx;
-        \\term bemp: ctx;
-        \\term semp: ctx;
-        \\--| @acui ctx_assoc ctx_comm emp ctx_idem
-        \\term join (G H: ctx): ctx;
-        \\--| @acui bag_assoc bag_comm bemp _
-        \\term bag (G H: ctx): ctx;
-        \\--| @acui seq_assoc _ semp _
-        \\term seq (G H: ctx): ctx;
-        \\term ca: ctx;
-        \\term cb: ctx;
-        \\term cc: ctx;
-        \\axiom ctx_assoc (G H K: ctx): $ G = G $;
-        \\axiom ctx_comm (G H: ctx): $ G = G $;
-        \\axiom ctx_idem (G: ctx): $ G = G $;
-        \\axiom bag_assoc (G H K: ctx): $ G = G $;
-        \\axiom bag_comm (G H: ctx): $ G = G $;
-        \\axiom seq_assoc (G H K: ctx): $ G = G $;
-        \\theorem t (G: ctx): $ G = G $;
-    ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var fixture = try fixtureFor(allocator, acui_subsets_mm0, "t");
     var harness = ContextHarness.init(allocator);
     defer harness.deinit();
     const context = harness.context(&fixture);
@@ -1942,6 +1945,86 @@ test "canonicalizeAcui respects the registered combiner subset" {
         ca,
         try canon(&context, &theorem, try j(&theorem, ti_join, ca, try j(&theorem, ti_join, emp, emp))),
     );
+}
+
+test "canonicalizeAcui orders members by content, not interning order" {
+    // Child searches intern into their own scopes, where the same members can
+    // carry different ids, and the memo keys built from the canonical form
+    // must still agree. Two theorems intern the parts of
+    // `join(ca, cb, cc, bag(?m, cc), bag(?n, cb))` in opposite orders, the
+    // metas included; both canonical forms must list the members alike.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var fixture = try fixtureFor(allocator, acui_subsets_mm0, "t");
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const names = &fixture.theory.env.term_names;
+    const Terms = struct { join: u32, bag: u32, ca: u32, cb: u32, cc: u32 };
+    const terms = Terms{
+        .join = names.get("join").?,
+        .bag = names.get("bag").?,
+        .ca = names.get("ca").?,
+        .cb = names.get("cb").?,
+        .cc = names.get("cc").?,
+    };
+
+    const Build = struct {
+        fn goal(t: *TheoremContext, ti: Terms, reversed: bool) !ExprId {
+            var ca: ExprId = undefined;
+            var cb: ExprId = undefined;
+            var cc: ExprId = undefined;
+            var m: ExprId = undefined;
+            var n: ExprId = undefined;
+            var bag_m: ExprId = undefined;
+            var bag_n: ExprId = undefined;
+            if (!reversed) {
+                ca = try t.interner.internApp(ti.ca, &.{});
+                cb = try t.interner.internApp(ti.cb, &.{});
+                cc = try t.interner.internApp(ti.cc, &.{});
+                m = try t.addMetaPlaceholderResolved("ctx");
+                n = try t.addMetaPlaceholderResolved("ctx");
+                bag_m = try t.interner.internApp(ti.bag, &.{ m, cc });
+                bag_n = try t.interner.internApp(ti.bag, &.{ n, cb });
+            } else {
+                cc = try t.interner.internApp(ti.cc, &.{});
+                cb = try t.interner.internApp(ti.cb, &.{});
+                ca = try t.interner.internApp(ti.ca, &.{});
+                n = try t.addMetaPlaceholderResolved("ctx");
+                m = try t.addMetaPlaceholderResolved("ctx");
+                bag_n = try t.interner.internApp(ti.bag, &.{ n, cb });
+                bag_m = try t.interner.internApp(ti.bag, &.{ m, cc });
+            }
+            var acc = bag_n;
+            for ([_]ExprId{ bag_m, cc, cb, ca }) |member| {
+                acc = try t.interner.internApp(ti.join, &.{ member, acc });
+            }
+            return acc;
+        }
+        // The expression's content, every placeholder spelled `?`.
+        fn spell(t: *const TheoremContext, e: ExprId, out: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator) !void {
+            switch (t.interner.node(e).*) {
+                .variable => try out.append(a, 'v'),
+                .placeholder => try out.append(a, '?'),
+                .app => |app| {
+                    try out.print(a, "t{d}(", .{app.term_id});
+                    for (app.args) |arg| try spell(t, arg, out, a);
+                    try out.append(a, ')');
+                },
+            }
+        }
+    };
+
+    var spelled: [2]std.ArrayListUnmanaged(u8) = .{ .empty, .empty };
+    for (&spelled, [_]bool{ false, true }) |*out, reversed| {
+        var theorem = TheoremContext.init(allocator);
+        defer theorem.deinit();
+        const goal = try Build.goal(&theorem, terms, reversed);
+        try Build.spell(&theorem, try acui.canonicalizeAcui(&context, &theorem, goal), out, allocator);
+    }
+    try std.testing.expectEqualStrings(spelled[0].items, spelled[1].items);
 }
 
 test "source exact inside inline or_elim uses sibling branch" {

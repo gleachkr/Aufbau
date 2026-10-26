@@ -41,6 +41,15 @@ This file records notable user-facing changes to Aufbau. The project follows
   default, 20 GB for a retry at `budget: 300`; it is now 100 MB and 1.6 GB.
   Retried searches no longer run the machine (or a browser tab's 4 GB) out
   of memory, and results and work counts are unchanged.
+- In a theory with commutative `@acui` combiners, `auto?` recognizes a
+  sub-goal it has already tried even when it reaches it again inside a
+  different branch of the search. Before, the members of a context were
+  put in an order that depended on where the goal was built, so the same
+  goal could miss its own remembered failure. On Pelletier 43 at depth 5
+  this removes 41% of one search phase's sub-goals, and Pelletier 24 is
+  found at depth 7 instead of 8. Results on the bench corpus are unchanged,
+  at about 0.3% more work; one unannotated Pelletier problem that was found
+  just under the default budget now runs out just over it.
 - `auto?` harvests `@auto trigger` seeds before the search starts and keeps
   them in its reference pool for every phase, instead of running a second
   search over them after a miss. Goals that need a seed no longer pay for

@@ -610,7 +610,7 @@ const Saturator = struct {
         // 12/19/28/38/49 after), and a derived fact whose context is not in
         // the goal's normal form never matches the goal directly. Inert for
         // theories without `@acui` combiners.
-        const shape = try acui_mod.canonicalizeAcui(
+        const shape = try acui_mod.canonicalizeAcuiInScope(
             self.context,
             theorem,
             shape_deref,
@@ -1037,7 +1037,8 @@ fn matchForwardTemplate(
 
 /// `value`'s ACUI-canonical form, memoized per expression (the identity for
 /// ACUI-free values). A full interner leaves `value` as is: the join then
-/// compares identities, as without ACUI.
+/// compares identities, as without ACUI. The join compares values within
+/// this theorem only, so the in-scope form serves.
 fn canonicalBinderValue(
     context: *const Context,
     theorem: *TheoremContext,
@@ -1045,7 +1046,7 @@ fn canonicalBinderValue(
     value: ExprId,
 ) error{OutOfMemory}!ExprId {
     if (cache.canonical.get(value)) |cached| return cached;
-    const canonical = acui_mod.canonicalizeAcui(context, theorem, value) catch |err|
+    const canonical = acui_mod.canonicalizeAcuiInScope(context, theorem, value) catch |err|
         switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.TooManyTheoremExprs => value,

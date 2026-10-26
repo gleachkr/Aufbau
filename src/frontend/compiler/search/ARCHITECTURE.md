@@ -1452,6 +1452,13 @@ and only sorts/dedups members when the registered combiner subset is actually
 commutative/idempotent (`comm_name`/`idem_name`) — so it never collides two
 genuinely-unequal expressions (worst case: a missed reuse). On a non-ACUI theory
 it is the identity, gated by `has_acui` so those theories pay nothing.
+Members are sorted by content (`acui_support.compareExprIdsBy` with
+placeholders compared blind, then by id), not by `ExprId`: child searches
+intern into their own COW scopes, where the same member gets a different id,
+and an id-ordered key let a goal reached in two subtrees miss its own memo
+entry. The forward pool's fact shapes use `canonicalizeAcuiInScope` instead,
+which keeps the id order: they are terms the matchers explore, compared only
+within one scope.
 
 - `concrete_fail` / `open_fail` — **failure** memos (`PhaseDepthMemo`),
   keyed by `concrete_ok`'s canonical content key (so an exhausted failure
