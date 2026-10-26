@@ -275,14 +275,10 @@ fn assignmentCapturesMemberBound(
     member_bound: *const BoundSet,
 ) bool {
     if (member_bound.len == 0) return false;
-    for (store.trail.items[trail_mark..]) |entry| {
-        switch (entry) {
-            .assigned => |pid| {
-                const value = store.lookup(pid) orelse continue;
-                if (referencesBound(theorem, value, member_bound)) return true;
-            },
-            .minted => {},
-        }
+    for (store.stepsSince(trail_mark)) |step| {
+        if (step.kind != .bound) continue;
+        const value = store.lookup(step.pid) orelse continue;
+        if (referencesBound(theorem, value, member_bound)) return true;
     }
     return false;
 }

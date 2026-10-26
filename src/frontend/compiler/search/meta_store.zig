@@ -1,14 +1,15 @@
-//! Branch-local search metavariable store.
+//! Search metavariables: the substitution (`Sigma`) and the branch-local
+//! views over it (`MetaStore`).
 //!
 //! A search meta is represented in the interner as an ordinary placeholder
-//! leaf whose `PlaceholderId` keys this store; the assignment state lives
-//! here, never in the interner node. That keeps interning, hashing, and the
+//! leaf; a view maps its `PlaceholderId` to a key in the substitution, and
+//! the assignment state lives there, never in the interner node. That keeps interning, hashing, and the
 //! COW theorem clone working unchanged, and lets the existing emission
 //! leakage guard cover unsolved metas (kind-aware via
 //! `PlaceholderClass.meta`).
 //!
 //! Lifetime/rollback discipline:
-//! - the store is branch-local: one store per search branch, marked before a
+//! - a view is branch-local: one per search branch, marked before a
 //!   hypothesis match and rolled back beside `rollbackOneHypMatch`;
 //! - metas are fully solved before every `tryCandidate` call, so validation
 //!   never sees a live meta;
@@ -54,11 +55,6 @@ pub const MetaStats = struct {
     bound_choice_created: usize = 0,
     assignments: usize = 0,
     rollbacks: usize = 0,
-};
-
-const TrailEntry = union(enum) {
-    minted: PlaceholderId,
-    assigned: PlaceholderId,
 };
 
 /// Dependency bans on carried witness metas, keyed by stable `meta_id`: the
@@ -115,43 +111,151 @@ pub const MetaDepBans = struct {
     }
 };
 
+/// A key into `Sigma`: a meta's stable `meta_id` (`PlaceholderInfo.meta_id`)
+/// when the view mints it with one, else an alias from `alias_base` upward
+/// that only the view holding it can reach.
+pub const MetaKey = u64;
+const alias_base: MetaKey = 1 << 63;
+
+/// What `Sigma` records for one meta: its constraints and, once assigned, its
+/// value (an `ExprId` in the interner of the view that assigned it).
+pub const MetaEntry = struct {
+    info: MetaInfo,
+    value: ?ExprId = null,
+};
+
+/// One trail step: `entered` registered `key` under the view's `pid`,
+/// `bound` assigned it. `view` is the view that made the step; only that
+/// view may undo it.
+pub const Step = struct {
+    view: u32,
+    key: MetaKey,
+    pid: PlaceholderId,
+    kind: enum { entered, bound },
+};
+
+/// The search's substitution: every meta's constraints and assignment, keyed
+/// by `MetaKey`, with one trail. The generation driver owns one for a whole
+/// `auto?` call and every open slot's `MetaStore` is a view over it; any
+/// other store owns a private one. Views use the trail strictly LIFO: a view
+/// marks, rolls back and finally undoes only its own steps (checked in safe
+/// builds), which holds because a view nested inside another lives and dies
+/// within one call of the outer view's search.
+pub const Sigma = struct {
+    allocator: std.mem.Allocator,
+    entries: std.AutoHashMapUnmanaged(MetaKey, MetaEntry) = .empty,
+    trail: std.ArrayListUnmanaged(Step) = .empty,
+    /// The next stable `meta_id` a shared view stamps on a leaf it mints.
+    next_meta_id: u64 = 0,
+    next_alias: MetaKey = alias_base,
+    next_view: u32 = 0,
+
+    pub fn init(allocator: std.mem.Allocator) Sigma {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *Sigma) void {
+        self.entries.deinit(self.allocator);
+        self.trail.deinit(self.allocator);
+        self.* = undefined;
+    }
+
+    fn takeMetaId(self: *Sigma) u64 {
+        const id = self.next_meta_id;
+        self.next_meta_id += 1;
+        return id;
+    }
+
+    fn takeAlias(self: *Sigma) MetaKey {
+        const key = self.next_alias;
+        self.next_alias += 1;
+        return key;
+    }
+};
+
+/// A branch-local view over a `Sigma`: the interner-local map from a meta
+/// leaf's `PlaceholderId` to its key, plus the view's own phase flag and
+/// counters.
+///
+/// A meta this view mints is keyed by the `meta_id` it stamps on the leaf
+/// (shared views) or by an alias (private ones). A meta it registers from
+/// elsewhere (`registerAncestorMeta`, `registerLocalMeta`) gets an alias, so
+/// what this view assigns stays invisible to the view that minted it.
 pub const MetaStore = struct {
     allocator: std.mem.Allocator,
     env: *const GlobalEnv,
-    metas: std.AutoHashMapUnmanaged(PlaceholderId, MetaInfo) = .empty,
-    assignments: std.AutoHashMapUnmanaged(PlaceholderId, ExprId) = .empty,
-    trail: std.ArrayListUnmanaged(TrailEntry) = .empty,
+    /// The driver's substitution, or null for a store over `own`.
+    shared: ?*Sigma = null,
+    own: Sigma,
+    /// This view's id in its `Sigma`, stamped on every step it makes.
+    id: u32 = 0,
+    /// Trail length when the view was made; `deinit` undoes back to it.
+    base: usize = 0,
+    keys: std.AutoHashMapUnmanaged(PlaceholderId, MetaKey) = .empty,
     /// Universal metas are deferred choices: they may only be assigned during
     /// a derived-ref use-time match, opened explicitly by the
     /// driver. Everywhere else an attempted assignment is a phase error.
     universal_use_open: bool = false,
     stats: MetaStats = .{},
-    /// Shared global counter for stable cross-interner `meta_id`s. When set,
-    /// `mint` stamps each meta leaf with a globally-unique id (see
-    /// `PlaceholderInfo.meta_id`) so an ancestor witness threaded into a
-    /// descendant open-target search (across an interner clone boundary) is
-    /// still recognizable as the *same* logical meta and can be re-registered
-    /// and bound at the leaf. Null on the legacy per-slot path (`exact?`/the
-    /// forward derived pool), which keeps byte-identical behavior.
-    meta_id_counter: ?*u64 = null,
     /// The driver's carried-meta dependency bans (see `MetaDepBans`). An
     /// ancestor meta registers with its banned bits excluded from
     /// `allowed_deps`, so `assign` rejects an eigenvariable witness. Null on
     /// the legacy per-slot path.
     dep_bans: ?*const MetaDepBans = null,
 
+    /// A store over its own private substitution. Its metas carry no stable
+    /// `meta_id` (`exact?`, the forward derived pool, ephemeral matches).
     pub fn init(
         allocator: std.mem.Allocator,
         env: *const GlobalEnv,
     ) MetaStore {
-        return .{ .allocator = allocator, .env = env };
+        return .{ .allocator = allocator, .env = env, .own = Sigma.init(allocator) };
     }
 
+    /// A view over the driver's substitution. Metas it mints carry a stable
+    /// `meta_id` from `sigma`, so a witness keeps one identity through the
+    /// open-target recursion's interner clones (carry-to-leaf).
+    pub fn initShared(
+        allocator: std.mem.Allocator,
+        env: *const GlobalEnv,
+        sigma: *Sigma,
+    ) MetaStore {
+        const id = sigma.next_view;
+        sigma.next_view += 1;
+        return .{
+            .allocator = allocator,
+            .env = env,
+            .shared = sigma,
+            .own = Sigma.init(allocator),
+            .id = id,
+            .base = sigma.trail.items.len,
+        };
+    }
+
+    /// Undo this view's steps and free it.
     pub fn deinit(self: *MetaStore) void {
-        self.metas.deinit(self.allocator);
-        self.assignments.deinit(self.allocator);
-        self.trail.deinit(self.allocator);
+        self.undo(self.base);
+        self.keys.deinit(self.allocator);
+        self.own.deinit();
         self.* = undefined;
+    }
+
+    fn substitution(self: *MetaStore) *Sigma {
+        return self.shared orelse &self.own;
+    }
+
+    fn substitutionConst(self: *const MetaStore) *const Sigma {
+        return self.shared orelse &self.own;
+    }
+
+    fn entry(self: *const MetaStore, pid: PlaceholderId) ?MetaEntry {
+        const key = self.keys.get(pid) orelse return null;
+        return self.substitutionConst().entries.get(key).?;
+    }
+
+    /// The number of metas registered in this view.
+    pub fn count(self: *const MetaStore) usize {
+        return self.keys.count();
     }
 
     /// Mint a fresh meta leaf in `theorem`'s interner and register it.
@@ -165,21 +269,20 @@ pub const MetaStore = struct {
         if (kind == .bound_choice) {
             return self.mintBoundVar(theorem, sort_name, try theorem.takePlaceholderDep(), allowed_deps);
         }
-        const expr_id = if (self.meta_id_counter) |counter| blk: {
-            const meta_id = counter.*;
-            counter.* += 1;
-            break :blk try theorem.addMetaPlaceholderWithMetaId(sort_name, meta_id);
-        } else try theorem.addMetaPlaceholderResolved(sort_name);
+        const meta_id: ?u64 = if (self.shared) |s| s.takeMetaId() else null;
+        const expr_id = if (meta_id) |id|
+            try theorem.addMetaPlaceholderWithMetaId(sort_name, id)
+        else
+            try theorem.addMetaPlaceholderResolved(sort_name);
         const placeholder_id = switch (theorem.interner.node(expr_id).*) {
             .placeholder => |id| id,
             else => unreachable,
         };
-        try self.metas.put(self.allocator, placeholder_id, .{
+        try self.enter(placeholder_id, meta_id orelse self.substitution().takeAlias(), .{
             .sort_name = sort_name,
             .allowed_deps = allowed_deps,
             .kind = kind,
         });
-        try self.trail.append(self.allocator, .{ .minted = placeholder_id });
         switch (kind) {
             .wildcard => self.stats.wildcard_created += 1,
             .existential => self.stats.existential_created += 1,
@@ -189,15 +292,6 @@ pub const MetaStore = struct {
         return expr_id;
     }
 
-    /// Register an *ancestor* meta — a `.meta`-class leaf carrying a stable
-    /// `meta_id` that was minted in an enclosing open slot and threaded into
-    /// this interner across a clone boundary (so it has a different local
-    /// `PlaceholderId` here, but the same logical identity). Registering it by
-    /// local pid makes the leaf bindable in this slot's store, so the leaf
-    /// unification that forces it (e.g. `ax` unifying two members) can solve
-    /// it; the value then flows up via the materialized conclusion. No-op if
-    /// already registered or if the leaf carries no `meta_id`. Trailed, so it
-    /// rolls back with the branch.
     /// Mint a `.bound_choice` meta: a bound variable not yet named. Its leaf
     /// reads as bound with dependency bit(s) `deps` (a fresh placeholder bit,
     /// or the bit of the hidden variable it replaces), so dependency checks
@@ -209,23 +303,28 @@ pub const MetaStore = struct {
         deps: u55,
         allowed_deps: u55,
     ) !ExprId {
-        const meta_id: ?u64 = if (self.meta_id_counter) |counter| blk: {
-            const id = counter.*;
-            counter.* += 1;
-            break :blk id;
-        } else null;
+        const meta_id: ?u64 = if (self.shared) |s| s.takeMetaId() else null;
         const expr_id = try theorem.addBoundVarMetaPlaceholder(sort_name, deps, meta_id);
         const placeholder_id = theorem.interner.node(expr_id).placeholder;
-        try self.metas.put(self.allocator, placeholder_id, .{
+        try self.enter(placeholder_id, meta_id orelse self.substitution().takeAlias(), .{
             .sort_name = sort_name,
             .allowed_deps = allowed_deps,
             .kind = .bound_choice,
         });
-        try self.trail.append(self.allocator, .{ .minted = placeholder_id });
         self.stats.bound_choice_created += 1;
         return expr_id;
     }
 
+    /// Register an *ancestor* meta — a `.meta`-class leaf carrying a stable
+    /// `meta_id` that was minted in an enclosing open slot and threaded into
+    /// this interner across a clone boundary (so it has a different local
+    /// `PlaceholderId` here, but the same logical identity). Registering it by
+    /// local pid makes the leaf bindable in this slot's store, so the leaf
+    /// unification that forces it (e.g. `ax` unifying two members) can solve
+    /// it; the value then flows up via the materialized conclusion. It is
+    /// keyed by an alias, not its `meta_id`, so the minting view never sees
+    /// this view's assignment. No-op if already registered or if the leaf
+    /// carries no `meta_id`. Trailed, so it rolls back with the branch.
     pub fn registerAncestorMeta(
         self: *MetaStore,
         theorem: *const TheoremContext,
@@ -235,37 +334,31 @@ pub const MetaStore = struct {
             .placeholder => |id| id,
             else => return,
         };
-        if (self.metas.contains(pid)) return;
+        if (self.keys.contains(pid)) return;
         const ph_info = theorem.placeholderInfo(pid) orelse return;
         const meta_id = ph_info.meta_id orelse return;
         const banned = if (self.dep_bans) |bans| bans.get(meta_id) else 0;
-        try self.putRegistration(pid, ph_info.sort_name, ~banned, true, kindOf(ph_info));
+        try self.enter(pid, self.substitution().takeAlias(), .{
+            .sort_name = ph_info.sort_name,
+            .allowed_deps = ~banned,
+            .kind = kindOf(ph_info),
+            .ancestor = true,
+        });
     }
 
-    /// Shared registration body for `registerAncestorMeta` / `registerLocalMeta`:
-    /// record the leaf as an existential meta and trail it for
-    /// rollback. Callers apply their own eligibility guard and the
-    /// already-registered short-circuit first.
     /// The kind a re-registered meta leaf keeps across an interner boundary.
     fn kindOf(leaf: ExprModule.PlaceholderInfo) MetaKind {
         return if (leaf.bound_var) .bound_choice else .existential;
     }
 
-    fn putRegistration(
-        self: *MetaStore,
-        pid: PlaceholderId,
-        sort_name: []const u8,
-        allowed_deps: u55,
-        ancestor: bool,
-        kind: MetaKind,
-    ) !void {
-        try self.metas.put(self.allocator, pid, .{
-            .sort_name = sort_name,
-            .allowed_deps = allowed_deps,
-            .kind = kind,
-            .ancestor = ancestor,
-        });
-        try self.trail.append(self.allocator, .{ .minted = pid });
+    /// Enter a new meta under `key` with the view's handle `pid`, trailed.
+    fn enter(self: *MetaStore, pid: PlaceholderId, key: MetaKey, meta: MetaInfo) !void {
+        const s = self.substitution();
+        try s.trail.append(s.allocator, .{ .view = self.id, .key = key, .pid = pid, .kind = .entered });
+        errdefer _ = s.trail.pop();
+        try s.entries.put(s.allocator, key, .{ .info = meta });
+        errdefer _ = s.entries.remove(key);
+        try self.keys.put(self.allocator, pid, key);
     }
 
     /// Register an existing `.meta`-class leaf by its local `PlaceholderId` so
@@ -287,10 +380,14 @@ pub const MetaStore = struct {
             .placeholder => |id| id,
             else => return,
         };
-        if (self.metas.contains(pid)) return;
+        if (self.keys.contains(pid)) return;
         const ph_info = theorem.placeholderInfo(pid) orelse return;
         if (ph_info.class != .meta) return;
-        try self.putRegistration(pid, ph_info.sort_name, std.math.maxInt(u55), false, kindOf(ph_info));
+        try self.enter(pid, self.substitution().takeAlias(), .{
+            .sort_name = ph_info.sort_name,
+            .allowed_deps = std.math.maxInt(u55),
+            .kind = kindOf(ph_info),
+        });
     }
 
     /// True if `expr` mentions an ancestor meta (solved or not). Used to find
@@ -303,7 +400,7 @@ pub const MetaStore = struct {
     ) bool {
         return switch (theorem.interner.node(expr).*) {
             .variable => false,
-            .placeholder => |pid| if (self.metas.get(pid)) |m| m.ancestor else false,
+            .placeholder => |pid| if (self.entry(pid)) |e| e.info.ancestor else false,
             .app => |app| blk: {
                 for (app.args) |arg| {
                     if (self.exprMentionsAncestor(theorem, arg)) break :blk true;
@@ -321,13 +418,13 @@ pub const MetaStore = struct {
         expr_id: ExprId,
     ) ?PlaceholderId {
         return switch (theorem.interner.node(expr_id).*) {
-            .placeholder => |id| if (self.metas.contains(id)) id else null,
+            .placeholder => |id| if (self.keys.contains(id)) id else null,
             .variable, .app => null,
         };
     }
 
     pub fn info(self: *const MetaStore, meta_id: PlaceholderId) ?MetaInfo {
-        return self.metas.get(meta_id);
+        return if (self.entry(meta_id)) |e| e.info else null;
     }
 
     /// Whether `assign` can bind `meta` at all: a wildcard never binds, and
@@ -341,7 +438,7 @@ pub const MetaStore = struct {
     }
 
     pub fn lookup(self: *const MetaStore, meta_id: PlaceholderId) ?ExprId {
-        return self.assignments.get(meta_id);
+        return if (self.entry(meta_id)) |e| e.value else null;
     }
 
     /// Dereference `expr_id` through the current assignments: every solved
@@ -359,7 +456,7 @@ pub const MetaStore = struct {
         switch (node) {
             .variable => return expr_id,
             .placeholder => |id| {
-                const value = self.assignments.get(id) orelse return expr_id;
+                const value = self.lookup(id) orelse return expr_id;
                 return try self.deref(theorem, value);
             },
             .app => |app| {
@@ -395,11 +492,13 @@ pub const MetaStore = struct {
         meta_id: PlaceholderId,
         value: ExprId,
     ) !void {
-        const meta = self.metas.get(meta_id) orelse return error.UnknownMeta;
+        const key = self.keys.get(meta_id) orelse return error.UnknownMeta;
+        const current = self.substitution().entries.get(key).?;
+        const meta = current.info;
         if (!self.canBind(meta)) {
             return if (meta.kind == .wildcard) error.WildcardNeverBinds else error.UniversalWrongPhase;
         }
-        if (self.assignments.contains(meta_id)) {
+        if (current.value != null) {
             return error.MetaAlreadyAssigned;
         }
         const resolved = try self.deref(theorem, value);
@@ -422,9 +521,9 @@ pub const MetaStore = struct {
         } else |_| {
             if (meta.kind == .bound_choice) return error.NotBoundVariable;
         }
-        try self.trail.append(self.allocator, .{ .assigned = meta_id });
-        errdefer _ = self.trail.pop();
-        try self.assignments.put(self.allocator, meta_id, resolved);
+        const s = self.substitution();
+        try s.trail.append(s.allocator, .{ .view = self.id, .key = key, .pid = meta_id, .kind = .bound });
+        s.entries.getPtr(key).?.value = resolved;
         self.stats.assignments += 1;
     }
 
@@ -451,7 +550,12 @@ pub const MetaStore = struct {
     /// Trail mark for branch-local rollback. Pair with `rollbackTo` at the
     /// same site as the assembly backtrack (`rollbackOneHypMatch`).
     pub fn mark(self: *const MetaStore) usize {
-        return self.trail.items.len;
+        return self.substitutionConst().trail.items.len;
+    }
+
+    /// The steps made since `trail_mark`, all this view's own.
+    pub fn stepsSince(self: *const MetaStore, trail_mark: usize) []const Step {
+        return self.substitutionConst().trail.items[trail_mark..];
     }
 
     /// Undo every mint and assignment recorded after `trail_mark`. A rolled-
@@ -459,19 +563,24 @@ pub const MetaStore = struct {
     /// nothing may reference that leaf afterwards — the expressions that
     /// mentioned it are abandoned by the same backtrack.
     pub fn rollbackTo(self: *MetaStore, trail_mark: usize) void {
-        if (trail_mark >= self.trail.items.len) return;
-        var idx = self.trail.items.len;
-        while (idx > trail_mark) : (idx -= 1) {
-            switch (self.trail.items[idx - 1]) {
-                .minted => |id| {
-                    _ = self.assignments.remove(id);
-                    _ = self.metas.remove(id);
+        if (trail_mark >= self.mark()) return;
+        self.undo(trail_mark);
+        self.stats.rollbacks += 1;
+    }
+
+    fn undo(self: *MetaStore, trail_mark: usize) void {
+        const s = self.substitution();
+        while (s.trail.items.len > trail_mark) {
+            const step = s.trail.pop().?;
+            std.debug.assert(step.view == self.id);
+            switch (step.kind) {
+                .entered => {
+                    _ = s.entries.remove(step.key);
+                    _ = self.keys.remove(step.pid);
                 },
-                .assigned => |id| _ = self.assignments.remove(id),
+                .bound => s.entries.getPtr(step.key).?.value = null,
             }
         }
-        self.trail.shrinkRetainingCapacity(trail_mark);
-        self.stats.rollbacks += 1;
     }
 
     /// Open/close the derived-ref use-time window in which universal metas
@@ -504,8 +613,8 @@ pub const MetaStore = struct {
         return switch (theorem.interner.node(expr_id).*) {
             .variable => false,
             .placeholder => |id| blk: {
-                if (!self.metas.contains(id)) break :blk false;
-                if (self.assignments.get(id)) |value| {
+                const e = self.entry(id) orelse break :blk false;
+                if (e.value) |value| {
                     break :blk self.hasUnsolvedMeta(theorem, value);
                 }
                 break :blk true;
@@ -557,8 +666,8 @@ pub const MetaStore = struct {
         switch (theorem.interner.node(expr_id).*) {
             .variable => {},
             .placeholder => |id| {
-                if (!self.metas.contains(id)) return;
-                if (self.assignments.get(id)) |value| {
+                const e = self.entry(id) orelse return;
+                if (e.value) |value| {
                     try self.collectUnsolvedIn(theorem, visited, value, out);
                     return;
                 }
@@ -871,15 +980,52 @@ test "a bound_choice meta keeps its kind when another store registers it" {
     defer setup.deinit();
     const theorem = &setup.theorem;
 
-    var counter: u64 = 0;
-    setup.store.meta_id_counter = &counter;
-    const meta = try setup.store.mint(theorem, "obj", std.math.maxInt(u55), .bound_choice);
+    var sigma = Sigma.init(std.testing.allocator);
+    defer sigma.deinit();
+    var parent = MetaStore.initShared(std.testing.allocator, &setup.env, &sigma);
+    defer parent.deinit();
+    const meta = try parent.mint(theorem, "obj", std.math.maxInt(u55), .bound_choice);
 
-    var child = MetaStore.init(std.testing.allocator, &setup.env);
+    var child = MetaStore.initShared(std.testing.allocator, &setup.env, &sigma);
     defer child.deinit();
     try child.registerAncestorMeta(theorem, meta);
     const info = child.info(child.metaIdOf(theorem, meta).?).?;
     try std.testing.expectEqual(MetaKind.bound_choice, info.kind);
+}
+
+test "views over one substitution key minted metas by meta_id and keep registrations apart" {
+    var setup = try TestSetup.init();
+    defer setup.deinit();
+    const theorem = &setup.theorem;
+
+    const c = try appendTerm(&setup.env, "c", "obj");
+    const value = try theorem.interner.internApp(c, &.{});
+
+    var sigma = Sigma.init(std.testing.allocator);
+    defer sigma.deinit();
+    sigma.next_meta_id = 7;
+    var parent = MetaStore.initShared(std.testing.allocator, &setup.env, &sigma);
+    defer parent.deinit();
+    const meta = try parent.mint(theorem, "obj", std.math.maxInt(u55), .existential);
+    const pid = parent.metaIdOf(theorem, meta).?;
+    try std.testing.expectEqual(@as(?u64, 7), theorem.placeholderInfo(pid).?.meta_id);
+    try std.testing.expect(sigma.entries.contains(7));
+
+    // A nested view registers the same leaf and assigns it; the minting view
+    // does not see that assignment, and the nested view's exit removes it.
+    {
+        var child = MetaStore.initShared(std.testing.allocator, &setup.env, &sigma);
+        defer child.deinit();
+        try child.registerAncestorMeta(theorem, meta);
+        try child.assign(theorem, child.metaIdOf(theorem, meta).?, value);
+        try std.testing.expectEqual(value, child.lookup(pid).?);
+        try std.testing.expect(parent.lookup(pid) == null);
+    }
+    try std.testing.expectEqual(parent.mark(), sigma.trail.items.len);
+    try std.testing.expectEqual(@as(usize, 1), sigma.entries.count());
+
+    try parent.assign(theorem, pid, value);
+    try std.testing.expectEqual(value, parent.lookup(pid).?);
 }
 
 test "wildcard metas never bind" {

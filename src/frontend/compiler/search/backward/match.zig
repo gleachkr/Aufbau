@@ -210,7 +210,7 @@ fn tryMetaAwareHypMatch(
     for (bindings) |b| {
         if (b) |v| try registerReconciliationMetaLeaves(&store, theorem, v);
     }
-    if (store.metas.count() == 0) return false;
+    if (store.count() == 0) return false;
     if (forward.solveCorrespondence(&store, theorem, ref_expr, pattern, null) !=
         .ok)
     {

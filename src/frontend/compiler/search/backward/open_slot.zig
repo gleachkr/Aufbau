@@ -118,10 +118,12 @@ pub fn tryOpenGenerateSlot(
     // (this defer runs after the rollback).
     const slot_mark = candidate.theorem.depSlotMark();
     defer candidate.theorem.releaseUnheldDepSlots(slot_mark, &.{bindings});
-    var store = MetaStore.init(ctx.context.allocator, context.env);
-    // Share the driver's global meta-id counter so witness metas keep a stable
+    // A view over the driver's substitution, so witness metas keep a stable
     // identity across the open-target recursion's interner clones.
-    store.meta_id_counter = hook.meta_id_counter;
+    var store = if (hook.sigma) |sigma|
+        MetaStore.initShared(ctx.context.allocator, context.env, sigma)
+    else
+        MetaStore.init(ctx.context.allocator, context.env);
     store.dep_bans = hook.meta_dep_bans;
     // The pool-ref loop at this depth is done with its snapshot slice;
     // reuse it as the open path's bindings rollback point.

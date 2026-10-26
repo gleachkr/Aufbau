@@ -30,6 +30,7 @@ const TheoremContext = @import("../../expr.zig").TheoremContext;
 const MetaStore = @import("./meta_store.zig").MetaStore;
 const FocusRules = @import("../../focus_rules.zig");
 const MetaDepBans = @import("./meta_store.zig").MetaDepBans;
+const Sigma = @import("./meta_store.zig").Sigma;
 const OpenTerms = @import("../inference/open_terms.zig");
 const ProofScript = @import("../../proof_script.zig");
 const RuleApplication = ProofScript.RuleApplication;
@@ -233,10 +234,11 @@ const Driver = struct {
     /// contains a shorter proof of the repeated goal, which that subtree also
     /// explores, so the failure stands. See `enterPath`/`prunedAncestor`.
     prune_low: usize = no_path_prune,
-    /// Global counter for stable cross-interner `meta_id`s, shared by every
-    /// open slot's store so a witness meta keeps one identity through the
-    /// open-target recursion (carry-to-leaf). See `MetaStore.meta_id_counter`.
-    next_meta_id: u64 = 0,
+    /// The search's substitution, shared by every open slot's store and the
+    /// source of stable cross-interner `meta_id`s, so a witness meta keeps one
+    /// identity through the open-target recursion (carry-to-leaf). See
+    /// `Sigma`.
+    sigma: Sigma,
     /// Carried-meta dependency bans (eigenvariable conditions), narrowed and
     /// rolled back by open slots. See `MetaDepBans`.
     meta_dep_bans: MetaDepBans,
@@ -473,7 +475,7 @@ pub fn generateTopLevel(
         .has_acui = session.context.registry.acui_by_head.count() > 0,
         .has_comm_acui = AcuiBag.anyLaw(session.context.registry, AcuiBag.Law.isCommutative),
         .meta_dep_bans = MetaDepBans.init(session.allocator),
-        .next_meta_id = next_meta_id,
+        .sigma = .{ .allocator = session.allocator, .next_meta_id = next_meta_id },
         .open_root = goal == .holey,
     };
     driver.hook = .{
@@ -481,11 +483,12 @@ pub fn generateTopLevel(
         .solveFn = hookSolve,
         .solveOpenFn = hookSolveOpen,
         .allow_split = false,
-        .meta_id_counter = &driver.next_meta_id,
+        .sigma = &driver.sigma,
         .meta_dep_bans = &driver.meta_dep_bans,
         .open_root = driver.open_root,
     };
     defer driver.meta_dep_bans.deinit();
+    defer driver.sigma.deinit();
     defer driver.visited.deinit(driver.scratch);
     defer {
         var key_iter = driver.visited_open.keyIterator();

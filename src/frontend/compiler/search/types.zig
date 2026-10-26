@@ -15,6 +15,7 @@ pub const Span = ProofScript.Span;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
 const FocusRules = @import("../../focus_rules.zig");
 const MetaStore = @import("./meta_store.zig").MetaStore;
+const Sigma = @import("./meta_store.zig").Sigma;
 const MetaDepBans = @import("./meta_store.zig").MetaDepBans;
 const RuleCatalog = @import("../rule_catalog.zig");
 const CompilerViews = @import("../../views.zig");
@@ -295,7 +296,7 @@ pub const VarsPoolExhaustion = struct {
 ///   family this is exactly as fine as the ExprId (hash-consing makes
 ///   distinct pids distinct nodes). Across a scope discard a re-minted pid
 ///   only collides when all of these match — and `meta_id`s come from a
-///   never-reused global counter (`MetaStore.meta_id_counter`), so a
+///   never-reused global counter (`Sigma.next_meta_id`), so a
 ///   colliding `.meta` leaf IS the same metavariable.
 ///
 /// Within one interner the hash is a bijection-preserving image of the id
@@ -977,16 +978,16 @@ pub const GenerationHook = struct {
     /// concrete goals, whose search it would widen (#331).
     open_root: bool = false,
 
-    /// Shared global counter for stable `meta_id`s (see
-    /// `MetaStore.meta_id_counter`). The generation driver owns the counter and
-    /// points every open slot's store at it, so a witness meta keeps one
-    /// identity across the open-target recursion's interner clones — the
-    /// carry-to-leaf channel. Null disables it (legacy per-slot behavior).
-    meta_id_counter: ?*u64 = null,
+    /// The driver's substitution (`Sigma`). Every open slot's store is a
+    /// view over it, and the metas it mints carry stable `meta_id`s from it,
+    /// so a witness meta keeps one identity across the open-target
+    /// recursion's interner clones — the carry-to-leaf channel. Null gives
+    /// each slot a private store (legacy per-slot behavior).
+    sigma: ?*Sigma = null,
     /// The driver's carried-meta dependency bans (`MetaDepBans`): open slots
     /// narrow them from the candidate's bindings for the duration of the
     /// slot, and every open slot's store reads them when registering
-    /// ancestor metas. Null disables it alongside `meta_id_counter`.
+    /// ancestor metas. Null disables it alongside `sigma`.
     meta_dep_bans: ?*MetaDepBans = null,
 
     pub fn solve(
