@@ -310,10 +310,8 @@ axiom ex_elim {x y: obj} (g: ctx x) (h: ctx x) (p: wff x) (c: wff x):
 -- Each elimination rule re-stated with its major premise an assumption, in
 -- the general-elimination style. Applied backward they only decompose a
 -- formula already in the context, so normal-form search stays analytic.
--- Invertible ones are eager. `imp_left`, `not_left` and `all_left` keep the
--- principal, since a later branch may need it again; `not_left` is still
--- classically invertible (`raa` and weakening recover its premise), so it is
--- eager too.
+-- Invertible ones are eager. `imp_left` and `all_left` keep the principal,
+-- since a later branch may need it again.
 -- The non-invertible ones, `imp_left` and `all_left` with `ex_intro` on the
 -- right, are `@auto focus`: once one decomposes a formula, the search keeps
 -- working on what the formula became, at no further depth.
@@ -350,8 +348,42 @@ theorem bi_left (g: ctx) (a b c: wff):
 theorem imp_left (g: ctx) (a b c: wff):
   $ g , (a → b) ⊢ a $ > $ g , (a → b) , b ⊢ c $ > $ g , (a → b) ⊢ c $;
 
---| @auto eager 3
-theorem not_left (g: ctx) (a: wff): $ g , ¬ a ⊢ a $ > $ g , ¬ a ⊢ ⊥ $;
+-- Contradictory hypotheses close any goal: the G3c axiom with `¬ a` read as
+-- `a` on the right.
+theorem contra_left (g: ctx) (a c: wff): $ g , ¬ a , a ⊢ c $;
+
+-- Negated formulas are decomposed on the left, as a signed tableau does with
+-- `F φ`, rather than by switching the goal to `φ`. A goal switch that keeps
+-- `¬ φ` (the old `not_left`) loops: `¬ ¬ ∃ x p ⊢ ⊥` re-opens the `∃` with a
+-- fresh eigenvariable on every round, at no depth. Each rule below consumes its
+-- principal; `¬ ∃` becomes `∀ ¬`, which `all_left` keeps, and a negated atom
+-- stays for `contra_left`.
+--| @auto eager
+theorem not_not_left (g: ctx) (a c: wff): $ g , a ⊢ c $ > $ g , ¬ ¬ a ⊢ c $;
+
+--| @auto eager
+theorem not_or_left (g: ctx) (a b c: wff):
+  $ g , ¬ a , ¬ b ⊢ c $ > $ g , ¬ (a ∨ b) ⊢ c $;
+
+--| @auto eager
+theorem not_imp_left (g: ctx) (a b c: wff):
+  $ g , a , ¬ b ⊢ c $ > $ g , ¬ (a → b) ⊢ c $;
+
+--| @auto eager 2
+theorem not_and_left (g: ctx) (a b c: wff):
+  $ g , ¬ a ⊢ c $ > $ g , ¬ b ⊢ c $ > $ g , ¬ (a ∧ b) ⊢ c $;
+
+--| @auto eager 2
+theorem not_bi_left (g: ctx) (a b c: wff):
+  $ g , a , ¬ b ⊢ c $ > $ g , ¬ a , b ⊢ c $ > $ g , ¬ (a ↔ b) ⊢ c $;
+
+--| @auto eager
+theorem not_all_left {x: obj} (g: ctx x) (p: wff x) (c: wff x):
+  $ g , ∃ x (¬ p) ⊢ c $ > $ g , ¬ (∀ x p) ⊢ c $;
+
+--| @auto eager
+theorem not_ex_left {x: obj} (g: ctx x) (p: wff x) (c: wff x):
+  $ g , ∀ x (¬ p) ⊢ c $ > $ g , ¬ (∃ x p) ⊢ c $;
 
 --| @view {x: obj} (g: ctx x) (t: obj x) (p: wff x) (q c: wff): $ g , (∀ x p) , q ⊢ c $ > $ g , (∀ x p) ⊢ c $
 --| @recover t q p x

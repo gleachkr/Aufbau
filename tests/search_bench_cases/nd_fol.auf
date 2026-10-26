@@ -4,7 +4,8 @@
 -- primitive eliminations (these blocks use rules search never sees; the
 -- depth bench skips them with `--exclude=_left,or_right`).
 -- The battery proofs are in normal form: introduction rules and left rules
--- only, closing at `ax`, with `raa` for the classical steps.
+-- only, closing at `ax`, with `raa` for the classical steps and `not_elim`
+-- against a negated assumption to reach `⊥`.
 
 and_left
 --------
@@ -92,10 +93,134 @@ l2: $ g , (a → b) ⊢ a → b $ by ax
 l3: $ g , (a → b) ⊢ b $ by imp_elim [l2, #1]
 l4: $ g , (a → b) ⊢ c $ by imp_elim [l1, l3]
 
-not_left
---------
-l1: $ g , ¬ a ⊢ ¬ a $ by ax
-l2: $ g , ¬ a ⊢ ⊥ $ by not_elim [l1, #1]
+contra_left
+-----------
+l1: $ g , ¬ a , a ⊢ ¬ a $ by ax
+l2: $ g , ¬ a , a ⊢ a $ by ax
+l3: $ g , ¬ a , a ⊢ ⊥ $ by not_elim [l1, l2]
+l4: $ g , ¬ a , a , ¬ c ⊢ ⊥ $ by weak [l3]
+l5: $ g , ¬ a , a ⊢ c $ by raa [l4]
+
+not_not_left
+------------
+l1: $ g ⊢ a → c $ by imp_intro [#1]
+l2: $ g , ¬ ¬ a ⊢ a → c $ by weak [l1]
+l3: $ g , ¬ ¬ a , ¬ a ⊢ ¬ ¬ a $ by ax
+l4: $ g , ¬ ¬ a , ¬ a ⊢ ¬ a $ by ax
+l5: $ g , ¬ ¬ a , ¬ a ⊢ ⊥ $ by not_elim [l3, l4]
+l6: $ g , ¬ ¬ a ⊢ a $ by raa [l5]
+l7: $ g , ¬ ¬ a ⊢ c $ by imp_elim [l2, l6]
+
+not_or_left
+-----------
+l1: $ g , ¬ (a ∨ b) , a ⊢ a $ by ax
+l2: $ g , ¬ (a ∨ b) , a ⊢ a ∨ b $ by or_intro_l [l1]
+l3: $ g , ¬ (a ∨ b) , a ⊢ ¬ (a ∨ b) $ by ax
+l4: $ g , ¬ (a ∨ b) , a ⊢ ⊥ $ by not_elim [l3, l2]
+l5: $ g , ¬ (a ∨ b) ⊢ ¬ a $ by not_intro [l4]
+l6: $ g , ¬ (a ∨ b) , b ⊢ b $ by ax
+l7: $ g , ¬ (a ∨ b) , b ⊢ a ∨ b $ by or_intro_r [l6]
+l8: $ g , ¬ (a ∨ b) , b ⊢ ¬ (a ∨ b) $ by ax
+l9: $ g , ¬ (a ∨ b) , b ⊢ ⊥ $ by not_elim [l8, l7]
+l10: $ g , ¬ (a ∨ b) ⊢ ¬ b $ by not_intro [l9]
+l11: $ g , ¬ a ⊢ ¬ b → c $ by imp_intro [#1]
+l12: $ g ⊢ ¬ a → ¬ b → c $ by imp_intro [l11]
+l13: $ g , ¬ (a ∨ b) ⊢ ¬ a → ¬ b → c $ by weak [l12]
+l14: $ g , ¬ (a ∨ b) ⊢ ¬ b → c $ by imp_elim [l13, l5]
+l15: $ g , ¬ (a ∨ b) ⊢ c $ by imp_elim [l14, l10]
+
+not_imp_left
+------------
+l1: $ g , ¬ (a → b) , ¬ a , a ⊢ b $ by contra_left
+l2: $ g , ¬ (a → b) , ¬ a ⊢ a → b $ by imp_intro [l1]
+l3: $ g , ¬ (a → b) , ¬ a ⊢ ¬ (a → b) $ by ax
+l4: $ g , ¬ (a → b) , ¬ a ⊢ ⊥ $ by not_elim [l3, l2]
+l5: $ g , ¬ (a → b) ⊢ a $ by raa [l4]
+l6: $ g , ¬ (a → b) , b , a ⊢ b $ by ax
+l7: $ g , ¬ (a → b) , b ⊢ a → b $ by imp_intro [l6]
+l8: $ g , ¬ (a → b) , b ⊢ ¬ (a → b) $ by ax
+l9: $ g , ¬ (a → b) , b ⊢ ⊥ $ by not_elim [l8, l7]
+l10: $ g , ¬ (a → b) ⊢ ¬ b $ by not_intro [l9]
+l11: $ g , a ⊢ ¬ b → c $ by imp_intro [#1]
+l12: $ g ⊢ a → ¬ b → c $ by imp_intro [l11]
+l13: $ g , ¬ (a → b) ⊢ a → ¬ b → c $ by weak [l12]
+l14: $ g , ¬ (a → b) ⊢ ¬ b → c $ by imp_elim [l13, l5]
+l15: $ g , ¬ (a → b) ⊢ c $ by imp_elim [l14, l10]
+
+not_and_left
+------------
+l1: $ g ⊢ ¬ a → c $ by imp_intro [#1]
+l2: $ g , ¬ (a ∧ b) , ¬ c , ¬ a ⊢ ¬ a → c $ by weak [l1]
+l3: $ g , ¬ (a ∧ b) , ¬ c , ¬ a ⊢ ¬ a $ by ax
+l4: $ g , ¬ (a ∧ b) , ¬ c , ¬ a ⊢ c $ by imp_elim [l2, l3]
+l5: $ g , ¬ (a ∧ b) , ¬ c , ¬ a ⊢ ¬ c $ by ax
+l6: $ g , ¬ (a ∧ b) , ¬ c , ¬ a ⊢ ⊥ $ by not_elim [l5, l4]
+l7: $ g , ¬ (a ∧ b) , ¬ c ⊢ a $ by raa [l6]
+l8: $ g ⊢ ¬ b → c $ by imp_intro [#2]
+l9: $ g , ¬ (a ∧ b) , ¬ c , ¬ b ⊢ ¬ b → c $ by weak [l8]
+l10: $ g , ¬ (a ∧ b) , ¬ c , ¬ b ⊢ ¬ b $ by ax
+l11: $ g , ¬ (a ∧ b) , ¬ c , ¬ b ⊢ c $ by imp_elim [l9, l10]
+l12: $ g , ¬ (a ∧ b) , ¬ c , ¬ b ⊢ ¬ c $ by ax
+l13: $ g , ¬ (a ∧ b) , ¬ c , ¬ b ⊢ ⊥ $ by not_elim [l12, l11]
+l14: $ g , ¬ (a ∧ b) , ¬ c ⊢ b $ by raa [l13]
+l15: $ g , ¬ (a ∧ b) , ¬ c ⊢ a ∧ b $ by and_intro [l7, l14]
+l16: $ g , ¬ (a ∧ b) , ¬ c ⊢ ¬ (a ∧ b) $ by ax
+l17: $ g , ¬ (a ∧ b) , ¬ c ⊢ ⊥ $ by not_elim [l16, l15]
+l18: $ g , ¬ (a ∧ b) ⊢ c $ by raa [l17]
+
+not_bi_left
+-----------
+l1: $ g , a ⊢ ¬ b → c $ by imp_intro [#1]
+l2: $ g ⊢ a → ¬ b → c $ by imp_intro [l1]
+l3: $ g , ¬ (a ↔ b) , ¬ c , a , ¬ b ⊢ a → ¬ b → c $ by weak [l2]
+l4: $ g , ¬ (a ↔ b) , ¬ c , a , ¬ b ⊢ a $ by ax
+l5: $ g , ¬ (a ↔ b) , ¬ c , a , ¬ b ⊢ ¬ b → c $ by imp_elim [l3, l4]
+l6: $ g , ¬ (a ↔ b) , ¬ c , a , ¬ b ⊢ ¬ b $ by ax
+l7: $ g , ¬ (a ↔ b) , ¬ c , a , ¬ b ⊢ c $ by imp_elim [l5, l6]
+l8: $ g , ¬ (a ↔ b) , ¬ c , a , ¬ b ⊢ ¬ c $ by ax
+l9: $ g , ¬ (a ↔ b) , ¬ c , a , ¬ b ⊢ ⊥ $ by not_elim [l8, l7]
+l10: $ g , ¬ (a ↔ b) , ¬ c , a ⊢ b $ by raa [l9]
+l11: $ g , ¬ a ⊢ b → c $ by imp_intro [#2]
+l12: $ g ⊢ ¬ a → b → c $ by imp_intro [l11]
+l13: $ g , ¬ (a ↔ b) , ¬ c , b , ¬ a ⊢ ¬ a → b → c $ by weak [l12]
+l14: $ g , ¬ (a ↔ b) , ¬ c , b , ¬ a ⊢ ¬ a $ by ax
+l15: $ g , ¬ (a ↔ b) , ¬ c , b , ¬ a ⊢ b → c $ by imp_elim [l13, l14]
+l16: $ g , ¬ (a ↔ b) , ¬ c , b , ¬ a ⊢ b $ by ax
+l17: $ g , ¬ (a ↔ b) , ¬ c , b , ¬ a ⊢ c $ by imp_elim [l15, l16]
+l18: $ g , ¬ (a ↔ b) , ¬ c , b , ¬ a ⊢ ¬ c $ by ax
+l19: $ g , ¬ (a ↔ b) , ¬ c , b , ¬ a ⊢ ⊥ $ by not_elim [l18, l17]
+l20: $ g , ¬ (a ↔ b) , ¬ c , b ⊢ a $ by raa [l19]
+l21: $ g , ¬ (a ↔ b) , ¬ c ⊢ a ↔ b $ by bi_intro [l10, l20]
+l22: $ g , ¬ (a ↔ b) , ¬ c ⊢ ¬ (a ↔ b) $ by ax
+l23: $ g , ¬ (a ↔ b) , ¬ c ⊢ ⊥ $ by not_elim [l22, l21]
+l24: $ g , ¬ (a ↔ b) ⊢ c $ by raa [l23]
+
+not_all_left
+------------
+l1: $ g , ¬ (∀ x p) , ¬ (∃ x (¬ p)) , ¬ [x/u] p ⊢ ¬ [x/u] p $ by ax
+l2: $ g , ¬ (∀ x p) , ¬ (∃ x (¬ p)) , ¬ [x/u] p ⊢ ∃ x (¬ p) $ by ex_intro [l1]
+l3: $ g , ¬ (∀ x p) , ¬ (∃ x (¬ p)) , ¬ [x/u] p ⊢ ¬ (∃ x (¬ p)) $ by ax
+l4: $ g , ¬ (∀ x p) , ¬ (∃ x (¬ p)) , ¬ [x/u] p ⊢ ⊥ $ by not_elim [l3, l2]
+l5: $ g , ¬ (∀ x p) , ¬ (∃ x (¬ p)) ⊢ [x/u] p $ by raa [l4]
+l6: $ g , ¬ (∀ x p) , ¬ (∃ x (¬ p)) ⊢ ∀ x p $ by all_intro [l5]
+l7: $ g , ¬ (∀ x p) , ¬ (∃ x (¬ p)) ⊢ ¬ (∀ x p) $ by ax
+l8: $ g , ¬ (∀ x p) , ¬ (∃ x (¬ p)) ⊢ ⊥ $ by not_elim [l7, l6]
+l9: $ g , ¬ (∀ x p) ⊢ ∃ x (¬ p) $ by raa [l8]
+l10: $ g ⊢ (∃ x (¬ p)) → c $ by imp_intro [#1]
+l11: $ g , ¬ (∀ x p) ⊢ (∃ x (¬ p)) → c $ by weak [l10]
+l12: $ g , ¬ (∀ x p) ⊢ c $ by imp_elim [l11, l9]
+
+not_ex_left
+-----------
+l1: $ g , ¬ (∃ x p) , [x/u] p ⊢ [x/u] p $ by ax
+l2: $ g , ¬ (∃ x p) , [x/u] p ⊢ ∃ x p $ by ex_intro [l1]
+l3: $ g , ¬ (∃ x p) , [x/u] p ⊢ ¬ (∃ x p) $ by ax
+l4: $ g , ¬ (∃ x p) , [x/u] p ⊢ ⊥ $ by not_elim [l3, l2]
+l5: $ g , ¬ (∃ x p) ⊢ ¬ [x/u] p $ by not_intro [l4]
+l6: $ g , ¬ (∃ x p) ⊢ ∀ x (¬ p) $ by all_intro [l5]
+l7: $ g ⊢ (∀ x (¬ p)) → c $ by imp_intro [#1]
+l8: $ g , ¬ (∃ x p) ⊢ (∀ x (¬ p)) → c $ by weak [l7]
+l9: $ g , ¬ (∃ x p) ⊢ c $ by imp_elim [l8, l6]
 
 all_left
 --------
@@ -146,21 +271,25 @@ excluded_middle
 ---------------
 l1: $ ¬ (P C ∨ ¬ P C) , P C ⊢ P C $ by ax
 l2: $ ¬ (P C ∨ ¬ P C) , P C ⊢ P C ∨ ¬ P C $ by or_intro_l [l1]
-l3: $ ¬ (P C ∨ ¬ P C) , P C ⊢ ⊥ $ by not_left [l2]
+l3n: $ ¬ (P C ∨ ¬ P C) , P C ⊢ ¬ (P C ∨ ¬ P C) $ by ax
+l3: $ ¬ (P C ∨ ¬ P C) , P C ⊢ ⊥ $ by not_elim [l3n, l2]
 l4: $ ¬ (P C ∨ ¬ P C) ⊢ ¬ P C $ by not_intro [l3]
 l5: $ ¬ (P C ∨ ¬ P C) ⊢ P C ∨ ¬ P C $ by or_intro_r [l4]
-l6: $ ¬ (P C ∨ ¬ P C) ⊢ ⊥ $ by not_left [l5]
+l6n: $ ¬ (P C ∨ ¬ P C) ⊢ ¬ (P C ∨ ¬ P C) $ by ax
+l6: $ ¬ (P C ∨ ¬ P C) ⊢ ⊥ $ by not_elim [l6n, l5]
 l7: $ ∅ ⊢ P C ∨ ¬ P C $ by raa [l6]
 
 peirce
 ------
 l1: $ ((P C → Q C) → P C) , ¬ P C , P C , ¬ Q C ⊢ P C $ by ax
-l2: $ ((P C → Q C) → P C) , ¬ P C , P C , ¬ Q C ⊢ ⊥ $ by not_left [l1]
+l2n: $ ((P C → Q C) → P C) , ¬ P C , P C , ¬ Q C ⊢ ¬ (P C) $ by ax
+l2: $ ((P C → Q C) → P C) , ¬ P C , P C , ¬ Q C ⊢ ⊥ $ by not_elim [l2n, l1]
 l3: $ ((P C → Q C) → P C) , ¬ P C , P C ⊢ Q C $ by raa [l2]
 l4: $ ((P C → Q C) → P C) , ¬ P C ⊢ P C → Q C $ by imp_intro [l3]
 l5: $ ((P C → Q C) → P C) , ¬ P C , P C ⊢ P C $ by ax
 l6: $ ((P C → Q C) → P C) , ¬ P C ⊢ P C $ by imp_left [l4, l5]
-l7: $ ((P C → Q C) → P C) , ¬ P C ⊢ ⊥ $ by not_left [l6]
+l7n: $ ((P C → Q C) → P C) , ¬ P C ⊢ ¬ (P C) $ by ax
+l7: $ ((P C → Q C) → P C) , ¬ P C ⊢ ⊥ $ by not_elim [l7n, l6]
 l8: $ ((P C → Q C) → P C) ⊢ P C $ by raa [l7]
 l9: $ ∅ ⊢ ((P C → Q C) → P C) → P C $ by imp_intro [l8]
 
@@ -168,14 +297,17 @@ de_morgan
 ---------
 l1: $ ¬ (P C ∧ P D) , ¬ (¬ P C ∨ ¬ P D) , ¬ P C ⊢ ¬ P C $ by ax
 l2: $ ¬ (P C ∧ P D) , ¬ (¬ P C ∨ ¬ P D) , ¬ P C ⊢ ¬ P C ∨ ¬ P D $ by or_intro_l [l1]
-l3: $ ¬ (P C ∧ P D) , ¬ (¬ P C ∨ ¬ P D) , ¬ P C ⊢ ⊥ $ by not_left [l2]
+l3n: $ ¬ (P C ∧ P D) , ¬ (¬ P C ∨ ¬ P D) , ¬ P C ⊢ ¬ (¬ P C ∨ ¬ P D) $ by ax
+l3: $ ¬ (P C ∧ P D) , ¬ (¬ P C ∨ ¬ P D) , ¬ P C ⊢ ⊥ $ by not_elim [l3n, l2]
 l4: $ ¬ (P C ∧ P D) , ¬ (¬ P C ∨ ¬ P D) ⊢ P C $ by raa [l3]
 l5: $ ¬ (P C ∧ P D) , ¬ (¬ P C ∨ ¬ P D) , ¬ P D ⊢ ¬ P D $ by ax
 l6: $ ¬ (P C ∧ P D) , ¬ (¬ P C ∨ ¬ P D) , ¬ P D ⊢ ¬ P C ∨ ¬ P D $ by or_intro_r [l5]
-l7: $ ¬ (P C ∧ P D) , ¬ (¬ P C ∨ ¬ P D) , ¬ P D ⊢ ⊥ $ by not_left [l6]
+l7n: $ ¬ (P C ∧ P D) , ¬ (¬ P C ∨ ¬ P D) , ¬ P D ⊢ ¬ (¬ P C ∨ ¬ P D) $ by ax
+l7: $ ¬ (P C ∧ P D) , ¬ (¬ P C ∨ ¬ P D) , ¬ P D ⊢ ⊥ $ by not_elim [l7n, l6]
 l8: $ ¬ (P C ∧ P D) , ¬ (¬ P C ∨ ¬ P D) ⊢ P D $ by raa [l7]
 l9: $ ¬ (P C ∧ P D) , ¬ (¬ P C ∨ ¬ P D) ⊢ P C ∧ P D $ by and_intro [l4, l8]
-l10: $ ¬ (P C ∧ P D) , ¬ (¬ P C ∨ ¬ P D) ⊢ ⊥ $ by not_left [l9]
+l10n: $ ¬ (P C ∧ P D) , ¬ (¬ P C ∨ ¬ P D) ⊢ ¬ (P C ∧ P D) $ by ax
+l10: $ ¬ (P C ∧ P D) , ¬ (¬ P C ∨ ¬ P D) ⊢ ⊥ $ by not_elim [l10n, l9]
 l11: $ ¬ (P C ∧ P D) ⊢ ¬ P C ∨ ¬ P D $ by raa [l10]
 l12: $ ∅ ⊢ ¬ (P C ∧ P D) → (¬ P C ∨ ¬ P D) $ by imp_intro [l11]
 
@@ -183,7 +315,8 @@ contra_classical
 ----------------
 l1: $ (¬ P D → ¬ P C) , P C , ¬ P D ⊢ ¬ P D $ by ax
 l2: $ (¬ P D → ¬ P C) , P C , ¬ P D , ¬ P C ⊢ P C $ by ax
-l3: $ (¬ P D → ¬ P C) , P C , ¬ P D , ¬ P C ⊢ ⊥ $ by not_left [l2]
+l3n: $ (¬ P D → ¬ P C) , P C , ¬ P D , ¬ P C ⊢ ¬ (P C) $ by ax
+l3: $ (¬ P D → ¬ P C) , P C , ¬ P D , ¬ P C ⊢ ⊥ $ by not_elim [l3n, l2]
 l4: $ (¬ P D → ¬ P C) , P C , ¬ P D ⊢ ⊥ $ by imp_left [l1, l3]
 l5: $ (¬ P D → ¬ P C) , P C ⊢ P D $ by raa [l4]
 l6: $ (¬ P D → ¬ P C) ⊢ P C → P D $ by imp_intro [l5]
@@ -192,7 +325,8 @@ l7: $ ∅ ⊢ (¬ P D → ¬ P C) → (P C → P D) $ by imp_intro [l6]
 resolution
 ----------
 l1: $ P C , ¬ P C , ¬ (P D ∨ P E) ⊢ P C $ by ax
-l2: $ P C , ¬ P C , ¬ (P D ∨ P E) ⊢ ⊥ $ by not_left [l1]
+l2n: $ P C , ¬ P C , ¬ (P D ∨ P E) ⊢ ¬ (P C) $ by ax
+l2: $ P C , ¬ P C , ¬ (P D ∨ P E) ⊢ ⊥ $ by not_elim [l2n, l1]
 l3: $ P C , ¬ P C ⊢ P D ∨ P E $ by raa [l2]
 l4: $ P C , P E ⊢ P E $ by ax
 l5: $ P C , P E ⊢ P D ∨ P E $ by or_intro_r [l4]
@@ -267,10 +401,12 @@ not_all_to_ex_not
 -----------------
 l1: $ ¬ ∀ x P x , ¬ ∃ y (¬ P y) , ¬ P u ⊢ ¬ P u $ by ax
 l2: $ ¬ ∀ x P x , ¬ ∃ y (¬ P y) , ¬ P u ⊢ ∃ y (¬ P y) $ by ex_intro [l1]
-l3: $ ¬ ∀ x P x , ¬ ∃ y (¬ P y) , ¬ P u ⊢ ⊥ $ by not_left [l2]
+l3n: $ ¬ ∀ x P x , ¬ ∃ y (¬ P y) , ¬ P u ⊢ ¬ (∃ y (¬ P y)) $ by ax
+l3: $ ¬ ∀ x P x , ¬ ∃ y (¬ P y) , ¬ P u ⊢ ⊥ $ by not_elim [l3n, l2]
 l4: $ ¬ ∀ x P x , ¬ ∃ y (¬ P y) ⊢ P u $ by raa [l3]
 l5: $ ¬ ∀ x P x , ¬ ∃ y (¬ P y) ⊢ ∀ x P x $ by all_intro [l4]
-l6: $ ¬ ∀ x P x , ¬ ∃ y (¬ P y) ⊢ ⊥ $ by not_left [l5]
+l6n: $ ¬ ∀ x P x , ¬ ∃ y (¬ P y) ⊢ ¬ (∀ x P x) $ by ax
+l6: $ ¬ ∀ x P x , ¬ ∃ y (¬ P y) ⊢ ⊥ $ by not_elim [l6n, l5]
 l7: $ ¬ ∀ x P x ⊢ ∃ y (¬ P y) $ by raa [l6]
 l8: $ ∅ ⊢ (¬ ∀ x P x) → ∃ y (¬ P y) $ by imp_intro [l7]
 
@@ -278,7 +414,8 @@ not_ex_to_all_not
 -----------------
 l1: $ ¬ ∃ x P x , P u ⊢ P u $ by ax
 l2: $ ¬ ∃ x P x , P u ⊢ ∃ x P x $ by ex_intro [l1]
-l3: $ ¬ ∃ x P x , P u ⊢ ⊥ $ by not_left [l2]
+l3n: $ ¬ ∃ x P x , P u ⊢ ¬ (∃ x P x) $ by ax
+l3: $ ¬ ∃ x P x , P u ⊢ ⊥ $ by not_elim [l3n, l2]
 l4: $ ¬ ∃ x P x ⊢ ¬ P u $ by not_intro [l3]
 l5: $ ¬ ∃ x P x ⊢ ∀ y (¬ P y) $ by all_intro [l4]
 l6: $ ∅ ⊢ (¬ ∃ x P x) → ∀ y (¬ P y) $ by imp_intro [l5]
@@ -299,22 +436,26 @@ l10: $ ∅ ⊢ (∀ x (P x ∧ Q x)) → (∀ y P y ∧ ∀ z Q z) $ by imp_intr
 drinker
 -------
 l1: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u , P u , ¬ ∀ y P y ⊢ P u $ by ax
-l2: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u , P u , ¬ ∀ y P y ⊢ ⊥ $ by not_left [l1]
+l2n: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u , P u , ¬ ∀ y P y ⊢ ¬ (P u) $ by ax
+l2: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u , P u , ¬ ∀ y P y ⊢ ⊥ $ by not_elim [l2n, l1]
 l3: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u , P u ⊢ ∀ y P y $ by raa [l2]
 l4: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u ⊢ P u → ∀ y P y $ by imp_intro [l3]
 l5: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u ⊢ ∃ x (P x → ∀ y P y) $ by ex_intro [l4]
-l6: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u ⊢ ⊥ $ by not_left [l5]
+l6n: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u ⊢ ¬ (∃ x (P x → ∀ y P y)) $ by ax
+l6: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u ⊢ ⊥ $ by not_elim [l6n, l5]
 l7: $ ¬ ∃ x (P x → ∀ y P y) , P C ⊢ P u $ by raa [l6]
 l8: $ ¬ ∃ x (P x → ∀ y P y) , P C ⊢ ∀ y P y $ by all_intro [l7]
 l9: $ ¬ ∃ x (P x → ∀ y P y) ⊢ P C → ∀ y P y $ by imp_intro [l8]
 l10: $ ¬ ∃ x (P x → ∀ y P y) ⊢ ∃ x (P x → ∀ y P y) $ by ex_intro [l9]
-l11: $ ¬ ∃ x (P x → ∀ y P y) ⊢ ⊥ $ by not_left [l10]
+l11n: $ ¬ ∃ x (P x → ∀ y P y) ⊢ ¬ (∃ x (P x → ∀ y P y)) $ by ax
+l11: $ ¬ ∃ x (P x → ∀ y P y) ⊢ ⊥ $ by not_elim [l11n, l10]
 l12: $ ∅ ⊢ ∃ x (P x → ∀ y P y) $ by raa [l11]
 
 dne
 ---
 l1: $ ¬ ¬ P C , ¬ P C ⊢ ¬ P C $ by ax
-l2: $ ¬ ¬ P C , ¬ P C ⊢ ⊥ $ by not_left [l1]
+l2n: $ ¬ ¬ P C , ¬ P C ⊢ ¬ (¬ P C) $ by ax
+l2: $ ¬ ¬ P C , ¬ P C ⊢ ⊥ $ by not_elim [l2n, l1]
 l3: $ ¬ ¬ P C ⊢ P C $ by raa [l2]
 l4: $ ∅ ⊢ ¬ ¬ P C → P C $ by imp_intro [l3]
 
@@ -337,7 +478,8 @@ modus_tollens
 l1: $ (P C → P D) , ¬ P D , P C ⊢ P C $ by ax
 l2: $ (P C → P D) , ¬ P D , P C , P D ⊢ P D $ by ax
 l3: $ (P C → P D) , ¬ P D , P C ⊢ P D $ by imp_left [l1, l2]
-l4: $ (P C → P D) , ¬ P D , P C ⊢ ⊥ $ by not_left [l3]
+l4n: $ (P C → P D) , ¬ P D , P C ⊢ ¬ (P D) $ by ax
+l4: $ (P C → P D) , ¬ P D , P C ⊢ ⊥ $ by not_elim [l4n, l3]
 l5: $ (P C → P D) , ¬ P D ⊢ ¬ P C $ by not_intro [l4]
 l6: $ (P C → P D) ∧ ¬ P D ⊢ ¬ P C $ by and_left [l5]
 l7: $ ∅ ⊢ ((P C → P D) ∧ ¬ P D) → ¬ P C $ by imp_intro [l6]
@@ -345,7 +487,8 @@ l7: $ ∅ ⊢ ((P C → P D) ∧ ¬ P D) → ¬ P C $ by imp_intro [l6]
 disj_syllogism
 --------------
 l1: $ P C , ¬ P C , ¬ P D ⊢ P C $ by ax
-l2: $ P C , ¬ P C , ¬ P D ⊢ ⊥ $ by not_left [l1]
+l2n: $ P C , ¬ P C , ¬ P D ⊢ ¬ (P C) $ by ax
+l2: $ P C , ¬ P C , ¬ P D ⊢ ⊥ $ by not_elim [l2n, l1]
 l3: $ P C , ¬ P C ⊢ P D $ by raa [l2]
 l4: $ P D , ¬ P C ⊢ P D $ by ax
 l5: $ (P C ∨ P D) , ¬ P C ⊢ P D $ by or_left [l3, l4]
@@ -357,11 +500,13 @@ cases_classical
 l1: $ (P C → P D) , (¬ P C → P D) , ¬ P D , P C ⊢ P C $ by ax
 l2: $ (P C → P D) , (¬ P C → P D) , ¬ P D , P C , P D ⊢ P D $ by ax
 l3: $ (P C → P D) , (¬ P C → P D) , ¬ P D , P C ⊢ P D $ by imp_left [l1, l2]
-l4: $ (P C → P D) , (¬ P C → P D) , ¬ P D , P C ⊢ ⊥ $ by not_left [l3]
+l4n: $ (P C → P D) , (¬ P C → P D) , ¬ P D , P C ⊢ ¬ (P D) $ by ax
+l4: $ (P C → P D) , (¬ P C → P D) , ¬ P D , P C ⊢ ⊥ $ by not_elim [l4n, l3]
 l5: $ (P C → P D) , (¬ P C → P D) , ¬ P D ⊢ ¬ P C $ by not_intro [l4]
 l6: $ (P C → P D) , (¬ P C → P D) , ¬ P D , P D ⊢ P D $ by ax
 l7: $ (P C → P D) , (¬ P C → P D) , ¬ P D ⊢ P D $ by imp_left [l5, l6]
-l8: $ (P C → P D) , (¬ P C → P D) , ¬ P D ⊢ ⊥ $ by not_left [l7]
+l8n: $ (P C → P D) , (¬ P C → P D) , ¬ P D ⊢ ¬ (P D) $ by ax
+l8: $ (P C → P D) , (¬ P C → P D) , ¬ P D ⊢ ⊥ $ by not_elim [l8n, l7]
 l9: $ (P C → P D) , (¬ P C → P D) ⊢ P D $ by raa [l8]
 l10: $ (P C → P D) ∧ (¬ P C → P D) ⊢ P D $ by and_left [l9]
 l11: $ ∅ ⊢ ((P C → P D) ∧ (¬ P C → P D)) → P D $ by imp_intro [l10]
@@ -372,10 +517,12 @@ l1: $ (P C → P D) , ¬ (¬ P C ∨ P D) , P C ⊢ P C $ by ax
 l2: $ (P C → P D) , ¬ (¬ P C ∨ P D) , P C , P D ⊢ P D $ by ax
 l3: $ (P C → P D) , ¬ (¬ P C ∨ P D) , P C ⊢ P D $ by imp_left [l1, l2]
 l4: $ (P C → P D) , ¬ (¬ P C ∨ P D) , P C ⊢ ¬ P C ∨ P D $ by or_intro_r [l3]
-l5: $ (P C → P D) , ¬ (¬ P C ∨ P D) , P C ⊢ ⊥ $ by not_left [l4]
+l5n: $ (P C → P D) , ¬ (¬ P C ∨ P D) , P C ⊢ ¬ (¬ P C ∨ P D) $ by ax
+l5: $ (P C → P D) , ¬ (¬ P C ∨ P D) , P C ⊢ ⊥ $ by not_elim [l5n, l4]
 l6: $ (P C → P D) , ¬ (¬ P C ∨ P D) ⊢ ¬ P C $ by not_intro [l5]
 l7: $ (P C → P D) , ¬ (¬ P C ∨ P D) ⊢ ¬ P C ∨ P D $ by or_intro_l [l6]
-l8: $ (P C → P D) , ¬ (¬ P C ∨ P D) ⊢ ⊥ $ by not_left [l7]
+l8n: $ (P C → P D) , ¬ (¬ P C ∨ P D) ⊢ ¬ (¬ P C ∨ P D) $ by ax
+l8: $ (P C → P D) , ¬ (¬ P C ∨ P D) ⊢ ⊥ $ by not_elim [l8n, l7]
 l9: $ (P C → P D) ⊢ ¬ P C ∨ P D $ by raa [l8]
 l10: $ ∅ ⊢ (P C → P D) → (¬ P C ∨ P D) $ by imp_intro [l9]
 
@@ -384,7 +531,8 @@ contrapos_fwd
 l1: $ (P C → P D) , ¬ P D , P C ⊢ P C $ by ax
 l2: $ (P C → P D) , ¬ P D , P C , P D ⊢ P D $ by ax
 l3: $ (P C → P D) , ¬ P D , P C ⊢ P D $ by imp_left [l1, l2]
-l4: $ (P C → P D) , ¬ P D , P C ⊢ ⊥ $ by not_left [l3]
+l4n: $ (P C → P D) , ¬ P D , P C ⊢ ¬ (P D) $ by ax
+l4: $ (P C → P D) , ¬ P D , P C ⊢ ⊥ $ by not_elim [l4n, l3]
 l5: $ (P C → P D) , ¬ P D ⊢ ¬ P C $ by not_intro [l4]
 l6: $ (P C → P D) ⊢ ¬ P D → ¬ P C $ by imp_intro [l5]
 l7: $ ∅ ⊢ (P C → P D) → (¬ P D → ¬ P C) $ by imp_intro [l6]
@@ -392,9 +540,11 @@ l7: $ ∅ ⊢ (P C → P D) → (¬ P D → ¬ P C) $ by imp_intro [l6]
 triple_neg
 ----------
 l1: $ ¬ ¬ ¬ P C , P C , ¬ P C ⊢ P C $ by ax
-l2: $ ¬ ¬ ¬ P C , P C , ¬ P C ⊢ ⊥ $ by not_left [l1]
+l2n: $ ¬ ¬ ¬ P C , P C , ¬ P C ⊢ ¬ (P C) $ by ax
+l2: $ ¬ ¬ ¬ P C , P C , ¬ P C ⊢ ⊥ $ by not_elim [l2n, l1]
 l3: $ ¬ ¬ ¬ P C , P C ⊢ ¬ ¬ P C $ by not_intro [l2]
-l4: $ ¬ ¬ ¬ P C , P C ⊢ ⊥ $ by not_left [l3]
+l4n: $ ¬ ¬ ¬ P C , P C ⊢ ¬ (¬ ¬ P C) $ by ax
+l4: $ ¬ ¬ ¬ P C , P C ⊢ ⊥ $ by not_elim [l4n, l3]
 l5: $ ¬ ¬ ¬ P C ⊢ ¬ P C $ by not_intro [l4]
 l6: $ ∅ ⊢ ¬ ¬ ¬ P C → ¬ P C $ by imp_intro [l5]
 
@@ -427,11 +577,13 @@ dummett
 l1: $ ¬ ((P C → P D) ∨ (P D → P C)) , P C , ¬ P D , P D ⊢ P C $ by ax
 l2: $ ¬ ((P C → P D) ∨ (P D → P C)) , P C , ¬ P D ⊢ P D → P C $ by imp_intro [l1]
 l3: $ ¬ ((P C → P D) ∨ (P D → P C)) , P C , ¬ P D ⊢ (P C → P D) ∨ (P D → P C) $ by or_intro_r [l2]
-l4: $ ¬ ((P C → P D) ∨ (P D → P C)) , P C , ¬ P D ⊢ ⊥ $ by not_left [l3]
+l4n: $ ¬ ((P C → P D) ∨ (P D → P C)) , P C , ¬ P D ⊢ ¬ ((P C → P D) ∨ (P D → P C)) $ by ax
+l4: $ ¬ ((P C → P D) ∨ (P D → P C)) , P C , ¬ P D ⊢ ⊥ $ by not_elim [l4n, l3]
 l5: $ ¬ ((P C → P D) ∨ (P D → P C)) , P C ⊢ P D $ by raa [l4]
 l6: $ ¬ ((P C → P D) ∨ (P D → P C)) ⊢ P C → P D $ by imp_intro [l5]
 l7: $ ¬ ((P C → P D) ∨ (P D → P C)) ⊢ (P C → P D) ∨ (P D → P C) $ by or_intro_l [l6]
-l8: $ ¬ ((P C → P D) ∨ (P D → P C)) ⊢ ⊥ $ by not_left [l7]
+l8n: $ ¬ ((P C → P D) ∨ (P D → P C)) ⊢ ¬ ((P C → P D) ∨ (P D → P C)) $ by ax
+l8: $ ¬ ((P C → P D) ∨ (P D → P C)) ⊢ ⊥ $ by not_elim [l8n, l7]
 l9: $ ∅ ⊢ (P C → P D) ∨ (P D → P C) $ by raa [l8]
 
 all_ex_inst
@@ -489,7 +641,8 @@ clavius
 l1: $ (¬ P C → P C) , ¬ P C ⊢ ¬ P C $ by ax
 l2: $ (¬ P C → P C) , ¬ P C , P C ⊢ P C $ by ax
 l3: $ (¬ P C → P C) , ¬ P C ⊢ P C $ by imp_left [l1, l2]
-l4: $ (¬ P C → P C) , ¬ P C ⊢ ⊥ $ by not_left [l3]
+l4n: $ (¬ P C → P C) , ¬ P C ⊢ ¬ (P C) $ by ax
+l4: $ (¬ P C → P C) , ¬ P C ⊢ ⊥ $ by not_elim [l4n, l3]
 l5: $ (¬ P C → P C) ⊢ P C $ by raa [l4]
 l6: $ ∅ ⊢ (¬ P C → P C) → P C $ by imp_intro [l5]
 
@@ -499,12 +652,14 @@ l1: $ (P C → P D) , (¬ P C → P E) , ¬ (P D ∨ P E) , P C ⊢ P C $ by ax
 l2: $ (P C → P D) , (¬ P C → P E) , ¬ (P D ∨ P E) , P C , P D ⊢ P D $ by ax
 l3: $ (P C → P D) , (¬ P C → P E) , ¬ (P D ∨ P E) , P C ⊢ P D $ by imp_left [l1, l2]
 l4: $ (P C → P D) , (¬ P C → P E) , ¬ (P D ∨ P E) , P C ⊢ P D ∨ P E $ by or_intro_l [l3]
-l5: $ (P C → P D) , (¬ P C → P E) , ¬ (P D ∨ P E) , P C ⊢ ⊥ $ by not_left [l4]
+l5n: $ (P C → P D) , (¬ P C → P E) , ¬ (P D ∨ P E) , P C ⊢ ¬ (P D ∨ P E) $ by ax
+l5: $ (P C → P D) , (¬ P C → P E) , ¬ (P D ∨ P E) , P C ⊢ ⊥ $ by not_elim [l5n, l4]
 l6: $ (P C → P D) , (¬ P C → P E) , ¬ (P D ∨ P E) ⊢ ¬ P C $ by not_intro [l5]
 l7: $ (P C → P D) , (¬ P C → P E) , ¬ (P D ∨ P E) , P E ⊢ P E $ by ax
 l8: $ (P C → P D) , (¬ P C → P E) , ¬ (P D ∨ P E) ⊢ P E $ by imp_left [l6, l7]
 l9: $ (P C → P D) , (¬ P C → P E) , ¬ (P D ∨ P E) ⊢ P D ∨ P E $ by or_intro_r [l8]
-l10: $ (P C → P D) , (¬ P C → P E) , ¬ (P D ∨ P E) ⊢ ⊥ $ by not_left [l9]
+l10n: $ (P C → P D) , (¬ P C → P E) , ¬ (P D ∨ P E) ⊢ ¬ (P D ∨ P E) $ by ax
+l10: $ (P C → P D) , (¬ P C → P E) , ¬ (P D ∨ P E) ⊢ ⊥ $ by not_elim [l10n, l9]
 l11: $ (P C → P D) , (¬ P C → P E) ⊢ P D ∨ P E $ by raa [l10]
 l12: $ (P C → P D) ∧ (¬ P C → P E) ⊢ P D ∨ P E $ by and_left [l11]
 l13: $ ∅ ⊢ ((P C → P D) ∧ (¬ P C → P E)) → (P D ∨ P E) $ by imp_intro [l12]
@@ -512,7 +667,8 @@ l13: $ ∅ ⊢ ((P C → P D) ∧ (¬ P C → P E)) → (P D ∨ P E) $ by imp_i
 mat_imp_bwd
 -----------
 l1: $ ¬ P C , P C , ¬ P D ⊢ P C $ by ax
-l2: $ ¬ P C , P C , ¬ P D ⊢ ⊥ $ by not_left [l1]
+l2n: $ ¬ P C , P C , ¬ P D ⊢ ¬ (P C) $ by ax
+l2: $ ¬ P C , P C , ¬ P D ⊢ ⊥ $ by not_elim [l2n, l1]
 l3: $ ¬ P C , P C ⊢ P D $ by raa [l2]
 l4: $ P D , P C ⊢ P D $ by ax
 l5: $ (¬ P C ∨ P D) , P C ⊢ P D $ by or_left [l3, l4]
@@ -522,9 +678,11 @@ l7: $ ∅ ⊢ (¬ P C ∨ P D) → (P C → P D) $ by imp_intro [l6]
 de_morgan_conj_bwd
 ------------------
 l1: $ ¬ P C , P C , P D ⊢ P C $ by ax
-l2: $ ¬ P C , P C , P D ⊢ ⊥ $ by not_left [l1]
+l2n: $ ¬ P C , P C , P D ⊢ ¬ (P C) $ by ax
+l2: $ ¬ P C , P C , P D ⊢ ⊥ $ by not_elim [l2n, l1]
 l3: $ ¬ P D , P C , P D ⊢ P D $ by ax
-l4: $ ¬ P D , P C , P D ⊢ ⊥ $ by not_left [l3]
+l4n: $ ¬ P D , P C , P D ⊢ ¬ (P D) $ by ax
+l4: $ ¬ P D , P C , P D ⊢ ⊥ $ by not_elim [l4n, l3]
 l5: $ (¬ P C ∨ ¬ P D) , P C , P D ⊢ ⊥ $ by or_left [l2, l4]
 l6: $ (¬ P C ∨ ¬ P D) , (P C ∧ P D) ⊢ ⊥ $ by and_left [l5]
 l7: $ ¬ P C ∨ ¬ P D ⊢ ¬ (P C ∧ P D) $ by not_intro [l6]
@@ -534,11 +692,13 @@ de_morgan_disj_fwd
 ------------------
 l1: $ ¬ (P C ∨ P D) , P C ⊢ P C $ by ax
 l2: $ ¬ (P C ∨ P D) , P C ⊢ P C ∨ P D $ by or_intro_l [l1]
-l3: $ ¬ (P C ∨ P D) , P C ⊢ ⊥ $ by not_left [l2]
+l3n: $ ¬ (P C ∨ P D) , P C ⊢ ¬ (P C ∨ P D) $ by ax
+l3: $ ¬ (P C ∨ P D) , P C ⊢ ⊥ $ by not_elim [l3n, l2]
 l4: $ ¬ (P C ∨ P D) ⊢ ¬ P C $ by not_intro [l3]
 l5: $ ¬ (P C ∨ P D) , P D ⊢ P D $ by ax
 l6: $ ¬ (P C ∨ P D) , P D ⊢ P C ∨ P D $ by or_intro_r [l5]
-l7: $ ¬ (P C ∨ P D) , P D ⊢ ⊥ $ by not_left [l6]
+l7n: $ ¬ (P C ∨ P D) , P D ⊢ ¬ (P C ∨ P D) $ by ax
+l7: $ ¬ (P C ∨ P D) , P D ⊢ ⊥ $ by not_elim [l7n, l6]
 l8: $ ¬ (P C ∨ P D) ⊢ ¬ P D $ by not_intro [l7]
 l9: $ ¬ (P C ∨ P D) ⊢ ¬ P C ∧ ¬ P D $ by and_intro [l4, l8]
 l10: $ ∅ ⊢ ¬ (P C ∨ P D) → (¬ P C ∧ ¬ P D) $ by imp_intro [l9]
@@ -546,9 +706,11 @@ l10: $ ∅ ⊢ ¬ (P C ∨ P D) → (¬ P C ∧ ¬ P D) $ by imp_intro [l9]
 de_morgan_disj_bwd
 ------------------
 l1: $ ¬ P C , ¬ P D , P C ⊢ P C $ by ax
-l2: $ ¬ P C , ¬ P D , P C ⊢ ⊥ $ by not_left [l1]
+l2n: $ ¬ P C , ¬ P D , P C ⊢ ¬ (P C) $ by ax
+l2: $ ¬ P C , ¬ P D , P C ⊢ ⊥ $ by not_elim [l2n, l1]
 l3: $ ¬ P C , ¬ P D , P D ⊢ P D $ by ax
-l4: $ ¬ P C , ¬ P D , P D ⊢ ⊥ $ by not_left [l3]
+l4n: $ ¬ P C , ¬ P D , P D ⊢ ¬ (P D) $ by ax
+l4: $ ¬ P C , ¬ P D , P D ⊢ ⊥ $ by not_elim [l4n, l3]
 l5: $ ¬ P C , ¬ P D , (P C ∨ P D) ⊢ ⊥ $ by or_left [l2, l4]
 l6: $ (¬ P C ∧ ¬ P D) , (P C ∨ P D) ⊢ ⊥ $ by and_left [l5]
 l7: $ ¬ P C ∧ ¬ P D ⊢ ¬ (P C ∨ P D) $ by not_intro [l6]
@@ -615,7 +777,8 @@ ex_not_to_not_all
 -----------------
 l1: $ ¬ P u , (∀ y P y) , P u ⊢ P u $ by ax
 l2: $ ¬ P u , (∀ y P y) ⊢ P u $ by all_left [l1]
-l3: $ ¬ P u , (∀ y P y) ⊢ ⊥ $ by not_left [l2]
+l3n: $ ¬ P u , (∀ y P y) ⊢ ¬ (P u) $ by ax
+l3: $ ¬ P u , (∀ y P y) ⊢ ⊥ $ by not_elim [l3n, l2]
 l4: $ (∃ x (¬ P x)) , (∀ y P y) ⊢ ⊥ $ by ex_left [l3]
 l5: $ ∃ x (¬ P x) ⊢ ¬ ∀ y P y $ by not_intro [l4]
 l6: $ ∅ ⊢ (∃ x (¬ P x)) → ¬ ∀ y P y $ by imp_intro [l5]
@@ -623,7 +786,8 @@ l6: $ ∅ ⊢ (∃ x (¬ P x)) → ¬ ∀ y P y $ by imp_intro [l5]
 all_not_to_not_ex
 -----------------
 l1: $ (∀ x (¬ P x)) , P u , ¬ P u ⊢ P u $ by ax
-l2: $ (∀ x (¬ P x)) , P u , ¬ P u ⊢ ⊥ $ by not_left [l1]
+l2n: $ (∀ x (¬ P x)) , P u , ¬ P u ⊢ ¬ (P u) $ by ax
+l2: $ (∀ x (¬ P x)) , P u , ¬ P u ⊢ ⊥ $ by not_elim [l2n, l1]
 l3: $ (∀ x (¬ P x)) , P u ⊢ ⊥ $ by all_left [l2]
 l4: $ (∀ x (¬ P x)) , (∃ y P y) ⊢ ⊥ $ by ex_left [l3]
 l5: $ ∀ x (¬ P x) ⊢ ¬ ∃ y P y $ by not_intro [l4]

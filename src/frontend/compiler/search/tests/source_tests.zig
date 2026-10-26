@@ -1352,13 +1352,25 @@ test "source search declines a target that depends on a dropped declaration" {
 // Binding trimming through the `BindingOracle` (#374). Each case is an nd_fol
 // line whose bare suggestion fails, so trimming needs the oracle, and needs
 // the named part of it; `suggestionsAtNeedle` fails any suggestion that comes
-// back untrimmed.
+// back untrimmed. The cases are built on the goal-switching `not_left`
+// (`g , ¬ a ⊢ a > g , ¬ a ⊢ ⊥`, whose conclusion fixes no `a`), which nd_fol
+// has since replaced with signed negation rules; the fixture gets it back.
 // ---------------------------------------------------------------------------
 
 fn expectNdFolTrim(proof_src: []const u8, expected: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const mm0_src = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/nd_fol.mm0", arena.allocator(), .unlimited);
+    const allocator = arena.allocator();
+    const fixture = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/nd_fol.mm0", allocator, .unlimited);
+    const first = "-- Contradictory hypotheses close any goal";
+    const last = "$ g , ¬ (∃ x p) ⊢ c $;\n";
+    const start = std.mem.indexOf(u8, fixture, first) orelse return error.MissingNegationRules;
+    const end = (std.mem.indexOfPos(u8, fixture, start, last) orelse return error.MissingNegationRules) + last.len;
+    const mm0_src = try std.mem.concat(allocator, u8, &.{
+        fixture[0..start],
+        "--| @auto eager 3\ntheorem not_left (g: ctx) (a: wff): $ g , ¬ a ⊢ a $ > $ g , ¬ a ⊢ ⊥ $;\n",
+        fixture[end..],
+    });
     var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
         .max_results = 3,
         .exact_result_limit = 1,

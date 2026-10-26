@@ -35,6 +35,14 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Changed
 
+- The `nd_fol` bench fixture decomposes a negated assumption on the left,
+  with one eager rule per connective (`¬ ¬`, `¬ ∨`, `¬ →`, `¬ ∧`, `¬ ↔`, and
+  `¬ ∀` and `¬ ∃` turned into `∃ ¬` and `∀ ¬`) and `contra_left` to close
+  on a negated atom, instead of switching the goal with `not_left`. Because
+  `not_left` kept its `¬ a`, on `¬ ¬ ∃ x p ⊢ ⊥` it reopened the `∃` with a
+  fresh variable on every round at no depth cost, until the `@vars` pool
+  ran out. The fixture's bench rows stay 57/57; in the Pelletier battery
+  problem 42 is now found, at 7% less work over the battery.
 - A search reuses the memory it frees instead of holding all of it until it
   returns, so its peak memory no longer grows with the work it does. On a
   Pelletier problem it was about 85 MB per unit of `budget`: 740 MB at the

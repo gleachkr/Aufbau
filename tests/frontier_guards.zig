@@ -676,7 +676,7 @@ pub const guards = [_]FrontierGuard{
         .mode = "breadth",
     },
     // One FULL depth guard per search shape: eager intros with imp_left
-    // chains (s_comb), raa + not_left (cases_classical), or_left splits
+    // chains (s_comb), raa + negation (cases_classical), or_left splits
     // (resolution), all_left/ex_left witnesses (exists_mono), and the
     // vacuous quantifier rules, whose fresh eigenvariable the premise
     // substitutes away so only the pool can name it (vac_intro, vac_ex).
