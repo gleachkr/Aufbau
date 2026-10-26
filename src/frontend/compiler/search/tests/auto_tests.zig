@@ -1143,6 +1143,79 @@ test "an @auto focus premise marked `_` releases focus" {
     try std.testing.expectEqual(@as(usize, 0), released.items.len);
 }
 
+test "an @auto focus failure does not cover the same goal unfocused" {
+    // `imp_left` on the first member leaves `… ⊢ A | B` focused, where only
+    // `or_r1`/`or_r2` apply and both fail. The second member's `&` releases
+    // focus, so `and_intro` reaches the same goal unfocused at the same
+    // depth, where `or_comm` proves it. A failure memo keyed without the
+    // focus would skip that goal and miss the proof.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort ctx;
+        \\term or (a b: wff): wff;
+        \\infixr or: $|$ prec 30;
+        \\term an (a b: wff): wff;
+        \\infixr an: $&$ prec 35;
+        \\term im (a b: wff): wff;
+        \\infixr im: $->$ prec 25;
+        \\term A: wff; term B: wff; term C: wff;
+        \\term bi (a b: wff): wff;
+        \\infixl bi: $<->$ prec 20;
+        \\--| @relation wff bi biid bitr bisym mpbi
+        \\axiom biid (a: wff): $ a <-> a $;
+        \\axiom bitr (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+        \\axiom bisym (a b: wff): $ a <-> b $ > $ b <-> a $;
+        \\axiom mpbi (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+        \\term ctx_eq (g h: ctx): wff;
+        \\term emp: ctx;
+        \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+        \\term join (g h: ctx): ctx;
+        \\infixl join: $,$ prec 5;
+        \\term hyp (a: wff): ctx;
+        \\coercion hyp: wff > ctx;
+        \\term nd (g: ctx) (a: wff): wff;
+        \\infixl nd: $|-$ prec 2;
+        \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+        \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+        \\axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+        \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+        \\axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+        \\axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+        \\axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+        \\axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+        \\--| @congr
+        \\axiom join_congr (g1 g2 h1 h2: ctx): $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+        \\--| @congr
+        \\axiom nd_congr (e f: ctx) (a b: wff): $ ctx_eq e f $ > $ a <-> b $ > $ (e |- a) <-> (f |- b) $;
+        \\axiom ax (g: ctx) (a: wff): $ g , a |- a $;
+        \\--| @auto eager
+        \\axiom and_intro (g: ctx) (a b: wff): $ g |- a $ > $ g |- b $ > $ g |- a & b $;
+        \\--| @auto focus $ a | b $ : $ a $
+        \\axiom or_r1 (g: ctx) (a b: wff): $ g |- a $ > $ g |- a | b $;
+        \\--| @auto focus $ a | b $ : $ b $
+        \\axiom or_r2 (g: ctx) (a b: wff): $ g |- b $ > $ g |- a | b $;
+        \\--| @auto backward
+        \\axiom or_comm (g: ctx) (a b: wff): $ g |- b | a $ > $ g |- a | b $;
+        \\--| @auto focus $ a -> b $ : $ a $ $ b $
+        \\axiom imp_left (g: ctx) (a b c: wff):
+        \\  $ g , (a -> b) |- a $ > $ g , b |- c $ > $ g , (a -> b) |- c $;
+        \\theorem t: $ ((A | B) -> C) , (((A | B) & (A | B)) -> C) , (B | A) |- C $;
+    ;
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ ((A | B) -> C) , (((A | B) & (A | B)) -> C) , (B | A) |- C $ by auto?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
+        .generate = .{ .enabled = true },
+    });
+    defer suggestions.deinit();
+    try std.testing.expect(suggestions.items.len > 0);
+}
+
 test "auto stack guard stops the search and reports exhaustion" {
     const proof_src =
         \\t

@@ -816,9 +816,11 @@ The search then distinguishes focused from unfocused goals:
 A chain is bounded by the focused formula's structure, which is what
 makes the free steps safe: every focused step decomposes the formula in
 hand, so there is no depth budget to run out but nothing to loop on
-either. Nodes, fuel, and the global tick budget still apply. Focused
-goals bypass the failure memos (their search differs from an unfocused
-one at the same depth), and found sub-proofs are shared as usual.
+either. Nodes, fuel, and the global tick budget still apply. A focused
+search differs from an unfocused one at the same depth, so a failed
+focused goal is remembered for its focus only: the same goal focused on
+the same formula is skipped, while the goal unfocused, or focused on
+another formula, is searched again. Found sub-proofs are shared as usual.
 
 The discipline comes from focused sequent calculi, where restricting
 search this way loses no proofs when the focused rules are exactly the

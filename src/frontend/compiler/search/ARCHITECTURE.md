@@ -883,8 +883,11 @@ goal whose candidates are being tried, plus the driver's `node_target` and
 - **Generation at depth 0**: `childSearch` passes the hook when the goal is
   focused even at depth 0, since its steps are free.
 - **Memos**: a focused goal's search is narrower than an unfocused one at
-  the same depth but reaches past it, so `concrete_fail`/`open_fail` neither
-  cover nor record focused targets; `concrete_ok` is shared (a proof is a
+  the same depth but reaches past it, so a failure only speaks for the same
+  focus. `concrete_fail` keys a focused target by its focus too
+  (`focusedFailKey`: the canonical target's content hash, the focus
+  formula's and the site's steps); `open_fail` neither covers nor records
+  focused open targets. `concrete_ok` is shared (a proof is a
   proof). `genDepth` charges focus edges, so a success is stored at the
   smaller of that and the depth it was found at, and replays wherever that
   budget fits.

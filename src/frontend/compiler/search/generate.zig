@@ -196,7 +196,11 @@ const Driver = struct {
     /// Keys are scope-stable canonical content. Cleared between ladder
     /// cells unless `GenerateOptions.persist_negative` keeps them (the
     /// verdict inputs — pool, seeds, rules — are fixed for the whole
-    /// ladder). Corpus-validated by shadow instrumentation before the
+    /// ladder). A target searched under `@auto focus` is a narrower search
+    /// than the same target unfocused, so `concrete_fail` keys it by its
+    /// focus as well (`focusedFailKey`); `open_fail` neither covers nor
+    /// records a focused open target. Corpus-validated by shadow
+    /// instrumentation before the
     /// real implementation: zero contradicted verdicts across ~550k
     /// would-skip re-solves; ~17-21% of generation ticks had been
     /// re-deriving already-known failures.
@@ -1502,7 +1506,8 @@ fn collectOpenProofs(
     // open targets, so charging skips burns the whole budget on dedup hits).
     // A focused target's search differs from an unfocused one's at the same
     // depth (narrower, but its steps are free), so the failure memo neither
-    // covers it nor records it. Its focus is read off the hint below; here,
+    // covers it nor records it (the concrete memo keys a focused target by
+    // its focus instead; see `focusedFailKey`). Its focus is read off the hint below; here,
     // on a memo hit only, off the open target.
     if (driver.open_fail.covered(key, driver.phase_index, depth) and
         (focus_premise == null or focusAfter(driver, target_theorem, focus_premise.?, target) == null))
@@ -2082,10 +2087,10 @@ fn solveProof(
         }
     }
     // Cheap O(1) skips (failure memo + DFS path guard) are charged no node
-    // budget, mirroring `hookSolveOpen`. A focused target bypasses the
-    // failure memo, as there.
-    const focused = driver.hook.focus != null;
-    if (!focused and driver.concrete_fail.covered(ok_key, driver.phase_index, depth)) {
+    // budget, mirroring `hookSolveOpen`. A focused target's failure is keyed
+    // by its focus too (`focusedFailKey`).
+    const fail_key = focusedFailKey(driver, ok_key, driver.hook.focus);
+    if (driver.concrete_fail.covered(fail_key, driver.phase_index, depth)) {
         if (driver.counters) |c| c.persist_concrete_skips += 1;
         return null;
     }
@@ -2151,11 +2156,11 @@ fn solveProof(
         // node-budget bail, no path-guard prune of an ancestor's repeat
         // inside the subtree, and no validated proof whose conclusion could
         // not leave the scope: memoize so siblings skip it.
-        if (!focused and driver.node_cap_trips == trips_at_entry and
+        if (driver.node_cap_trips == trips_at_entry and
             !prunedAncestor(driver, path_entry) and
             !filter.rejected)
         {
-            driver.concrete_fail.record(driver.scratch, ok_key, driver.phase_index, depth);
+            driver.concrete_fail.record(driver.scratch, fail_key, driver.phase_index, depth);
         }
         return null;
     }
@@ -2170,7 +2175,7 @@ fn solveProof(
     // A focused chain's free steps still count in `genDepth`, so for a
     // focused target the depth it was found at bounds it too: replay
     // wherever that budget fits.
-    const gen_depth = if (focused) @min(genDepth(driver, application), depth) else genDepth(driver, application);
+    const gen_depth = if (driver.hook.focus != null) @min(genDepth(driver, application), depth) else genDepth(driver, application);
     if (driver.concrete_ok.getOrPut(driver.scratch, ok_key)) |gop| {
         if (!gop.found_existing or gen_depth < gop.value_ptr.gen_depth) {
             gop.value_ptr.* = .{
@@ -2230,6 +2235,17 @@ fn canonicalKey(driver: *Driver, target: ExprId) ExprId {
         driver.work_theorem,
         target,
     ) catch target;
+}
+
+/// The failure-memo key of a concrete target searched under `focus`: a
+/// focused search differs from an unfocused one (and from one focused on
+/// another formula), so the focus formula and site join the key.
+fn focusedFailKey(driver: *Driver, key: u64, focus: ?types.Focus) u64 {
+    const f = focus orelse return key;
+    var h = std.hash.Wyhash.init(key);
+    types.hashCanonicalContent(driver.work_theorem, canonicalKey(driver, f.formula), &h);
+    for (f.site.steps) |step| std.hash.autoHash(&h, step);
+    return h.final();
 }
 
 /// Scope-stable memo key for a concrete target: the canonical content hash
