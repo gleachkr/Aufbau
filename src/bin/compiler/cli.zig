@@ -85,6 +85,10 @@ const SearchCommand = struct {
     retries: usize = 0,
     depth: ?u64 = null,
     budget: ?u64 = null,
+    /// `--core`: try the search core first. A development switch while the
+    /// core grows (`docs/design_notes/shared_witness.md`), so the usage text
+    /// does not list it.
+    core: bool = false,
 };
 
 const JoinCommand = struct {
@@ -184,6 +188,8 @@ fn parseSearchFlag(
         search.depth = try flagNumber(argv, i);
     } else if (std.mem.eql(u8, arg, "--budget")) {
         search.budget = try flagNumber(argv, i);
+    } else if (std.mem.eql(u8, arg, "--core")) {
+        search.core = true;
     } else return false;
     return true;
 }
@@ -471,7 +477,7 @@ fn runSearch(
         allocator,
         pair.mm0.text,
         proof.text,
-        .{ .only = cmd.only, .retries = cmd.retries, .params = params },
+        .{ .only = cmd.only, .retries = cmd.retries, .params = params, .core = cmd.core },
     );
     defer result.deinit();
     if (cmd.only) |only| if (result.markers.len == 0) {

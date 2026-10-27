@@ -1562,6 +1562,10 @@ width is real.
 | `backward/validate.zig` | candidate validation, binding rendering, ranking, derived-direct |
 | `generate.zig` | `auto?` driver: hybrid depth-major/phase-major retry ladder, forward saturation wiring |
 | `meta_store.zig` | `Sigma`, the search's substitution (every meta's constraints and assignment, keyed by `meta_id` or a view-local alias, with one trail; one per `auto?` call), and `MetaStore`, a branch-local view over it (pid → key map, rollback marks); the leaf kinds live in `../inference/open_terms.zig` |
+| `core/root.zig` | the search core (`docs/design_notes/shared_witness.md` revision 2), behind `GenerateOptions.core` and tried before the ladder: entry, abstention, close-out (render every binding explicitly, one `probe`) |
+| `core/catalog.zig` | the rules the core applies, by role (closer, safe = `@auto eager`, unsafe), indexed by conclusion head |
+| `core/terms.zig` | canonical ACUI bags, conclusion matching (bag members as choice points), premise building |
+| `core/prover.zig` | the agenda in continuation-passing style, the proof record, the ground cut and the failure/success memos |
 | `trigger.zig` | `@auto trigger` seed harvest before the ladder (and at eigenvariable-naming sub-goals, `generate.zig` `Reseed`): subterm e-match → sourceless ground `DerivedRef`s |
 | `tunables.zig` | `auto?` per-call parameters: names, ranges, validation, and applying them to `GenerateOptions` |
 | `candidate.zig` | `probe`/`commit` over `tryCandidate`: full checker re-validation on a cloned theorem |
@@ -1593,4 +1597,4 @@ width is real.
 | `egraph/tests.zig` | egraph unit tests (public-API only) |
 | `conversion.zig` | `conversion?` driver: `@conversion` enrollment, pool/goal seeding, absorbed AC certificates, forced-negative reporting |
 | `conversion/lowerer.zig` | `Lowerer`: explanation chain → proof-script lines (AC re-treeing seams, congruence descent, pool-equation citation) |
-| `tests/` | subsystem unit tests, split by topic (`source`, `auto`, `apply`, `prune`, `forward`, `tunables`, `conversion`, `compute`, `alpha`); shared fixtures in `tests/helpers.zig` |
+| `tests/` | subsystem unit tests, split by topic (`source`, `auto`, `core`, `apply`, `prune`, `forward`, `tunables`, `conversion`, `compute`, `alpha`); shared fixtures in `tests/helpers.zig` |

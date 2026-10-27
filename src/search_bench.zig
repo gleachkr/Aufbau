@@ -86,6 +86,9 @@ const BenchOptions = struct {
     /// Content-keyed query-shape cache (Lever M-content); `--no-shape-cache`
     /// turns it off to measure its effect.
     shape_cache: bool = true,
+    /// `--core` tries the search core before the generation ladder
+    /// (`GenerateOptions.core`).
+    core: bool = false,
     /// Discrimination/scaling sweep. When set, the
     /// scenario/frontier benches are skipped and the sweep runs instead.
     sweep: ?SweepSpec = null,
@@ -414,6 +417,10 @@ fn parseOptions(
             options.persist_negative = false;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--core")) {
+            options.core = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--counters")) {
             options.counters = true;
             continue;
@@ -449,7 +456,7 @@ fn printUsage() !void {
             "       [--require-no-miss] [--retry-misses] [--max-k=N]\n" ++
             "       [--no-search-memo] [--no-deep-member-prune]\n" ++
             "       [--no-persist-negative]\n" ++
-            "       [--no-shape-cache]\n" ++
+            "       [--no-shape-cache] [--core]\n" ++
             "       [--gen-nodes=N] [--gen-fuel=N] [--phase5-fuel=N]\n" ++
             "       [--global-budget=TICKS] [--alloc-trap=MIB]\n" ++
             "       [--fwd-facts=N] [--fwd-layers=N] [--fwd-attempts=N]\n" ++
@@ -814,6 +821,7 @@ fn frontierGenerateOptions(options: BenchOptions) Search.GenerateOptions {
         gen.deep_member_prune = options.deep_member_prune;
         gen.shape_cache = options.shape_cache;
         gen.persist_negative = options.persist_negative;
+        gen.core = options.core;
         if (options.gen_nodes != 0) gen.max_nodes = options.gen_nodes;
         if (options.gen_fuel != 0) gen.fuel = options.gen_fuel;
         if (options.phase5_fuel != 0) gen.phase5_fuel = options.phase5_fuel;

@@ -5,6 +5,7 @@
 comptime {
     _ = @import("./source_tests.zig");
     _ = @import("./auto_tests.zig");
+    _ = @import("./core_tests.zig");
     _ = @import("./apply_tests.zig");
     _ = @import("./prune_tests.zig");
     _ = @import("./forward_tests.zig");

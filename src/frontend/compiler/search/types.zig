@@ -595,6 +595,10 @@ pub const SearchCounters = struct {
     /// depth below the limit was searched in full, so the proof may need
     /// more depth (see `miss.zig`).
     gen_core_depth_done: usize = 0,
+    /// The search core (`core/`, behind `GenerateOptions.core`): goals it
+    /// expanded, and finished proofs the checker rejected at close-out.
+    core_nodes: usize = 0,
+    core_rejects: usize = 0,
     rule_index_build_ns: u64 = 0,
     ref_index_build_ns: u64 = 0,
     shape_emission_ns: u64 = 0,
@@ -1515,6 +1519,11 @@ pub const GenerateOptions = struct {
     /// leaving headroom for the frames between two check points (one full
     /// backtracker level plus expression walks). Overridable only for tests.
     stack_guard_bytes: usize = 4 * 1024 * 1024,
+    /// Try the search core (`core/`, `docs/design_notes/shared_witness.md`
+    /// revision 2) before the generation ladder, which still runs when the
+    /// core abstains or misses. A development switch while the core grows;
+    /// off by default.
+    core: bool = false,
 };
 
 pub const SourceSuggestionOptions = struct {

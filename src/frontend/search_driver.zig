@@ -143,6 +143,8 @@ pub const Options = struct {
     retries: usize = 0,
     /// `auto?` parameters for every marker that does not set them itself.
     params: []const ProofScript.SearchParam = &.{},
+    /// Try the search core first (`GenerateOptions.core`).
+    core: bool = false,
 };
 
 pub const Result = struct {
@@ -182,6 +184,7 @@ pub fn run(
     // A marker's own parameters are applied over these by the search.
     var marker_options = search_options;
     Search.tunables.applySearchParams(&marker_options.generate, options.params);
+    marker_options.generate.core = options.core;
 
     var markers = std.ArrayListUnmanaged(Marker).empty;
     // The found markers whose lines may have holes: where each proof went

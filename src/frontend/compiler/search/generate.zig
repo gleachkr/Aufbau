@@ -19,6 +19,7 @@ const acui = @import("./backward/acui.zig");
 const Witness = @import("./backward/witness.zig");
 const forward = @import("./forward.zig");
 const trigger = @import("./trigger.zig");
+const core = @import("./core/root.zig");
 const ref_index_mod = @import("./ref_index.zig");
 const session_mod = @import("./session.zig");
 const candidate_mod = @import("./candidate.zig");
@@ -509,7 +510,8 @@ pub fn generateTopLevel(
         for (try walk.of(goal_expr)) |v| try driver.root_vars.put(driver.scratch, v, {});
     }
     var applications = std.ArrayListUnmanaged(RuleApplication).empty;
-    try runPhaseLadder(&driver, goal_expr, &applications, schedule);
+    if (options.core and goal == .concrete) try runCore(&driver, theorem, goal_expr, &applications);
+    if (applications.items.len == 0) try runPhaseLadder(&driver, goal_expr, &applications, schedule);
 
     // Mirror the forward layer's meta-store activity into the bench counters.
     if (derived_pool) |*dpool| {
@@ -531,6 +533,45 @@ pub fn generateTopLevel(
     // Copy the arena last: the dupe can add a buffer to it.
     const owned = try driver.arena.dupe(RuleApplication, applications.items);
     return .{ .arena = arena, .applications = owned };
+}
+
+/// The search core's attempt at `goal_expr`, ahead of the ladder. A proof
+/// it finds is the call's result; when it abstains, misses, or runs out of
+/// budget or stack, the ladder runs as it would without it.
+fn runCore(
+    driver: *Driver,
+    theorem: *const TheoremContext,
+    goal_expr: ExprId,
+    applications: *std.ArrayListUnmanaged(RuleApplication),
+) !void {
+    const result = core.run(.{
+        .compiler = driver.compiler,
+        .context = driver.context,
+        .theorem = driver.work_theorem,
+        .theorem_vars = driver.theorem_vars,
+        .pool_theorem = theorem,
+        .pool = try driver.session.getReferencePool(theorem, driver.counters),
+        .goal = goal_expr,
+        .max_depth = driver.options.max_depth,
+        .stack_guard_bytes = driver.options.stack_guard_bytes,
+        .budget = driver.fuel.global,
+        .counters = driver.counters,
+        .out = driver.arena,
+        .scratch = driver.scratch,
+    }) catch |err| switch (err) {
+        error.SearchBudgetExhausted, error.SearchStackExhausted => return,
+        else => |e| return e,
+    };
+    switch (result) {
+        .abstained, .missed => {},
+        .found => |found| {
+            if (driver.counters) |c| {
+                c.gen_last_depth = found.depth;
+                c.gen_last_phase = search_core_phase;
+            }
+            try applications.append(driver.arena, found.application);
+        },
+    }
 }
 
 /// A fresh meta of the hole's sort for each hole of a holey line assertion.
@@ -638,8 +679,12 @@ const ladder_phases = [_]Phase{
     .{ .name = "constrained modus ponens", .split = true, .retain_principal = true, .constrained_mp = true },
 };
 
+/// `SearchCounters.gen_last_phase` when the search core found the proof.
+const search_core_phase = ladder_phases.len + 1;
+
 /// The name of ladder phase `phase_1based` (`SearchCounters.gen_last_phase`).
 pub fn phaseName(phase_1based: usize) []const u8 {
+    if (phase_1based == search_core_phase) return "the search core";
     if (phase_1based == 0 or phase_1based > ladder_phases.len) return "generation";
     return ladder_phases[phase_1based - 1].name;
 }
