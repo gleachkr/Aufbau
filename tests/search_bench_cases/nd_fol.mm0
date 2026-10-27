@@ -15,7 +15,7 @@ delimiter $ ( ) [ / ] $;
 provable sort wff;
 sort ctx;
 
---| @vars x y z u v w z1 z2 z3
+--| @vars x y z u v w z1 z2 z3 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12
 sort obj;
 
 -- ============================================================

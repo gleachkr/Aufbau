@@ -4,15 +4,16 @@
 //! It searches ground goals with the rules whose conclusion fixes every
 //! binder but the quantifier witnesses (`catalog.zig`), over commutative
 //! `@acui` bags matched member by member (`terms.zig`). A γ witness is a
-//! witness variable closed by unification, a δ one an eigenvariable
-//! (`wvars.zig`). It runs behind `GenerateOptions.core` and falls back to
-//! the generation ladder on a miss.
+//! witness variable closed by unification, a δ one an eigenvariable whose
+//! name waits until the proof needs one (`wvars.zig`). It runs behind
+//! `GenerateOptions.core` and falls back to the generation ladder on a
+//! miss.
 //!
 //! The run works in a clone of the call's theorem, discarded at the end.
 //! The proof record is rendered as one `RuleApplication` tree with every
-//! binding explicit, a witness variable left unbound named from its sort's
-//! `@vars` pool, and the checker validates it once (D5): the checker stays
-//! the only authority on what the core returns.
+//! binding explicit, a witness variable or eigenvariable left unbound
+//! named from its sort's `@vars` pool, and the checker validates it once
+//! (D5): the checker stays the only authority on what the core returns.
 
 const std = @import("std");
 const ArenaAllocator = @import("../../../arena_allocator.zig").ArenaAllocator;
@@ -31,6 +32,7 @@ const candidate_mod = @import("../candidate.zig");
 const catalog_mod = @import("./catalog.zig");
 const Terms = @import("./terms.zig").Terms;
 const WVars = @import("./wvars.zig").WVars;
+const Keys = @import("./keys.zig").Keys;
 const prover_mod = @import("./prover.zig");
 const Prover = prover_mod.Prover;
 const Node = prover_mod.Node;
@@ -85,6 +87,15 @@ pub fn run(request: Request) !Result {
     var catalog = try catalog_mod.build(request.scratch, request.context);
     defer catalog.deinit();
     const facts = try poolFacts(request, &terms, arena.allocator());
+    var keys = Keys{
+        .allocator = request.scratch,
+        .arena = arena.allocator(),
+        .terms = &terms,
+        .wvars = &wvars,
+        .fact_vars = &.{},
+    };
+    defer keys.deinit();
+    keys.fact_vars = try factVariables(&keys, facts, arena.allocator());
 
     var close_out = CloseOut{ .request = request, .theorem = &theorem, .wvars = &wvars };
     var prover = Prover{
@@ -93,6 +104,7 @@ pub fn run(request: Request) !Result {
         .context = request.context,
         .terms = &terms,
         .wvars = &wvars,
+        .keys = &keys,
         .theorem_vars = request.theorem_vars,
         .catalog = &catalog,
         .facts = facts,
@@ -131,6 +143,18 @@ fn poolFacts(request: Request, terms: *Terms, arena: std.mem.Allocator) ![]const
     return facts.items;
 }
 
+/// The variables `facts` mention, sorted.
+fn factVariables(keys: *Keys, facts: []const prover_mod.Fact, arena: std.mem.Allocator) ![]const ExprId {
+    var out = std.ArrayListUnmanaged(ExprId).empty;
+    for (facts) |fact| {
+        for (try keys.variables(fact.expr)) |variable| {
+            if (std.mem.indexOfScalar(ExprId, out.items, variable) == null) try out.append(arena, variable);
+        }
+    }
+    std.mem.sort(ExprId, out.items, {}, std.sort.asc(ExprId));
+    return out.items;
+}
+
 /// Renders a finished proof record and checks it against the goal.
 const CloseOut = struct {
     request: Request,
@@ -151,6 +175,9 @@ const CloseOut = struct {
         defer namer.deinit();
         try namer.collectTheoremVars(self.theorem, request.theorem_vars);
         defer self.names.clearAndFree(request.scratch);
+        const mark = self.wvars.mark();
+        defer self.wvars.rollback(mark);
+        if (!try self.nameEigens(root)) return false;
         const application = (try self.render(&namer, root)) orelse return false;
         if (request.counters) |c| c.full_try_candidate_calls += 1;
         if (request.budget) |budget| try budget.spendCandidate();
@@ -207,6 +234,51 @@ const CloseOut = struct {
             .refs = refs,
             .span = zero_span,
         };
+    }
+
+    /// Name every eigenvariable the proof leaves unbound, oldest first, with
+    /// the first variable of its sort's `@vars` pool that its introduction
+    /// goal, as named so far, does not mention. Two eigenvariables may
+    /// share a name when neither goal mentions the other. False when one
+    /// has no name.
+    fn nameEigens(self: *CloseOut, root: *const Node) prover_mod.Error!bool {
+        const scratch = self.request.scratch;
+        var leftovers = std.ArrayListUnmanaged(u32).empty;
+        defer leftovers.deinit(scratch);
+        try self.collectLeftovers(root, &leftovers);
+        const wvars = self.wvars;
+        var eigens = std.ArrayListUnmanaged(u32).empty;
+        defer eigens.deinit(scratch);
+        for (leftovers.items) |idx| {
+            if (wvars.isEigen(idx)) try eigens.append(scratch, idx);
+        }
+        // Indices grow with levels.
+        std.mem.sort(u32, eigens.items, {}, std.sort.asc(u32));
+        var shared = std.AutoHashMapUnmanaged(ExprId, void).empty;
+        defer shared.deinit(scratch);
+        for (eigens.items) |idx| {
+            const wvar = wvars.vars.items[idx];
+            const goal = try wvars.deref(wvar.introduced_at.?, &self.names);
+            const name = for (try self.prover.pool(wvar.sort_name)) |variable| {
+                if (wvars.eigens.contains(variable) and !shared.contains(variable)) continue;
+                if (std.mem.indexOfScalar(ExprId, wvar.capture, variable) != null) continue;
+                if (!wvars.mentions(goal, variable)) break variable;
+            } else return false;
+            try self.names.put(scratch, idx, name);
+            try shared.put(scratch, name, {});
+            try wvars.nameEigen(idx, name);
+        }
+        return true;
+    }
+
+    fn collectLeftovers(self: *CloseOut, node: *const Node, out: *std.ArrayListUnmanaged(u32)) prover_mod.Error!void {
+        switch (node.step) {
+            .ref => {},
+            .rule => |step| for (step.bindings) |value| {
+                try self.wvars.collectUnbound(self.request.scratch, value, out);
+            },
+        }
+        for (node.children) |child| try self.collectLeftovers(child.?, out);
     }
 
     /// Name each wvar `value` leaves unbound with the first variable of its

@@ -77,7 +77,7 @@ pub const Terms = struct {
     /// The commutative bag combiner that reads `term_id`: the combiner
     /// itself or its unit. A non-commutative combiner reads as an
     /// ordinary term; `supported` keeps such goals out.
-    fn bagFor(self: *const Terms, term_id: u32) ?AcuiBag.Combiner {
+    pub fn bagFor(self: *const Terms, term_id: u32) ?AcuiBag.Combiner {
         return self.bags.get(term_id);
     }
 

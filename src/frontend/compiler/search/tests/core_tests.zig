@@ -239,3 +239,25 @@ test "a witness never takes an eigenvariable introduced after it" {
     try std.testing.expect(counters.core_nodes > 0);
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
+
+test "an eigenvariable becomes the variable a hypothesis names" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `∀` introduction needs a variable the goal does not mention; `#1`
+    // states the instances for `z`, which a name picked when the
+    // eigenvariable is introduced (the pool's first free one, `y`) misses.
+    var suggestions = try ndFolSearch(
+        &arena,
+        "theorem gen {x z: obj}: $ ∅ ⊢ P z $ > $ ∅ ⊢ ∀ x (P x ∧ P x) $;\n",
+        "gen",
+        "∅ ⊢ ∀ x (P x ∧ P x)",
+        &counters,
+        6,
+    );
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"all_intro [and_intro [#1, #1]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}

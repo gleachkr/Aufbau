@@ -932,7 +932,7 @@ test "auto global budget stop is not reported as a phase fuel-out" {
 fn drinkerWithVars(arena: *std.heap.ArenaAllocator, vars: []const u8) !types.SourceSuggestions {
     const allocator = arena.allocator();
     const fixture = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/nd_fol.mm0", allocator, .unlimited);
-    const line = "--| @vars x y z u v w z1 z2 z3\n";
+    const line = "--| @vars x y z u v w z1 z2 z3 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12\n";
     const at = std.mem.indexOf(u8, fixture, line) orelse return error.MissingVarsLine;
     const mm0_src = try std.mem.concat(allocator, u8, &.{ fixture[0..at], vars, fixture[at + line.len ..] });
     const proof_src =

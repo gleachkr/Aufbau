@@ -1,18 +1,21 @@
 //! Witness variables and eigenvariables for the search core
-//! (`docs/design_notes/shared_witness.md` D1, D3).
+//! (`docs/design_notes/shared_witness.md` D1, D3, D5).
 //!
 //! A witness variable (wvar) is a `.meta` placeholder leaf minted in the
-//! run's theorem for a binder a rule's conclusion does not fix (γ). Its
-//! assignment lives here, never in the interner, and every binding goes on
-//! one log that the search undoes as it backtracks.
+//! run's theorem. Its assignment lives here, never in the interner, and
+//! every binding goes on one log that the search undoes as it backtracks.
+//! A γ wvar stands for a binder a rule's conclusion does not fix and is
+//! closed by unification.
 //!
-//! An eigenvariable (δ) is a `@vars` pool variable fresh for the goal it is
-//! introduced at. Its level is the number of eigenvariables introduced
-//! before it; a wvar's level is the number introduced before it was minted.
-//! A wvar may hold an eigenvariable only of a lower level (W6), which keeps
-//! every eigenvariable out of the instances that existed before it. A
-//! variable may be introduced again once the goal no longer mentions it;
-//! its new, higher level then counts.
+//! An eigenvariable (δ) is a wvar too, so its name is chosen only once the
+//! proof needs one: a pool fact may state the goal for one particular
+//! variable, and MM0 has no alpha-equivalence to rename it. It may become
+//! a variable its introduction goal does not mention, and nothing else;
+//! leftovers are named at close-out. Its level is the number of
+//! eigenvariables introduced before it; a γ wvar's level is the number
+//! introduced before it was minted. A γ wvar may hold an eigenvariable, or
+//! the variable one became, only of a lower level (W6), which keeps every
+//! eigenvariable out of the instances that existed before it.
 //!
 //! A wvar also carries the variables bound inside the formula it was swapped
 //! into: holding one of those would capture it.
@@ -27,10 +30,14 @@ const Context = @import("../types.zig").Context;
 pub const Error = error{ OutOfMemory, TooManyTheoremExprs };
 
 pub const WVar = struct {
+    /// Its placeholder leaf.
+    expr: ExprId,
     sort_name: []const u8,
     level: u32,
     /// Variables it may not hold.
     capture: []const ExprId,
+    /// For an eigenvariable, the goal it was introduced at.
+    introduced_at: ?ExprId = null,
     value: ?ExprId = null,
 };
 
@@ -38,9 +45,8 @@ const Entry = union(enum) {
     bound: u32,
     /// A wvar inside a binding took the bound wvar's constraints.
     narrowed: struct { wvar: u32, level: u32, capture: []const ExprId },
-    /// `variable` was introduced as an eigenvariable; `prev` is the level of
-    /// its previous introduction.
-    introduced: struct { variable: ExprId, prev: ?u32 },
+    /// `variable` became an eigenvariable; `prev` is the level it had.
+    named: struct { variable: ExprId, prev: ?u32 },
 };
 
 pub const WVars = struct {
@@ -52,10 +58,8 @@ pub const WVars = struct {
     vars: std.ArrayListUnmanaged(WVar) = .empty,
     by_placeholder: std.AutoHashMapUnmanaged(PlaceholderId, u32) = .empty,
     log: std.ArrayListUnmanaged(Entry) = .empty,
-    /// Bindings and introductions ever made, undone ones included.
-    steps: usize = 0,
     eigen_count: u32 = 0,
-    /// Each live eigenvariable's level.
+    /// The level of each variable an eigenvariable became.
     eigens: std.AutoHashMapUnmanaged(ExprId, u32) = .empty,
     /// Whether an expression has a wvar leaf.
     holds: std.AutoHashMapUnmanaged(ExprId, bool) = .empty,
@@ -87,7 +91,7 @@ pub const WVars = struct {
                     self.vars.items[old.wvar].level = old.level;
                     self.vars.items[old.wvar].capture = old.capture;
                 },
-                .introduced => |old| if (old.prev) |level| {
+                .named => |old| if (old.prev) |level| {
                     self.eigens.getPtr(old.variable).?.* = level;
                 } else {
                     _ = self.eigens.remove(old.variable);
@@ -102,24 +106,123 @@ pub const WVars = struct {
         for (self.log.items[since..]) |entry| switch (entry) {
             .bound => |idx| if (idx < older_than) return true,
             .narrowed => |old| if (old.wvar < older_than) return true,
-            .introduced => {},
+            .named => {},
         };
         return false;
     }
 
+    /// Append to `out` what the steps logged since `since` did to the wvars
+    /// with index below `older_than`: each binding (with the younger wvars
+    /// it holds numbered by first occurrence), narrowing, and naming of an
+    /// eigenvariable, with levels above `level_cap` read as `level_cap`.
+    /// Two runs that leave the same signature leave those wvars, and every
+    /// later goal that can see only them, in the same state.
+    pub fn signature(
+        self: *WVars,
+        allocator: std.mem.Allocator,
+        since: usize,
+        older_than: u32,
+        level_cap: u32,
+        out: *std.ArrayListUnmanaged(u8),
+    ) Error!void {
+        var young = std.ArrayListUnmanaged(u32).empty;
+        defer young.deinit(allocator);
+        for (self.log.items[since..]) |entry| switch (entry) {
+            .bound => |idx| if (idx < older_than) {
+                try putWord(allocator, out, 'b');
+                try putWord(allocator, out, idx);
+                try self.serialize(allocator, self.vars.items[idx].value.?, older_than, level_cap, &young, out);
+            },
+            .narrowed => |old| if (old.wvar < older_than) {
+                const wvar = self.vars.items[old.wvar];
+                try putWord(allocator, out, 'n');
+                try putWord(allocator, out, old.wvar);
+                try putWord(allocator, out, @min(wvar.level, level_cap));
+                for (wvar.capture) |variable| try putWord(allocator, out, variable);
+                try putWord(allocator, out, std.math.maxInt(u32));
+            },
+            .named => |named| {
+                try putWord(allocator, out, 'v');
+                try putWord(allocator, out, named.variable);
+                try putWord(allocator, out, @min(self.eigens.get(named.variable).?, level_cap));
+            },
+        };
+    }
+
+    fn serialize(
+        self: *WVars,
+        allocator: std.mem.Allocator,
+        expr: ExprId,
+        older_than: u32,
+        level_cap: u32,
+        young: *std.ArrayListUnmanaged(u32),
+        out: *std.ArrayListUnmanaged(u8),
+    ) Error!void {
+        const at = self.resolve(expr);
+        if (!try self.holdsWVar(at)) {
+            try putWord(allocator, out, 'g');
+            return putWord(allocator, out, at);
+        }
+        switch (self.theorem.interner.node(at).*) {
+            .variable => unreachable,
+            .placeholder => {
+                const idx = self.of(at).?;
+                if (idx < older_than) {
+                    try putWord(allocator, out, 'o');
+                    return putWord(allocator, out, idx);
+                }
+                const pos = std.mem.indexOfScalar(u32, young.items, idx) orelse blk: {
+                    try young.append(allocator, idx);
+                    break :blk young.items.len - 1;
+                };
+                const wvar = self.vars.items[idx];
+                try putWord(allocator, out, if (wvar.introduced_at != null) 'e' else 'y');
+                try putWord(allocator, out, @intCast(pos));
+                try putWord(allocator, out, @min(wvar.level, level_cap));
+                for (wvar.capture) |variable| try putWord(allocator, out, variable);
+                try putWord(allocator, out, std.math.maxInt(u32));
+            },
+            .app => |app| {
+                try putWord(allocator, out, 'a');
+                try putWord(allocator, out, app.term_id);
+                for (app.args) |arg| try self.serialize(allocator, arg, older_than, level_cap, young, out);
+            },
+        }
+    }
+
+    /// A new γ wvar.
     pub fn mint(self: *WVars, sort_name: []const u8, capture: []const ExprId) Error!ExprId {
-        const expr = self.theorem.addMetaPlaceholderResolved(sort_name) catch |err| switch (err) {
+        return self.add(.{ .expr = undefined, .sort_name = sort_name, .level = self.eigen_count, .capture = capture });
+    }
+
+    /// A new eigenvariable introduced at `goal`.
+    pub fn introduce(self: *WVars, sort_name: []const u8, goal: ExprId) Error!ExprId {
+        const expr = try self.add(.{
+            .expr = undefined,
+            .sort_name = sort_name,
+            .level = self.eigen_count,
+            .capture = &.{},
+            .introduced_at = goal,
+        });
+        self.eigen_count += 1;
+        return expr;
+    }
+
+    fn add(self: *WVars, wvar: WVar) Error!ExprId {
+        const expr = self.theorem.addMetaPlaceholderResolved(wvar.sort_name) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.TooManyTheoremExprs,
         };
         const pid = self.theorem.interner.node(expr).placeholder;
         try self.by_placeholder.put(self.allocator, pid, self.count());
-        try self.vars.append(self.allocator, .{
-            .sort_name = sort_name,
-            .level = self.eigen_count,
-            .capture = capture,
-        });
+        var entry = wvar;
+        entry.expr = expr;
+        try self.vars.append(self.allocator, entry);
         return expr;
+    }
+
+    pub fn isEigen(self: *const WVars, idx: u32) bool {
+        return self.vars.items[idx].introduced_at != null;
     }
 
     /// The wvar `expr` is, if it is one.
@@ -211,10 +314,14 @@ pub const WVars = struct {
         };
     }
 
-    /// Whether wvar `idx` may hold the variable `variable`.
-    pub fn admits(self: *const WVars, idx: u32, variable: ExprId) bool {
+    /// Whether wvar `idx` may hold, or as an eigenvariable become, the
+    /// variable `variable`.
+    pub fn admits(self: *WVars, idx: u32, variable: ExprId) bool {
         const wvar = self.vars.items[idx];
         if (std.mem.indexOfScalar(ExprId, wvar.capture, variable) != null) return false;
+        if (wvar.introduced_at) |goal| {
+            return !self.eigens.contains(variable) and !self.mentions(goal, variable);
+        }
         const level = self.eigens.get(variable) orelse return true;
         return level < wvar.level;
     }
@@ -222,11 +329,14 @@ pub const WVars = struct {
     /// Bind unbound wvar `idx` to `value`, unless that breaks its sort,
     /// occurs, capture or level constraint. Wvars inside `value` take on
     /// `idx`'s constraints, so binding them later cannot break them either.
-    /// Returns false, logging nothing, when the binding is refused.
+    /// An eigenvariable binds only to a variable it admits; facing a γ wvar
+    /// it binds that one instead. Returns false, logging nothing, when the
+    /// binding is refused.
     pub fn bind(self: *WVars, idx: u32, value: ExprId) Error!bool {
         std.debug.assert(self.vars.items[idx].value == null);
         const wvar = self.vars.items[idx];
         if (!std.mem.eql(u8, self.sortOf(value) orelse return false, wvar.sort_name)) return false;
+        if (wvar.introduced_at != null) return self.bindEigen(idx, self.resolve(value));
         const start = self.mark();
         errdefer self.rollback(start);
         if (!try self.constrain(idx, value)) {
@@ -235,7 +345,26 @@ pub const WVars = struct {
         }
         try self.log.append(self.allocator, .{ .bound = idx });
         self.vars.items[idx].value = value;
-        self.steps += 1;
+        return true;
+    }
+
+    fn bindEigen(self: *WVars, idx: u32, value: ExprId) Error!bool {
+        switch (self.theorem.interner.node(value).*) {
+            .variable => {},
+            .placeholder => {
+                const other = self.of(value) orelse return false;
+                if (self.vars.items[other].introduced_at != null) return false;
+                return self.bind(other, self.vars.items[idx].expr);
+            },
+            .app => return false,
+        }
+        if (!self.admits(idx, value)) return false;
+        try self.eigens.ensureUnusedCapacity(self.allocator, 1);
+        try self.log.ensureUnusedCapacity(self.allocator, 2);
+        self.log.appendAssumeCapacity(.{ .named = .{ .variable = value, .prev = null } });
+        self.eigens.putAssumeCapacity(value, self.vars.items[idx].level);
+        self.log.appendAssumeCapacity(.{ .bound = idx });
+        self.vars.items[idx].value = value;
         return true;
     }
 
@@ -248,6 +377,19 @@ pub const WVars = struct {
                 if (other == idx) return false;
                 const wvar = self.vars.items[idx];
                 const target = &self.vars.items[other];
+                if (target.introduced_at != null) {
+                    // An eigenvariable inside: it must be older, and its
+                    // name must stay clear of what `idx` would capture.
+                    if (target.level >= wvar.level) return false;
+                    if (wvar.capture.len == 0) return true;
+                    try self.log.append(self.allocator, .{ .narrowed = .{
+                        .wvar = other,
+                        .level = target.level,
+                        .capture = target.capture,
+                    } });
+                    target.capture = try std.mem.concat(self.arena, ExprId, &.{ target.capture, wvar.capture });
+                    return true;
+                }
                 if (target.level <= wvar.level and wvar.capture.len == 0) return true;
                 try self.log.append(self.allocator, .{ .narrowed = .{
                     .wvar = other,
@@ -281,20 +423,17 @@ pub const WVars = struct {
         };
     }
 
-    /// Record `variable` as an eigenvariable introduced now.
-    pub fn introduce(self: *WVars, variable: ExprId) Error!void {
-        try self.eigens.ensureUnusedCapacity(self.allocator, 1);
-        try self.log.append(self.allocator, .{ .introduced = .{
-            .variable = variable,
-            .prev = self.eigens.get(variable),
-        } });
-        self.eigens.putAssumeCapacity(variable, self.eigen_count);
-        self.eigen_count += 1;
-        self.steps += 1;
-    }
-
-    /// Whether `variable` has a live introduction as an eigenvariable.
-    pub fn introduced(self: *const WVars, variable: ExprId) bool {
-        return self.eigens.contains(variable);
+    /// At close-out: record that the unbound eigenvariable `idx` is named
+    /// `variable`, so a γ wvar named later admits it only above its level.
+    /// Two eigenvariables may share a name; the higher level counts.
+    pub fn nameEigen(self: *WVars, idx: u32, variable: ExprId) Error!void {
+        const level = self.vars.items[idx].level;
+        const prev = self.eigens.get(variable);
+        try self.log.append(self.allocator, .{ .named = .{ .variable = variable, .prev = prev } });
+        try self.eigens.put(self.allocator, variable, @max(level, prev orelse 0));
     }
 };
+
+fn putWord(allocator: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), word: u32) Error!void {
+    try out.appendSlice(allocator, std.mem.asBytes(&word));
+}
