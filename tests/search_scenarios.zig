@@ -785,13 +785,14 @@ pub const scenarios = [_]Scenario{
         // `eq_intro_nd` proves `emp ⊢ 0 = 0`, and the match-back reads the
         // witness t := 0 off the child conclusion. The printed witness uses
         // notation (`0` for the term `d0`) via the notation-aware
-        // pretty-printer (a059e67).
+        // pretty-printer (a059e67). The ladder's open path, so the search
+        // core is off.
         .name = "euclid ex_intro open witness auto? (Stage 4 open backward)",
         .mm0_path = "tests/search_bench_cases/euclid.mm0",
         .proof_path = "tests/search_bench_cases/euclid_ex_intro_open_auto.auf",
         .marker = "auto?",
         .expected_replacement = "ex_intro (t := $ 0 $) [eq_intro_nd []]",
-        .generate = .{ .enabled = true, .max_depth = 6 },
+        .generate = .{ .enabled = true, .max_depth = 6, .core = false },
     },
     .{
         // PHASE 5 (constrained backward MP) reclassification. Before 256e05d a

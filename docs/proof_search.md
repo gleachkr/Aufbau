@@ -94,6 +94,15 @@ bounded (see *Budgets and determinism* below), so on a goal it cannot
 prove it will give up rather than run forever — but a hard goal can still
 take a couple of seconds before it does.
 
+**Two searches, one budget.** `auto?` first hands the goal to the *search
+core*, which leaves a quantifier witness it has not chosen as an unknown
+shared by the whole proof and fills it in when a later step needs a
+particular term, as tableau provers do. A goal the core does not take (one
+with holes, definitions, or a non-commutative `@acui` combiner) or cannot
+prove within the depth limit goes on to the generation search, in what is
+left of the same work budget. Either way the checker validates a proof
+before it is offered.
+
 A suggestion from `exact?` or `auto?` names a rule argument only when the
 checker cannot infer it from the goal and the cited references, as with
 the witness in `ex_intro (t := $ 0 $) [eq_intro_nd []]`. Each omitted
@@ -349,6 +358,8 @@ The parameters (`depth`, `nodes`, `fuel` and `budget` for `auto?`;
 `iters` and `nodes` for `conversion?`), their defaults and their ranges are
 listed in the manual's
 [search parameters appendix](../manual/src/appendix-search-parameters.md).
+`depth` and `budget` bound both of `auto?`'s searches; `nodes` and `fuel`
+bound only the generation search.
 
 The parameters scope to **that one placeholder** — the engine defaults
 never move. This is deliberate: the defaults are tuned so that the

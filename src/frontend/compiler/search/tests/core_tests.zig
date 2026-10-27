@@ -1,4 +1,4 @@
-//! The search core (`core/`, behind `GenerateOptions.core`): it proves
+//! The search core (`core/`, `GenerateOptions.core`, on by default): it proves
 //! sequents over an ACUI context, closing quantifier witnesses by
 //! unification under the eigenvariable condition; every proof it returns
 //! has passed the checker, and on a miss the generation ladder still runs.
@@ -148,7 +148,21 @@ test "a goal the search core cannot prove still runs the ladder" {
     try std.testing.expect(!std.mem.eql(u8, "the search core", generate.phaseName(counters.gen_last_phase)));
 }
 
-test "the search core is off by default" {
+test "the search core is on by default" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try suggestionsAtNeedle(&arena, nd_rules ++ contrapose, contrapose_proof, "auto?", .{
+        .counters = &counters,
+        .generate = .{ .enabled = true },
+    });
+    defer suggestions.deinit();
+
+    try std.testing.expect(suggestions.items.len > 0);
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+}
+
+test "with the search core off, the ladder alone finds the proof" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
@@ -260,4 +274,26 @@ test "an eigenvariable becomes the variable a hypothesis names" {
     try expectOffered(suggestions.items, &.{"all_intro [and_intro [#1, #1]]"});
     try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "a witness in a context member is closed by a hypothesis's context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // After `ex_intro` and `imp_intro` the context holds `P t` with `t`
+    // open; `#1` closes the goal once the two contexts unify member by
+    // member, binding `t` to `C`.
+    var suggestions = try ndFolSearch(
+        &arena,
+        "theorem wit {x: obj}: $ Q C , P C ⊢ R C C $ > $ Q C ⊢ ∃ x (P x → R C C) $;\n",
+        "wit",
+        "Q C ⊢ ∃ x (P x → R C C)",
+        &counters,
+        6,
+    );
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"ex_intro [imp_intro [#1]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 1), counters.gen_last_depth);
 }

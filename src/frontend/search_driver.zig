@@ -144,7 +144,7 @@ pub const Options = struct {
     /// `auto?` parameters for every marker that does not set them itself.
     params: []const ProofScript.SearchParam = &.{},
     /// Try the search core first (`GenerateOptions.core`).
-    core: bool = false,
+    core: bool = true,
 };
 
 pub const Result = struct {

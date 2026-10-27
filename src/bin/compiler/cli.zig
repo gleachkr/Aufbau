@@ -85,10 +85,10 @@ const SearchCommand = struct {
     retries: usize = 0,
     depth: ?u64 = null,
     budget: ?u64 = null,
-    /// `--core`: try the search core first. A development switch while the
-    /// core grows (`docs/design_notes/shared_witness.md`), so the usage text
-    /// does not list it.
-    core: bool = false,
+    /// `--no-core`: leave the search core out, so only the generation
+    /// ladder runs (`GenerateOptions.core`). A development switch for
+    /// measuring the ladder alone, so the usage text does not list it.
+    core: bool = true,
 };
 
 const JoinCommand = struct {
@@ -188,8 +188,8 @@ fn parseSearchFlag(
         search.depth = try flagNumber(argv, i);
     } else if (std.mem.eql(u8, arg, "--budget")) {
         search.budget = try flagNumber(argv, i);
-    } else if (std.mem.eql(u8, arg, "--core")) {
-        search.core = true;
+    } else if (std.mem.eql(u8, arg, "--no-core")) {
+        search.core = false;
     } else return false;
     return true;
 }

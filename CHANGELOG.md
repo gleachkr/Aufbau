@@ -7,6 +7,17 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Added
 
+- `auto?` tries each goal first with a new search core, which leaves a
+  quantifier witness it has not chosen as an unknown shared by the whole
+  proof and fills it in by unification when a later step needs a
+  particular term. A goal the core does not take (holes, definitions,
+  non-commutative `@acui` combiners) or cannot prove goes on to the
+  existing generation search in what is left of the same budget, and the
+  checker validates every proof either way. On the bench corpus no row
+  changes status; the `nd_fol` rows cost 97% fewer ticks and the
+  `additive_fol` rows 29% fewer, and the Pelletier battery goes from 39 to
+  43 of 48 problems found. The per-call `nodes` and `fuel` parameters
+  bound only the generation search.
 - `@auto focus $ PRINCIPAL $ : CONTINUATION...`: focused proof search. The
   annotation names the formula a rule decomposes and, per hypothesis, the
   formula that stays in focus there (`_` releases it). Applying a focus rule

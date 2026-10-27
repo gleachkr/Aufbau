@@ -86,9 +86,10 @@ const BenchOptions = struct {
     /// Content-keyed query-shape cache (Lever M-content); `--no-shape-cache`
     /// turns it off to measure its effect.
     shape_cache: bool = true,
-    /// `--core` tries the search core before the generation ladder
-    /// (`GenerateOptions.core`).
-    core: bool = false,
+    /// The search core runs before the generation ladder
+    /// (`GenerateOptions.core`); `--no-core` leaves it out to measure the
+    /// ladder alone.
+    core: bool = true,
     /// Discrimination/scaling sweep. When set, the
     /// scenario/frontier benches are skipped and the sweep runs instead.
     sweep: ?SweepSpec = null,
@@ -417,8 +418,8 @@ fn parseOptions(
             options.persist_negative = false;
             continue;
         }
-        if (std.mem.eql(u8, arg, "--core")) {
-            options.core = true;
+        if (std.mem.eql(u8, arg, "--no-core")) {
+            options.core = false;
             continue;
         }
         if (std.mem.eql(u8, arg, "--counters")) {
@@ -456,7 +457,7 @@ fn printUsage() !void {
             "       [--require-no-miss] [--retry-misses] [--max-k=N]\n" ++
             "       [--no-search-memo] [--no-deep-member-prune]\n" ++
             "       [--no-persist-negative]\n" ++
-            "       [--no-shape-cache] [--core]\n" ++
+            "       [--no-shape-cache] [--no-core]\n" ++
             "       [--gen-nodes=N] [--gen-fuel=N] [--phase5-fuel=N]\n" ++
             "       [--global-budget=TICKS] [--alloc-trap=MIB]\n" ++
             "       [--fwd-facts=N] [--fwd-layers=N] [--fwd-attempts=N]\n" ++
@@ -2034,6 +2035,11 @@ fn runDepthFixture(
                 try printDurationCompact(writer, run.counters.trim_ns);
                 if (run.counters.untrimmed != 0) try writer.writeAll(" UNTRIMMED");
                 try printTicksCompact(writer, RunTicks.of(&run.counters));
+                // Goals the search core expanded (none when it abstained),
+                // and the phase that found it (the core's is past the
+                // ladder's).
+                if (run.counters.core_nodes != 0) try writer.print(" core={d}", .{run.counters.core_nodes});
+                if (run.found) try writer.print(" p{d}", .{run.counters.gen_last_phase});
                 if (run.err == null and !run.found) {
                     try writer.writeAll(" ");
                     try printMissCause(

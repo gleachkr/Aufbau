@@ -45,6 +45,10 @@ repeated, the last occurrence wins.
 | `fuel` | 4096 | 1–100 000 000 | Candidate-validation budget per search phase, refilled for each retry of the whole ladder. |
 | `budget` | ≈6 | 0–100 000 | Whole-call cap on cost-weighted work, in units of roughly one second of search effort (the default is 6.3 units). `budget: 0` is legal and disables the cap entirely. |
 
+`auto?` first tries the goal with the search core, then, when the core finds
+no proof, with the generation search. `depth` and `budget` bound both;
+`nodes` and `fuel` bound only the generation search.
+
 When `auto?` fails, the failure report indicates which limits it hit and 
 suggests a retry that raises them together with the budget, e.g.
 `auto? (nodes: 512, fuel: 8192, budget: 14)`. Retries are available in editors as a

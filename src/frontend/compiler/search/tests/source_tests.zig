@@ -1355,6 +1355,7 @@ test "source search declines a target that depends on a dropped declaration" {
 // back untrimmed. The cases are built on the goal-switching `not_left`
 // (`g , ¬ a ⊢ a > g , ¬ a ⊢ ⊥`, whose conclusion fixes no `a`), which nd_fol
 // has since replaced with signed negation rules; the fixture gets it back.
+// The cases trim the ladder's inline sub-proofs, so the search core is off.
 // ---------------------------------------------------------------------------
 
 fn expectNdFolTrim(proof_src: []const u8, expected: []const u8) !void {
@@ -1374,7 +1375,7 @@ fn expectNdFolTrim(proof_src: []const u8, expected: []const u8) !void {
     var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
         .max_results = 3,
         .exact_result_limit = 1,
-        .generate = .{ .enabled = true },
+        .generate = .{ .enabled = true, .core = false },
     });
     defer suggestions.deinit();
     try expectOffered(suggestions.items, &.{expected});

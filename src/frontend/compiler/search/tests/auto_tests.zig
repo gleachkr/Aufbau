@@ -58,7 +58,8 @@ test "auto generates a depth-1 inline chain" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"pq [p []]"});
-    try std.testing.expect(counters.generated_chain_attempts > 0);
+    // Generation found it, not the direct exact pass.
+    try std.testing.expect(counters.gen_last_phase != 0);
 }
 
 /// Whether `T` holds no pointer anywhere in its layout (through optionals,
@@ -360,7 +361,7 @@ test "auto generates a depth-1 chain inside a slot" {
     try std.testing.expect(suggestions.target_span.?.start <= auto_offset);
     try std.testing.expect(suggestions.target_span.?.end >= auto_offset);
     // Generation actually fired (this is not a plain direct match).
-    try std.testing.expect(counters.generated_chain_attempts > 0);
+    try std.testing.expect(counters.gen_last_phase != 0);
 }
 
 test "inline auto still resolves a slot from a direct ref without generating" {
@@ -419,9 +420,11 @@ test "inline auto generates a longer chain in a slot" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
+    // The ladder's slot recursion: the search core would close the slot
+    // with the earlier theorem `t` at once.
     var suggestions = try autoInlineSuggestions(&arena, proof_src, "auto?", .{
         .counters = &counters,
-        .generate = .{ .enabled = true },
+        .generate = .{ .enabled = true, .core = false },
     });
     defer suggestions.deinit();
 
@@ -443,9 +446,10 @@ test "inline auto grounds an existential meta inside a slot" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
+    // The ladder's open slot (`r2`'s `a`); the search core leaves `r2` out.
     var suggestions = try autoInlineSuggestions(&arena, proof_src, "auto?", .{
         .counters = &counters,
-        .generate = .{ .enabled = true },
+        .generate = .{ .enabled = true, .core = false },
     });
     defer suggestions.deinit();
 
@@ -881,12 +885,13 @@ test "auto global fuel floor stops the search and reports exhaustion" {
     var counters = types.SearchCounters{};
     // The two-level chain `qr [pq [p]]` needs several validations; a fuel of 1
     // is spent on the first `tryCandidate`, so the next one trips the floor.
+    // Fuel bounds the ladder; the search core, which validates once, is off.
     var suggestions = try suggestionsAtNeedle(
         &arena,
         auto_depth2_mm0,
         proof_src,
         "auto?",
-        .{ .counters = &counters, .generate = .{ .enabled = true, .fuel = 1 } },
+        .{ .counters = &counters, .generate = .{ .enabled = true, .fuel = 1, .core = false } },
     );
     defer suggestions.deinit();
     // Budget exhaustion is reported distinctly, and surfaces no suggestion.

@@ -17,10 +17,10 @@
 //! goal member; each choice is an alternative. The bag's rest binder takes
 //! what is left over, which is the minimal complement: a set law would
 //! also allow the rest to keep a member the template already claims, which
-//! the core does not try yet. Two bags unify only when they are equal once
-//! resolved, and an unbound wvar facing template structure does not match:
-//! the witnesses of these stages stand for terms the theory's rules never
-//! take apart.
+//! the core does not try yet. Two bags holding wvars unify member by
+//! member (`pairBags`). An unbound wvar facing template structure does not
+//! match: the witnesses of these stages stand for terms the theory's rules
+//! never take apart.
 
 const std = @import("std");
 const ExprId = @import("../../../expr.zig").ExprId;
@@ -285,6 +285,7 @@ const Pending = struct {
         args: struct { template: []const TemplateExpr, goal: []const ExprId, at: usize },
         unify: struct { a: []const ExprId, b: []const ExprId, at: usize },
         bag: *const BagState,
+        pairing: *const BagPairing,
     },
     next: ?*const Pending,
 };
@@ -298,6 +299,18 @@ const BagState = struct {
     used: u64 = 0,
     index: usize = 0,
     rest: ?usize = null,
+};
+
+/// Two bags being unified member by member: each of `a`'s members against
+/// one of `b`'s, distinct ones unless the law is idempotent, and then,
+/// under an idempotent law, each of `b`'s members none was paired with
+/// against one of `a`'s. `index` counts over `a`, then over `b`.
+const BagPairing = struct {
+    idempotent: bool,
+    a: []const ExprId,
+    b: []const ExprId,
+    paired: u64 = 0,
+    index: usize = 0,
 };
 
 fn Matcher(comptime Sink: type) type {
@@ -337,6 +350,7 @@ fn Matcher(comptime Sink: type) type {
                     try self.unify(args.a[args.at], args.b[args.at], &after);
                 },
                 .bag => |state| try self.bag(state.*, node.next),
+                .pairing => |state| try self.pairBags(state.*, node.next),
             }
         }
 
@@ -395,15 +409,71 @@ fn Matcher(comptime Sink: type) type {
                 else => return,
             };
             if (lhs_app.term_id != rhs_app.term_id or lhs_app.args.len != rhs_app.args.len) return;
-            if (self.terms.bagFor(lhs_app.term_id) != null) {
-                if (try self.terms.same(lhs, rhs)) try self.run(next);
-                return;
+            if (self.terms.bagFor(lhs_app.term_id)) |combiner| {
+                if (try self.terms.same(lhs, rhs)) return self.run(next);
+                const pairing = (try @call(.never_inline, preparePairing, .{ self, combiner, lhs, rhs })) orelse return;
+                defer self.terms.allocator.free(pairing.a);
+                defer self.terms.allocator.free(pairing.b);
+                return self.pairBags(pairing, next);
             }
             const cell = Pending{
                 .step = .{ .unify = .{ .a = lhs_app.args, .b = rhs_app.args, .at = 0 } },
                 .next = next,
             };
             try self.run(&cell);
+        }
+
+        /// The members of bags `lhs` and `rhs`, copied out of the
+        /// fixed-capacity bags as `prepareBag` does; null when no pairing
+        /// can make them equal.
+        fn preparePairing(self: *Self, combiner: AcuiBag.Combiner, lhs: ExprId, rhs: ExprId) Error!?BagPairing {
+            const a = combiner.flatten(self.terms.theorem, lhs) orelse return error.Unsupported;
+            const b = combiner.flatten(self.terms.theorem, rhs) orelse return error.Unsupported;
+            const idempotent = combiner.law.isIdempotent();
+            if (!idempotent and a.len != b.len) return null;
+            const allocator = self.terms.allocator;
+            const a_members = try allocator.dupe(ExprId, a.slice());
+            errdefer allocator.free(a_members);
+            return .{ .idempotent = idempotent, .a = a_members, .b = try allocator.dupe(ExprId, b.slice()) };
+        }
+
+        fn pairBags(self: *Self, state: BagPairing, next: ?*const Pending) MatchError!void {
+            var after = state;
+            after.index += 1;
+            const cell = Pending{ .step = .{ .pairing = &after }, .next = next };
+            if (state.index < state.a.len) {
+                const member = state.a[state.index];
+                // A member without wvars that the other bag holds pairs with
+                // that copy alone: any other partner only adds bindings.
+                if (!try self.terms.wvars.holdsWVar(member)) {
+                    for (state.b, 0..) |other, at| {
+                        const bit = @as(u64, 1) << @intCast(at);
+                        if (other != member or (!state.idempotent and state.paired & bit != 0)) continue;
+                        after.paired |= bit;
+                        return self.pairBags(after, next);
+                    }
+                }
+                for (state.b, 0..) |other, at| {
+                    const bit = @as(u64, 1) << @intCast(at);
+                    if (!state.idempotent and state.paired & bit != 0) continue;
+                    after.paired = state.paired | bit;
+                    try self.unify(member, other, &cell);
+                    if (self.stop) return;
+                }
+                return;
+            }
+            const at = state.index - state.a.len;
+            if (at == state.b.len) return self.run(next);
+            const member = state.b[at];
+            if (state.paired & (@as(u64, 1) << @intCast(at)) != 0 or
+                (!try self.terms.wvars.holdsWVar(member) and std.mem.indexOfScalar(ExprId, state.a, member) != null))
+            {
+                return self.pairBags(after, next);
+            }
+            for (state.a) |other| {
+                try self.unify(other, member, &cell);
+                if (self.stop) return;
+            }
         }
 
         /// When `wvar` is an unbound witness variable, run `next` with it

@@ -241,6 +241,13 @@ for *committing*. See the `@acui can be a subset` note.
 
 ## Generation: the six-phase retry in `auto?`
 
+Before any of this, `generateTopLevel` hands a concrete goal to the search
+core (`core/`, `runCore`), in the same tick budget. A proof the core finds is
+the call's result (`gen_last_phase` = `ladder_phases.len + 1`, "the search
+core"); when it abstains, misses, or runs out of budget or stack, the ladder
+below runs as it would without it. `GenerateOptions.core = false` (`abc
+search --no-core`, bench `--no-core`) leaves the core out.
+
 `generateTopLevel` runs **five** retry phases over single-depth passes
 (`runDepthPass`) inside `runPhaseLadder`, and a sixth outer retry against a
 seeded derived pool. The phases' capabilities and gates are a table
@@ -1562,7 +1569,7 @@ width is real.
 | `backward/validate.zig` | candidate validation, binding rendering, ranking, derived-direct |
 | `generate.zig` | `auto?` driver: hybrid depth-major/phase-major retry ladder, forward saturation wiring |
 | `meta_store.zig` | `Sigma`, the search's substitution (every meta's constraints and assignment, keyed by `meta_id` or a view-local alias, with one trail; one per `auto?` call), and `MetaStore`, a branch-local view over it (pid → key map, rollback marks); the leaf kinds live in `../inference/open_terms.zig` |
-| `core/root.zig` | the search core (`docs/design_notes/shared_witness.md` revision 2), behind `GenerateOptions.core` and tried before the ladder, in a discarded clone of the work theorem: entry, abstention, close-out (name leftover eigenvariables, then witnesses, from `@vars`, render every binding explicitly, one `probe`) |
+| `core/root.zig` | the search core (`docs/design_notes/shared_witness.md` revision 2), tried before the ladder (`GenerateOptions.core`, on by default), in a discarded clone of the work theorem: entry, abstention, close-out (name leftover eigenvariables, then witnesses, from `@vars`, render every binding explicitly, one `probe`) |
 | `core/catalog.zig` | the rules the core applies, by role (closer, safe = `@auto eager`, unsafe), indexed by conclusion head; quantifier rules' witnesses (γ, δ) read off their `@view`/`@recover` |
 | `core/terms.zig` | canonical ACUI bags, conclusion matching and unification through witness variables (bag members as choice points), premise building, the view's leaf swap |
 | `core/wvars.zig` | witness variables (σ, one undo log) and eigenvariables, named only when a binding or the close-out needs one: level, capture and occurs checks at binding; the W5 signature of a goal's effect on older witnesses |

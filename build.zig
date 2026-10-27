@@ -813,25 +813,20 @@ pub fn build(b: *std.Build) void {
         "\"line\":3,\"theorem\":\"found\",\"label\":\"l1\",\"kind\":\"auto?\"," ++
         "\"status\":\"found\",\"suggestions\":[\"use [p []]\"],\"holes\":[]," ++
         "\"retry\":null,\"blocked_by\":null,\"failure\":null,\"detail\":null," });
-    abc_search_json.addCheck(.{ .expect_stdout_match = "\"depth\":1,\"phase\":1," ++
-        "\"phase_name\":\"non-splitting generation\",\"rules\":[" ++
-        "{\"name\":\"p\",\"attempts\":1,\"accepted\":1,\"rejected\":0}," ++
-        "{\"name\":\"use\",\"attempts\":1,\"accepted\":1,\"rejected\":0}]," ++
-        "\"rounds\":[]}\n" ++
+    abc_search_json.addCheck(.{ .expect_stdout_match = "\"depth\":1,\"phase\":6," ++
+        "\"phase_name\":\"the search core\",\"rules\":[],\"rounds\":[]}\n" ++
         "{\"file\":\"search.auf\",\"line\":7," });
     cli_smoke_step.dependOn(&abc_search_json.step);
 
-    // `-vv`: each search's cost, why it missed, and the rules it tried.
+    // `-vv`: each search's cost and why it missed. The search core finds
+    // `found`, and it tallies no rules.
     const abc_search_verbose = b.addRunArtifact(compiler_exe);
     abc_search_verbose.setCwd(b.path("tests/cli"));
     abc_search_verbose.addArgs(&.{ "search", "-vv", "search.mm0", "search.auf" });
     abc_search_verbose.expectExitCode(4);
     abc_search_verbose.addCheck(.{ .expect_stdout_match = "  use [p []]\n  cost: " });
     abc_search_verbose.addCheck(.{ .expect_stdout_match = " ms wall, depth 1 in " ++
-        "non-splitting generation\n" ++
-        "  rules tried most:\n" ++
-        "    p: 1 tried, 1 accepted, 0 rejected\n" ++
-        "    use: 1 tried, 1 accepted, 0 rejected\n" ++
+        "the search core\n" ++
         "search.auf:7  missed l1  exact?  missed\n" ++
         "  cost: 0 candidates, " });
     abc_search_verbose.addCheck(.{ .expect_stdout_match = " ms wall\n" ++

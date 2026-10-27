@@ -303,12 +303,13 @@ test "auto? fuel exhaustion is reported as truncation with a fuel hint" {
 
     // `fuel: 1` starves every phase before the two-level chain assembles;
     // the miss must surface as truncation (not a definitive miss), name the
-    // fuel bound, and suggest raising it.
+    // fuel bound, and suggest raising it. Fuel bounds the ladder, so the
+    // search core is off.
     var starved = try tunableChainSuggestions(&arena,
         \\t
         \\----
         \\l1: $ R $ by auto? (fuel: 1)
-    , .{ .generate = .{ .enabled = true }, .status_detail = true });
+    , .{ .generate = .{ .enabled = true, .core = false }, .status_detail = true });
     defer starved.deinit();
     try std.testing.expectEqual(
         types.SearchStatus.budget_exhausted,
@@ -339,7 +340,8 @@ test "auto? node-cap truncation is reported as truncation with a nodes hint" {
         \\----
         \\l1: $ R $ by auto? (nodes: 1)
     , .{
-        .generate = .{ .enabled = true },
+        // The node cap bounds the ladder, so the search core is off.
+        .generate = .{ .enabled = true, .core = false },
         .status_detail = true,
         .counters = &counters,
     });

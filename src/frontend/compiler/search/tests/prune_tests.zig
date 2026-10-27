@@ -1323,7 +1323,8 @@ test "auto? hands a generated context split to the checker as explicit bindings"
     // the context it is given, so only the search knows which members each
     // side took. The checker's positional reading of `B , (A , B)` gives
     // `g := hyp B`, against which `la` cannot be checked, so the suggestion
-    // states the `g` that `la` needs.
+    // states the `g` that `la` needs. The ladder's split; the search core
+    // closes the goal with `la` alone.
     const mm0_src = comm_ctx_theory ++
         \\--| @congr
         \\axiom join_congr (g1 g2 h1 h2: ctx):
@@ -1348,7 +1349,7 @@ test "auto? hands a generated context split to the checker as explicit bindings"
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
-        .generate = .{ .enabled = true },
+        .generate = .{ .enabled = true, .core = false },
     });
     defer suggestions.deinit();
     try expectOffered(suggestions.items, &.{"two (g := $ join (hyp B) (hyp A) $) [la [], lb []]"});
@@ -2872,12 +2873,13 @@ test "copy-instance prune keeps a proof that needs two instances" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
+    // The ladder's prune, so the search core is off.
     var suggestions = try suggestionsAtNeedle(
         &arena,
         mm0_src,
         proof_src,
         "auto?",
-        .{ .counters = &counters, .generate = .{ .enabled = true } },
+        .{ .counters = &counters, .generate = .{ .enabled = true, .core = false } },
     );
     defer suggestions.deinit();
 
