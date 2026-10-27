@@ -15,9 +15,11 @@
 //! bound one is δ (`all_intro`'s `y`), an eigenvariable. Such a rule's
 //! premises are the view's, so a premise holds the instance itself, not a
 //! substitution redex. Rules are admitted over commutative `@acui` bags
-//! with at most one rest binder per bag. Rules with other unfixed binders
-//! (cuts), fresh variables or definitions wait for the later stages, as do
-//! bridges, which only link facts already in hand.
+//! with at most one rest binder per bag. A definition is an ordinary term
+//! constructor: the core never unfolds it, and a proof that needs the
+//! unfolding is the checker's to find or the generation search's. Rules
+//! with other unfixed binders (cuts) or fresh variables wait for the later
+//! stages, as do bridges, which only link facts already in hand.
 
 const std = @import("std");
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
@@ -205,9 +207,9 @@ fn admit(allocator: std.mem.Allocator, context: *const Context, rule_id: u32) !?
     };
 }
 
-/// A template the core can match and build: no definitions, applications
-/// of at most `max_args` arguments, only commutative `@acui` combiners,
-/// each bag with at most one rest binder.
+/// A template the core can match and build: applications of at most
+/// `max_args` arguments, only commutative `@acui` combiners, each bag with
+/// at most one rest binder.
 fn templateSupported(
     context: *const Context,
     args: []const ArgInfo,
@@ -219,7 +221,6 @@ fn templateSupported(
     };
     if (app.args.len > max_args) return false;
     if (app.term_id >= context.env.terms.items.len) return false;
-    if (context.env.terms.items[app.term_id].is_def) return false;
     if (AcuiBag.Combiner.of(context.registry, context.env, app.term_id)) |combiner| {
         if (!combiner.law.isCommutative()) return false;
         const members = combiner.flattenTemplate(template) orelse return false;

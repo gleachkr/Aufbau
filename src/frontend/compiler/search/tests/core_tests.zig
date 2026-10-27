@@ -297,3 +297,46 @@ test "a witness in a context member is closed by a hypothesis's context" {
     try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 1), counters.gen_last_depth);
 }
+
+// `dn a` is `¬ ¬ a` by definition.
+const dn_def =
+    \\def dn (a: wff): wff = $ ¬ ¬ a $;
+    \\
+;
+
+test "the search core matches a definition as an ordinary term" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena, dn_def ++
+        \\theorem dn_self (a b: wff): $ ∅ ⊢ dn a → b → dn a $;
+    ,
+        \\dn_self
+        \\-------
+        \\l1: $ ∅ ⊢ dn a → b → dn a $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"imp_intro [imp_intro [ax []]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+}
+
+test "a goal that needs a definition unfolded goes on to the ladder" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // The core never unfolds `dn`, so `dn a ⊢ ¬ ¬ a` is out of its reach;
+    // the generation search finds a proof the checker accepts by unfolding.
+    var suggestions = try search(&arena, dn_def ++
+        \\theorem dn_unfold (a: wff): $ ∅ ⊢ dn a → ¬ ¬ a $;
+    ,
+        \\dn_unfold
+        \\---------
+        \\l1: $ ∅ ⊢ dn a → ¬ ¬ a $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try std.testing.expect(suggestions.items.len > 0);
+    try std.testing.expect(counters.core_nodes > 0);
+    try std.testing.expect(!std.mem.eql(u8, "the search core", generate.phaseName(counters.gen_last_phase)));
+}

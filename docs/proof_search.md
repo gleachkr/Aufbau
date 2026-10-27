@@ -97,11 +97,12 @@ take a couple of seconds before it does.
 **Two searches, one budget.** `auto?` first hands the goal to the *search
 core*, which leaves a quantifier witness it has not chosen as an unknown
 shared by the whole proof and fills it in when a later step needs a
-particular term, as tableau provers do. A goal the core does not take (one
-with holes, definitions, or a non-commutative `@acui` combiner) or cannot
-prove within the depth limit goes on to the generation search, in what is
-left of the same work budget. Either way the checker validates a proof
-before it is offered.
+particular term, as tableau provers do. The core treats a definition as
+an ordinary term and never unfolds it. A goal the core does not take (one
+with holes or a non-commutative `@acui` combiner) or cannot prove within
+the depth limit goes on to the generation search, in what is left of the
+same work budget; so does one whose proof needs a definition unfolded.
+Either way the checker validates a proof before it is offered.
 
 A suggestion from `exact?` or `auto?` names a rule argument only when the
 checker cannot infer it from the goal and the cited references, as with

@@ -81,8 +81,9 @@ pub const Terms = struct {
         return self.bags.get(term_id);
     }
 
-    /// Whether the core can search `expr`: no placeholders, definitions or
-    /// non-commutative combiners. O(size of `expr`) over shared nodes.
+    /// Whether the core can search `expr`: no placeholders or
+    /// non-commutative combiners. A definition is an ordinary term here,
+    /// never unfolded. O(size of `expr`) over shared nodes.
     pub fn supported(self: *Terms, expr: ExprId) Error!bool {
         var seen = std.AutoHashMapUnmanaged(ExprId, void).empty;
         defer seen.deinit(self.allocator);
@@ -100,7 +101,6 @@ pub const Terms = struct {
             .placeholder => return false,
             .app => |app| {
                 if (app.term_id >= self.context.env.terms.items.len) return false;
-                if (self.context.env.terms.items[app.term_id].is_def) return false;
                 if (AcuiBag.Combiner.of(self.context.registry, self.context.env, app.term_id)) |combiner| {
                     if (!combiner.law.isCommutative()) return false;
                 }
