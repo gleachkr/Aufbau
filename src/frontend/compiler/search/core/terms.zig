@@ -1,17 +1,26 @@
-//! Ground terms for the search core: canonical bags, matching a rule
-//! conclusion against a goal, and building a rule's premises.
+//! Terms for the search core: canonical bags, matching a rule conclusion
+//! against a goal, and building a rule's premises.
 //!
 //! Every expression the core works on is canonical: each commutative
 //! `@acui` bag lists its members once per occurrence its law counts, in
-//! `ExprId` order, so two goals equal modulo ACUI are the same `ExprId`
-//! and binder agreement is an id comparison. The order is only stable
-//! within one theorem's interner, which is all one core run uses.
+//! `ExprId` order, so two ground goals equal modulo ACUI are the same
+//! `ExprId`. The order is only stable within one theorem's interner, which
+//! is all one core run uses. A goal holding witness variables
+//! (`wvars.zig`) is canonical as written, with each wvar a leaf; once a
+//! binding changes it, `resolveGoal` makes it canonical again.
 //!
-//! Matching enumerates every way a conclusion template fits a goal. A bag
-//! member of the template takes a distinct goal member; each choice is an
-//! alternative. The bag's rest binder takes what is left over, which is
-//! the minimal complement: a set law would also allow the rest to keep a
-//! member the template already claims, which this stage does not try.
+//! Matching enumerates every way a conclusion template fits a goal, and
+//! unifies through the witness variables: a binder met twice must agree
+//! with its first value, and an unbound wvar on either side takes the other
+//! side's term. Each unifier is an alternative, run in place by the sink
+//! while its bindings hold. A bag member of the template takes a distinct
+//! goal member; each choice is an alternative. The bag's rest binder takes
+//! what is left over, which is the minimal complement: a set law would
+//! also allow the rest to keep a member the template already claims, which
+//! the core does not try yet. Two bags unify only when they are equal once
+//! resolved, and an unbound wvar facing template structure does not match:
+//! the witnesses of these stages stand for terms the theory's rules never
+//! take apart.
 
 const std = @import("std");
 const ExprId = @import("../../../expr.zig").ExprId;
@@ -21,6 +30,7 @@ const RuleDecl = @import("../../../env.zig").RuleDecl;
 const AcuiBag = @import("../../../acui_bag.zig");
 const Context = @import("../types.zig").Context;
 const catalog = @import("./catalog.zig");
+const WVars = @import("./wvars.zig").WVars;
 
 pub const Error = error{
     OutOfMemory,
@@ -34,6 +44,7 @@ pub const Terms = struct {
     allocator: std.mem.Allocator,
     context: *const Context,
     theorem: *TheoremContext,
+    wvars: *WVars,
     /// The commutative bag combiner each combiner head and each unit term
     /// reads as.
     bags: std.AutoHashMapUnmanaged(u32, AcuiBag.Combiner) = .empty,
@@ -43,8 +54,9 @@ pub const Terms = struct {
         allocator: std.mem.Allocator,
         context: *const Context,
         theorem: *TheoremContext,
+        wvars: *WVars,
     ) Error!Terms {
-        var self = Terms{ .allocator = allocator, .context = context, .theorem = theorem };
+        var self = Terms{ .allocator = allocator, .context = context, .theorem = theorem, .wvars = wvars };
         errdefer self.deinit();
         var it = context.registry.acui_by_head.keyIterator();
         while (it.next()) |head| {
@@ -133,6 +145,69 @@ pub const Terms = struct {
         return (try combiner.build(self.theorem, kept)) orelse error.Unsupported;
     }
 
+    /// `expr` with the current bindings applied, canonical.
+    pub fn resolveGoal(self: *Terms, expr: ExprId) Error!ExprId {
+        if (!try self.wvars.holdsWVar(expr)) return expr;
+        return self.canonical(try self.wvars.deref(expr, null));
+    }
+
+    /// Whether `a` and `b` are equal under the current bindings.
+    fn same(self: *Terms, a: ExprId, b: ExprId) Error!bool {
+        if (a == b) return true;
+        return try self.resolveGoal(a) == try self.resolveGoal(b);
+    }
+
+    /// `pattern` with each free occurrence of the variable `hole` replaced
+    /// by `value`, canonical: the instance a quantifier rule's view states.
+    /// An occurrence under a binder of `hole` belongs to that binder and
+    /// stays.
+    pub fn swap(self: *Terms, pattern: ExprId, hole: ExprId, value: ExprId) Error!ExprId {
+        return self.canonical(try self.swapWalk(pattern, hole, value));
+    }
+
+    fn swapWalk(self: *Terms, expr: ExprId, hole: ExprId, value: ExprId) Error!ExprId {
+        if (expr == hole) return value;
+        const app = switch (self.theorem.interner.node(expr).*) {
+            .app => |app| app,
+            .variable, .placeholder => return expr,
+        };
+        if (app.args.len > catalog.max_args) return error.Unsupported;
+        const decl = &self.context.env.terms.items[app.term_id];
+        for (app.args, 0..) |arg, idx| {
+            if (idx < decl.args.len and decl.args[idx].bound and arg == hole) return expr;
+        }
+        var args: [catalog.max_args]ExprId = undefined;
+        var changed = false;
+        for (app.args, 0..) |arg, idx| {
+            args[idx] = try self.swapWalk(arg, hole, value);
+            if (args[idx] != arg) changed = true;
+        }
+        if (!changed) return expr;
+        return self.theorem.interner.internApp(app.term_id, args[0..app.args.len]);
+    }
+
+    /// Append the variables `expr` binds (those in a bound argument of some
+    /// application) to `out`.
+    pub fn boundVariables(
+        self: *Terms,
+        arena: std.mem.Allocator,
+        expr: ExprId,
+        out: *std.ArrayListUnmanaged(ExprId),
+    ) Error!void {
+        const app = switch (self.theorem.interner.node(expr).*) {
+            .app => |app| app,
+            .variable, .placeholder => return,
+        };
+        const decl = &self.context.env.terms.items[app.term_id];
+        for (app.args, 0..) |arg, idx| {
+            if (idx < decl.args.len and decl.args[idx].bound) {
+                if (std.mem.indexOfScalar(ExprId, out.items, arg) == null) try out.append(arena, arg);
+            } else {
+                try self.boundVariables(arena, arg, out);
+            }
+        }
+    }
+
     /// `template` with `bindings` substituted, canonical when every binding
     /// is.
     pub fn instantiate(
@@ -164,8 +239,9 @@ pub const Terms = struct {
 
     /// Call `sink.match(bindings)` for every way `rule`'s conclusion fits
     /// the canonical `goal`, until it returns true. `bindings` has one
-    /// entry per rule binder, all bound. Returns whether the sink stopped
-    /// the enumeration.
+    /// entry per rule binder, null for those the conclusion does not fix;
+    /// wvar bindings the match made hold during the call. Returns whether
+    /// the sink stopped the enumeration.
     pub fn matchConclusion(
         self: *Terms,
         rule: *const RuleDecl,
@@ -173,23 +249,41 @@ pub const Terms = struct {
         comptime Sink: type,
         sink: *Sink,
     ) (Error || Sink.Error)!bool {
-        var bindings: [64]?ExprId = @splat(null);
-        var matcher = Matcher(Sink){
-            .terms = self,
-            .rule = rule,
-            .bindings = bindings[0..rule.args.len],
-            .sink = sink,
-        };
+        // On the heap: the match stays on the stack for the rest of the
+        // proof.
+        const bindings = try self.allocator.alloc(?ExprId, rule.args.len);
+        defer self.allocator.free(bindings);
+        @memset(bindings, null);
+        var matcher = Matcher(Sink){ .terms = self, .rule = rule, .bindings = bindings, .sink = sink };
         try matcher.term(rule.concl, goal, null);
+        return matcher.stop;
+    }
+
+    /// Call `sink.match(&.{})` for every unifier of `a` and `b`, until it
+    /// returns true. Returns whether the sink stopped the enumeration.
+    pub fn unify(
+        self: *Terms,
+        a: ExprId,
+        b: ExprId,
+        comptime Sink: type,
+        sink: *Sink,
+    ) (Error || Sink.Error)!bool {
+        var matcher = Matcher(Sink){ .terms = self, .rule = null, .bindings = &.{}, .sink = sink };
+        try matcher.unify(a, b, null);
         return matcher.stop;
     }
 };
 
 /// What is left to match after the current step, as a stack-allocated
-/// list: template/goal pairs, and the next member of a bag in progress.
+/// list: the arguments of an application from position `at` on (template
+/// against goal, or two terms unified), and the next member of a bag in
+/// progress. One cell stands for all of an application's remaining
+/// arguments, since a match stays on the stack until the proof is done.
 const Pending = struct {
     step: union(enum) {
-        pair: struct { template: TemplateExpr, expr: ExprId },
+        /// Positions count over the rigid arguments, then the bags.
+        args: struct { template: []const TemplateExpr, goal: []const ExprId, at: usize },
+        unify: struct { a: []const ExprId, b: []const ExprId, at: usize },
         bag: *const BagState,
     },
     next: ?*const Pending,
@@ -209,7 +303,8 @@ const BagState = struct {
 fn Matcher(comptime Sink: type) type {
     return struct {
         terms: *Terms,
-        rule: *const RuleDecl,
+        /// The rule whose conclusion is matched; null when only unifying.
+        rule: ?*const RuleDecl,
         bindings: []?ExprId,
         sink: *Sink,
         stop: bool = false,
@@ -219,13 +314,28 @@ fn Matcher(comptime Sink: type) type {
 
         fn run(self: *Self, pending: ?*const Pending) MatchError!void {
             const node = pending orelse {
-                var out: [64]ExprId = undefined;
-                for (self.bindings, 0..) |binding, idx| out[idx] = binding.?;
-                if (try self.sink.match(out[0..self.bindings.len])) self.stop = true;
+                if (try self.sink.match(self.bindings)) self.stop = true;
                 return;
             };
             switch (node.step) {
-                .pair => |pair| try self.term(pair.template, pair.expr, node.next),
+                .args => |args| {
+                    // Bags go last, so the rigid arguments bind what they
+                    // can before a bag enumerates its members.
+                    const len = args.template.len;
+                    var at = args.at;
+                    while (at < 2 * len) : (at += 1) {
+                        if ((at >= len) == self.isBagTemplate(args.template[at % len])) break;
+                    } else return self.run(node.next);
+                    var after = node.*;
+                    after.step.args.at = at + 1;
+                    try self.term(args.template[at % len], args.goal[at % len], &after);
+                },
+                .unify => |args| {
+                    if (args.at == args.a.len) return self.run(node.next);
+                    var after = node.*;
+                    after.step.unify.at += 1;
+                    try self.unify(args.a[args.at], args.b[args.at], &after);
+                },
                 .bag => |state| try self.bag(state.*, node.next),
             }
         }
@@ -234,33 +344,20 @@ fn Matcher(comptime Sink: type) type {
             switch (template) {
                 .binder => |idx| try self.bind(idx, expr, next),
                 .app => |app| {
+                    const target = self.terms.wvars.resolve(expr);
                     if (self.terms.bagFor(app.term_id)) |combiner| {
-                        return self.startBag(combiner, template, expr, next);
+                        return self.startBag(combiner, template, target, next);
                     }
-                    const goal_app = switch (self.terms.theorem.interner.node(expr).*) {
+                    const goal_app = switch (self.terms.theorem.interner.node(target).*) {
                         .app => |goal_app| goal_app,
                         else => return,
                     };
                     if (goal_app.term_id != app.term_id or goal_app.args.len != app.args.len) return;
-                    // Bags go last, so the rigid arguments bind what they can
-                    // before a bag enumerates its members.
-                    var cells: [catalog.max_args]Pending = undefined;
-                    var head: ?*const Pending = next;
-                    var count: usize = 0;
-                    for (0..2) |pass| {
-                        var idx = app.args.len;
-                        while (idx > 0) {
-                            idx -= 1;
-                            if ((pass == 0) != self.isBagTemplate(app.args[idx])) continue;
-                            cells[count] = .{
-                                .step = .{ .pair = .{ .template = app.args[idx], .expr = goal_app.args[idx] } },
-                                .next = head,
-                            };
-                            head = &cells[count];
-                            count += 1;
-                        }
-                    }
-                    try self.run(head);
+                    const cell = Pending{
+                        .step = .{ .args = .{ .template = app.args, .goal = goal_app.args, .at = 0 } },
+                        .next = next,
+                    };
+                    try self.run(&cell);
                 },
             }
         }
@@ -273,13 +370,51 @@ fn Matcher(comptime Sink: type) type {
         }
 
         fn bind(self: *Self, idx: usize, expr: ExprId, next: ?*const Pending) MatchError!void {
-            if (self.bindings[idx]) |value| {
-                if (value == expr) try self.run(next);
-                return;
-            }
+            if (self.bindings[idx]) |value| return self.unify(value, expr, next);
             self.bindings[idx] = expr;
             defer self.bindings[idx] = null;
             try self.run(next);
+        }
+
+        fn unify(self: *Self, a: ExprId, b: ExprId, next: ?*const Pending) MatchError!void {
+            const wvars = self.terms.wvars;
+            const lhs = wvars.resolve(a);
+            const rhs = wvars.resolve(b);
+            if (lhs == rhs) return self.run(next);
+            // Ground terms are canonical, so distinct ids differ.
+            if (!try wvars.holdsWVar(lhs) and !try wvars.holdsWVar(rhs)) return;
+            if (try self.bindWVar(lhs, rhs, next)) return;
+            if (try self.bindWVar(rhs, lhs, next)) return;
+            const interner = &self.terms.theorem.interner;
+            const lhs_app = switch (interner.node(lhs).*) {
+                .app => |app| app,
+                else => return,
+            };
+            const rhs_app = switch (interner.node(rhs).*) {
+                .app => |app| app,
+                else => return,
+            };
+            if (lhs_app.term_id != rhs_app.term_id or lhs_app.args.len != rhs_app.args.len) return;
+            if (self.terms.bagFor(lhs_app.term_id) != null) {
+                if (try self.terms.same(lhs, rhs)) try self.run(next);
+                return;
+            }
+            const cell = Pending{
+                .step = .{ .unify = .{ .a = lhs_app.args, .b = rhs_app.args, .at = 0 } },
+                .next = next,
+            };
+            try self.run(&cell);
+        }
+
+        /// When `wvar` is an unbound witness variable, run `next` with it
+        /// bound to `value` if its constraints allow, and return true.
+        fn bindWVar(self: *Self, wvar: ExprId, value: ExprId, next: ?*const Pending) MatchError!bool {
+            const wvars = self.terms.wvars;
+            const idx = wvars.of(wvar) orelse return false;
+            const start = wvars.mark();
+            defer wvars.rollback(start);
+            if (try wvars.bind(idx, value)) try self.run(next);
+            return true;
         }
 
         fn isRestBinder(self: *const Self, combiner: AcuiBag.Combiner, template: TemplateExpr) bool {
@@ -288,7 +423,7 @@ fn Matcher(comptime Sink: type) type {
                 .app => return false,
             };
             const bag_sort = self.terms.context.env.terms.items[combiner.head].ret_sort_name;
-            return std.mem.eql(u8, self.rule.args[idx].sort_name, bag_sort);
+            return std.mem.eql(u8, self.rule.?.args[idx].sort_name, bag_sort);
         }
 
         fn startBag(
@@ -298,26 +433,45 @@ fn Matcher(comptime Sink: type) type {
             expr: ExprId,
             next: ?*const Pending,
         ) MatchError!void {
+            const state = try @call(.never_inline, prepareBag, .{ self, combiner, template, expr });
+            defer self.terms.allocator.free(state.template);
+            defer self.terms.allocator.free(state.goal);
+            try self.bag(state, next);
+        }
+
+        /// The bag's template members in match order and the goal's
+        /// members, copied out of the fixed-capacity bags. The bag match
+        /// stays on the stack for the rest of the proof, so it holds only
+        /// these slices.
+        fn prepareBag(self: *Self, combiner: AcuiBag.Combiner, template: TemplateExpr, expr: ExprId) Error!BagState {
             const parts = combiner.flattenTemplate(template) orelse return error.Unsupported;
             const members = combiner.flatten(self.terms.theorem, expr) orelse return error.Unsupported;
             // Bound rest binders and structured members first, the unbound
             // rest binder last: it takes what the others leave.
-            var ordered: AcuiBag.TemplateBag = .{};
             var rest: ?usize = null;
+            var kept: usize = 0;
             for (parts.slice()) |part| {
                 if (self.isRestBinder(combiner, part) and self.bindings[part.binder] == null) {
                     rest = part.binder;
                 } else {
-                    _ = ordered.append(part);
+                    kept += 1;
                 }
             }
-            const state = BagState{
+            const allocator = self.terms.allocator;
+            const ordered = try allocator.alloc(TemplateExpr, kept);
+            errdefer allocator.free(ordered);
+            var count: usize = 0;
+            for (parts.slice()) |part| {
+                if (self.isRestBinder(combiner, part) and self.bindings[part.binder] == null) continue;
+                ordered[count] = part;
+                count += 1;
+            }
+            return .{
                 .combiner = combiner,
-                .template = ordered.slice(),
-                .goal = members.slice(),
+                .template = ordered,
+                .goal = try allocator.dupe(ExprId, members.slice()),
                 .rest = rest,
             };
-            try self.bag(state, next);
         }
 
         fn bag(self: *Self, state: BagState, next: ?*const Pending) MatchError!void {
@@ -326,13 +480,9 @@ fn Matcher(comptime Sink: type) type {
             if (self.isRestBinder(state.combiner, part)) {
                 // A rest binder an earlier match bound: its members must be
                 // among the goal's.
-                const value = self.bindings[part.binder].?;
-                const members = state.combiner.flatten(self.terms.theorem, value) orelse return error.Unsupported;
                 var after = state;
+                after.used = (try @call(.never_inline, takeAll, .{ self, state, self.bindings[part.binder].? })) orelse return;
                 after.index += 1;
-                for (members.slice()) |member| {
-                    after.used |= takeMember(state.combiner, state.goal, after.used, member) orelse return;
-                }
                 return self.bag(after, next);
             }
             for (state.goal, 0..) |member, at| {
@@ -347,13 +497,24 @@ fn Matcher(comptime Sink: type) type {
             }
         }
 
+        /// `state.used` with a goal member taken for each member of
+        /// `value`, or null when one has none.
+        fn takeAll(self: *Self, state: BagState, value: ExprId) Error!?u64 {
+            const members = state.combiner.flatten(self.terms.theorem, value) orelse return error.Unsupported;
+            var used = state.used;
+            for (members.slice()) |member| {
+                used |= (try self.takeMember(state.combiner, state.goal, used, member)) orelse return null;
+            }
+            return used;
+        }
+
         /// The bit of a goal member equal to `member` that `used` leaves
         /// free, or under an idempotent law one already taken; null when
         /// there is none.
-        fn takeMember(combiner: AcuiBag.Combiner, goal: []const ExprId, used: u64, member: ExprId) ?u64 {
+        fn takeMember(self: *Self, combiner: AcuiBag.Combiner, goal: []const ExprId, used: u64, member: ExprId) Error!?u64 {
             var taken: ?u64 = null;
             for (goal, 0..) |candidate, at| {
-                if (candidate != member) continue;
+                if (!try self.terms.same(candidate, member)) continue;
                 const bit = @as(u64, 1) << @intCast(at);
                 if (used & bit == 0) return bit;
                 taken = bit;
@@ -362,18 +523,23 @@ fn Matcher(comptime Sink: type) type {
         }
 
         fn finishBag(self: *Self, state: BagState, next: ?*const Pending) MatchError!void {
+            const rest = state.rest orelse {
+                if (@popCount(state.used) == state.goal.len) try self.run(next);
+                return;
+            };
+            const value = (try @call(.never_inline, leftover, .{ self, state })) orelse return;
+            try self.bind(rest, value, next);
+        }
+
+        /// The bag of the goal members `state` leaves untaken.
+        fn leftover(self: *Self, state: BagState) Error!?ExprId {
             var left: AcuiBag.ExprBag = .{};
             for (state.goal, 0..) |member, at| {
                 if (state.used & (@as(u64, 1) << @intCast(at)) == 0) _ = left.append(member);
             }
-            const rest = state.rest orelse {
-                if (left.len == 0) try self.run(next);
-                return;
-            };
             // The goal's members are canonical and in order, so the
             // leftover is canonical as it stands.
-            const value = (try state.combiner.build(self.terms.theorem, left.slice())) orelse return;
-            try self.bind(rest, value, next);
+            return state.combiner.build(self.terms.theorem, left.slice());
         }
     };
 }

@@ -1,15 +1,18 @@
 //! The search core: a backward prover over the theory's own rules, in the
 //! shape of blast (`docs/design_notes/shared_witness.md`, revision 2).
 //!
-//! Stage C0 is the skeleton for goals every rule application fixes
-//! completely: ground goals, rules whose conclusion fixes every binder
-//! (`catalog.zig`), and commutative `@acui` bags matched member by member
-//! (`terms.zig`). It runs behind `GenerateOptions.core` and falls back to
+//! It searches ground goals with the rules whose conclusion fixes every
+//! binder but the quantifier witnesses (`catalog.zig`), over commutative
+//! `@acui` bags matched member by member (`terms.zig`). A γ witness is a
+//! witness variable closed by unification, a δ one an eigenvariable
+//! (`wvars.zig`). It runs behind `GenerateOptions.core` and falls back to
 //! the generation ladder on a miss.
 //!
+//! The run works in a clone of the call's theorem, discarded at the end.
 //! The proof record is rendered as one `RuleApplication` tree with every
-//! binding explicit, and the checker validates it once (D5): the checker
-//! stays the only authority on what the core returns.
+//! binding explicit, a witness variable left unbound named from its sort's
+//! `@vars` pool, and the checker validates it once (D5): the checker stays
+//! the only authority on what the core returns.
 
 const std = @import("std");
 const ArenaAllocator = @import("../../../arena_allocator.zig").ArenaAllocator;
@@ -27,6 +30,7 @@ const forward = @import("../forward.zig");
 const candidate_mod = @import("../candidate.zig");
 const catalog_mod = @import("./catalog.zig");
 const Terms = @import("./terms.zig").Terms;
+const WVars = @import("./wvars.zig").WVars;
 const prover_mod = @import("./prover.zig");
 const Prover = prover_mod.Prover;
 const Node = prover_mod.Node;
@@ -34,9 +38,8 @@ const Node = prover_mod.Node;
 pub const Request = struct {
     compiler: *CompilerContext,
     context: *const Context,
-    /// The call's working theorem. The core interns into it; the proof is
-    /// checked against it.
-    theorem: *TheoremContext,
+    /// The call's working theorem. The core works in a clone of it.
+    theorem: *const TheoremContext,
     theorem_vars: *const NameExprMap,
     /// The theorem the pool refs are stated in.
     pool_theorem: *const TheoremContext,
@@ -62,7 +65,16 @@ pub const Result = union(enum) {
 pub fn run(request: Request) !Result {
     var arena = ArenaAllocator.init(request.scratch);
     defer arena.deinit();
-    var terms = try Terms.init(request.scratch, request.context, request.theorem);
+    var theorem = try request.theorem.clone();
+    defer theorem.deinit();
+    var wvars = WVars{
+        .allocator = request.scratch,
+        .arena = arena.allocator(),
+        .context = request.context,
+        .theorem = &theorem,
+    };
+    defer wvars.deinit();
+    var terms = try Terms.init(request.scratch, request.context, &theorem, &wvars);
     defer terms.deinit();
     if (!try terms.supported(request.goal)) return .abstained;
     const goal = terms.canonical(request.goal) catch |err| switch (err) {
@@ -74,12 +86,14 @@ pub fn run(request: Request) !Result {
     defer catalog.deinit();
     const facts = try poolFacts(request, &terms, arena.allocator());
 
-    var close_out = CloseOut{ .request = request };
+    var close_out = CloseOut{ .request = request, .theorem = &theorem, .wvars = &wvars };
     var prover = Prover{
         .allocator = request.scratch,
         .arena = arena.allocator(),
         .context = request.context,
         .terms = &terms,
+        .wvars = &wvars,
+        .theorem_vars = request.theorem_vars,
         .catalog = &catalog,
         .facts = facts,
         .budget = request.budget,
@@ -88,6 +102,7 @@ pub fn run(request: Request) !Result {
         .stack_guard_bytes = request.stack_guard_bytes,
     };
     defer prover.deinit();
+    close_out.prover = &prover;
     defer if (request.counters) |c| {
         c.core_nodes += prover.stats.nodes;
         c.core_rejects += prover.stats.rejects;
@@ -119,6 +134,12 @@ fn poolFacts(request: Request, terms: *Terms, arena: std.mem.Allocator) ![]const
 /// Renders a finished proof record and checks it against the goal.
 const CloseOut = struct {
     request: Request,
+    theorem: *TheoremContext,
+    wvars: *WVars,
+    /// Set once the prover exists; names come from its `@vars` pools.
+    prover: *Prover = undefined,
+    /// Names of the wvars left unbound, by wvar index, during one render.
+    names: std.AutoHashMapUnmanaged(u32, ExprId) = .empty,
     found: ?RuleApplication = null,
 
     fn tryRoot(ctx: *anyopaque, root: *const Node) prover_mod.Error!bool {
@@ -128,7 +149,8 @@ const CloseOut = struct {
         const request = self.request;
         var namer = forward.Namer.init(request.scratch);
         defer namer.deinit();
-        try namer.collectTheoremVars(request.theorem, request.theorem_vars);
+        try namer.collectTheoremVars(self.theorem, request.theorem_vars);
+        defer self.names.clearAndFree(request.scratch);
         const application = (try self.render(&namer, root)) orelse return false;
         if (request.counters) |c| c.full_try_candidate_calls += 1;
         if (request.budget) |budget| try budget.spendCandidate();
@@ -137,7 +159,7 @@ const CloseOut = struct {
             request.context,
             application,
             .{ .concrete = request.goal },
-            request.theorem,
+            self.theorem,
             request.theorem_vars,
             .{ .counters = request.counters, .final_attempt = true },
         ) catch |err| switch (err) {
@@ -150,8 +172,9 @@ const CloseOut = struct {
     }
 
     /// `node` as an application with every binding explicit, or null when
-    /// a value has no source text (an unnamed binder or variable).
-    fn render(self: *CloseOut, namer: *forward.Namer, node: *const Node) !?RuleApplication {
+    /// a value has no source text (an unnamed binder or variable) or a
+    /// wvar has no admissible name.
+    fn render(self: *CloseOut, namer: *forward.Namer, node: *const Node) prover_mod.Error!?RuleApplication {
         const request = self.request;
         const step = node.step.rule;
         const rule = &request.context.env.rules.items[step.rule_id];
@@ -159,7 +182,9 @@ const CloseOut = struct {
         const bindings = try request.out.alloc(ProofScript.ArgBinding, step.bindings.len);
         for (bindings, step.bindings, 0..) |*binding, value, idx| {
             const name = rule.arg_names[idx] orelse return null;
-            const text = (try namer.render(request.out, request.context, request.theorem, value)) orelse return null;
+            if (!try self.nameLeftovers(value)) return null;
+            const resolved = try self.wvars.deref(value, &self.names);
+            const text = (try namer.render(request.out, request.context, self.theorem, resolved)) orelse return null;
             binding.* = .{
                 .name = name,
                 .name_span = zero_span,
@@ -174,7 +199,7 @@ const CloseOut = struct {
                 .rule => .{ .application = (try self.render(namer, child.?)) orelse return null },
             };
         }
-        return .{
+        return RuleApplication{
             .rule_name = rule.name,
             .rule_span = zero_span,
             .arg_bindings = bindings,
@@ -182,5 +207,24 @@ const CloseOut = struct {
             .refs = refs,
             .span = zero_span,
         };
+    }
+
+    /// Name each wvar `value` leaves unbound with the first variable of its
+    /// sort's `@vars` pool it admits (`WVars.admits`), unless an earlier
+    /// binding already named it. False when one admits none.
+    fn nameLeftovers(self: *CloseOut, value: ExprId) prover_mod.Error!bool {
+        const scratch = self.request.scratch;
+        var leftovers = std.ArrayListUnmanaged(u32).empty;
+        defer leftovers.deinit(scratch);
+        try self.wvars.collectUnbound(scratch, value, &leftovers);
+        for (leftovers.items) |idx| {
+            if (self.names.contains(idx)) continue;
+            const sort_name = self.wvars.vars.items[idx].sort_name;
+            const name = for (try self.prover.pool(sort_name)) |variable| {
+                if (self.wvars.admits(idx, variable)) break variable;
+            } else return false;
+            try self.names.put(scratch, idx, name);
+        }
+        return true;
     }
 };

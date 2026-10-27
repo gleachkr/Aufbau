@@ -1,6 +1,7 @@
 //! The search core (`core/`, behind `GenerateOptions.core`): it proves
-//! propositional sequents over an ACUI context, every proof it returns has
-//! passed the checker, and on a miss the generation ladder still runs.
+//! sequents over an ACUI context, closing quantifier witnesses by
+//! unification under the eigenvariable condition; every proof it returns
+//! has passed the checker, and on a miss the generation ladder still runs.
 
 const helpers = @import("./helpers.zig");
 const std = helpers.std;
@@ -157,4 +158,84 @@ test "the search core is off by default" {
     try std.testing.expect(suggestions.items.len > 0);
     try std.testing.expectEqual(@as(usize, 0), counters.core_nodes);
     try std.testing.expect(!std.mem.eql(u8, "the search core", generate.phaseName(counters.gen_last_phase)));
+}
+
+/// `name: statement` searched with the core on the nd_fol bench fixture,
+/// with `extra` declarations appended to it.
+fn ndFolSearch(
+    arena: *std.heap.ArenaAllocator,
+    extra: []const u8,
+    comptime name: []const u8,
+    comptime statement: []const u8,
+    counters: *types.SearchCounters,
+    max_depth: usize,
+) !types.SourceSuggestions {
+    const allocator = arena.allocator();
+    const fixture = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/nd_fol.mm0", allocator, .unlimited);
+    const mm0_src = try std.mem.concat(allocator, u8, &.{ fixture, extra });
+    const underline: [name.len]u8 = @splat('-');
+    const proof_src = name ++ "\n" ++ underline ++ "\nl1: $ " ++ statement ++ " $ by auto?\n";
+    return suggestionsAtNeedle(arena, mm0_src, proof_src, "auto?", .{
+        .counters = counters,
+        .generate = .{ .enabled = true, .core = true, .max_depth = max_depth },
+    });
+}
+
+test "the search core closes a quantifier witness by unification" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try ndFolSearch(&arena, "", "all_inst", "∅ ⊢ (∀ x P x) → P C", &counters, 6);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"imp_intro [all_left [ax (g := $ ∀ x P x $) []]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "the search core introduces eigenvariables and closes later witnesses with them" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try ndFolSearch(&arena, "", "ex_swap", "∅ ⊢ (∃ x ∃ y R x y) → (∃ z ∃ w R w z)", &counters, 6);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{
+        "imp_intro [ex_left [ex_left (x := $ y $, p := $ R u y $) [ex_intro [ex_intro (x := $ w $, p := $ R w v $) [ax (g := $ ∅ $, a := $ R u v $) []]]]]]",
+    });
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "the search core names a witness the proof leaves open" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try ndFolSearch(&arena, "", "all_ex_inst", "∅ ⊢ (∀ x P x) → (∃ y P y)", &counters, 6);
+    defer suggestions.deinit();
+
+    // Any object closes `P ?t ⊢ P ?t`; the first `@vars` name stands in.
+    try expectOffered(suggestions.items, &.{"imp_intro [ex_intro [all_left [ax (g := $ ∀ x P x $, a := $ P u $) []]]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+}
+
+test "a witness never takes an eigenvariable introduced after it" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // Unprovable: closing `R ?s v ⊢ R u ?t` would put `v`, introduced after
+    // `?t`, into `?t`. The core must not reach a proof the checker rejects.
+    var suggestions = try ndFolSearch(
+        &arena,
+        "theorem swap_bad {x y: obj}: $ ∅ ⊢ (∀ x ∃ y R x y) → ∃ y ∀ x R x y $;\n",
+        "swap_bad",
+        "∅ ⊢ (∀ x ∃ y R x y) → ∃ y ∀ x R x y",
+        &counters,
+        2,
+    );
+    defer suggestions.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
+    try std.testing.expect(counters.core_nodes > 0);
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
