@@ -86,6 +86,24 @@ l26: $ g , (a ↔ b) , ¬ c ⊢ ¬ c $ by ax
 l27: $ g , (a ↔ b) , ¬ c ⊢ ⊥ $ by not_elim [l26, l25]
 l28: $ g , (a ↔ b) ⊢ c $ by raa [l27]
 
+imp_case_left
+-------------
+l1: $ g ⊢ ¬ a → c $ by imp_intro [#1]
+l2: $ g ⊢ b → c $ by imp_intro [#2]
+l3: $ g , (a → b) , ¬ c , a ⊢ a → b $ by ax
+l4: $ g , (a → b) , ¬ c , a ⊢ a $ by ax
+l5: $ g , (a → b) , ¬ c , a ⊢ b $ by imp_elim [l3, l4]
+l6: $ g , (a → b) , ¬ c , a ⊢ b → c $ by weak [l2]
+l7: $ g , (a → b) , ¬ c , a ⊢ c $ by imp_elim [l6, l5]
+l8: $ g , (a → b) , ¬ c , a ⊢ ¬ c $ by ax
+l9: $ g , (a → b) , ¬ c , a ⊢ ⊥ $ by not_elim [l8, l7]
+l10: $ g , (a → b) , ¬ c ⊢ ¬ a $ by not_intro [l9]
+l11: $ g , (a → b) , ¬ c ⊢ ¬ a → c $ by weak [l1]
+l12: $ g , (a → b) , ¬ c ⊢ c $ by imp_elim [l11, l10]
+l13: $ g , (a → b) , ¬ c ⊢ ¬ c $ by ax
+l14: $ g , (a → b) , ¬ c ⊢ ⊥ $ by not_elim [l13, l12]
+l15: $ g , (a → b) ⊢ c $ by raa [l14]
+
 imp_left
 --------
 l1: $ g , (a → b) ⊢ b → c $ by imp_intro [#2]

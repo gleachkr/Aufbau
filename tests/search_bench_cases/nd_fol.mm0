@@ -343,6 +343,14 @@ theorem or_right_l (g: ctx) (a b: wff):
 theorem bi_left (g: ctx) (a b c: wff):
   $ g , a , b ⊢ c $ > $ g , ¬ a , ¬ b ⊢ c $ > $ g , (a ↔ b) ⊢ c $;
 
+-- Classical case split on the truth of `a`, G3c's left rule for `→`:
+-- invertible, so eager, and the goal stays `c` on both branches. The
+-- intuitionistic `imp_left` below stays as a distraction search must cope
+-- with.
+--| @auto eager 2
+theorem imp_case_left (g: ctx) (a b c: wff):
+  $ g , ¬ a ⊢ c $ > $ g , b ⊢ c $ > $ g , (a → b) ⊢ c $;
+
 --| @auto backward
 --| @auto focus $ a → b $ : $ a $ $ b $
 theorem imp_left (g: ctx) (a b c: wff):

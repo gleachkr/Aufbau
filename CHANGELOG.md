@@ -65,6 +65,20 @@ This file records notable user-facing changes to Aufbau. The project follows
   fresh variable on every round at no depth cost, until the `@vars` pool
   ran out. The fixture's bench rows stay 57/57; in the Pelletier battery
   problem 42 is now found, at 7% less work over the battery.
+- The `nd_fol` bench fixture gains `imp_case_left`, the classical left rule
+  for `→` as an eager case split (`g , ¬ a ⊢ c` and `g , b ⊢ c` give
+  `g , (a → b) ⊢ c`), next to the intuitionistic `imp_left`, which stays
+  as a rule the search must cope with. `imp_left` switches the goal to the
+  antecedent and costs a depth level per use, so Pelletier 46 needed about
+  11 levels; with the case split the search core finds it at depth 4. The
+  fixture's bench rows stay 57/57, and the Pelletier battery goes from 43
+  to 47 of 48 problems (24, 36, 37 and 46 are new, all found by the core)
+  at a quarter of the work on the problems found before.
+- The search core matches an unsafe rule's conclusion once per goal
+  instead of once per alternative tried, when the match fixes no unknown.
+  On a goal with 20 assumptions each `∀`/`→` member was rematched for every
+  other one; a Pelletier 47 lemma now costs a third of the work, with the
+  same search.
 - A search reuses the memory it frees instead of holding all of it until it
   returns, so its peak memory no longer grows with the work it does. On a
   Pelletier problem it was about 85 MB per unit of `budget`: 740 MB at the
