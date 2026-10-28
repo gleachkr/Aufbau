@@ -536,7 +536,10 @@ pub const Prover = struct {
         // Unsafe alternatives are tried after the closers and safe rules,
         // those whose premises the pool facts might close first.
         var alts = std.ArrayListUnmanaged(Alt).empty;
-        defer alts.deinit(self.allocator);
+        defer {
+            for (alts.items) |alt| if (alt.bindings) |bindings| self.allocator.free(bindings);
+            alts.deinit(self.allocator);
+        }
         for (targets.items, 0..) |target, at| {
             const by_head = if (self.terms.headOf(target)) |head| self.catalog.forHead(head) else &.{};
             // A bare-binder conclusion matches the goal as it stands.
@@ -555,7 +558,13 @@ pub const Prover = struct {
                         .binder => |idx| if (!std.mem.eql(u8, rule.args[idx].sort_name, goal_sort orelse break)) continue,
                     }
                     if (entry.role == .unsafe) {
-                        var scorer = Scorer{ .prover = self, .entry = entry, .target = target, .alts = &alts };
+                        var scorer = Scorer{
+                            .prover = self,
+                            .entry = entry,
+                            .target = target,
+                            .alts = &alts,
+                            .mark = self.wvars.mark(),
+                        };
                         _ = try self.terms.matchConclusion(rule, target, Scorer, &scorer);
                         continue;
                     }
@@ -577,6 +586,19 @@ pub const Prover = struct {
         if (any_safe) return .failed;
         std.mem.sort(Alt, alts.items, {}, Alt.lessThan);
         for (alts.items) |alt| {
+            if (alt.bindings) |bindings| {
+                var applier = Applier{
+                    .prover = self,
+                    .frame = frame,
+                    .target = alt.target,
+                    .how = .{ .rule = alt.entry },
+                    .premise_depth = goal.depth - 1,
+                    .close = close,
+                    .path = path,
+                };
+                if (try applier.match(bindings)) return applier.outcome;
+                continue;
+            }
             var picker = Picker{
                 .target = alt.index,
                 .applier = .{
@@ -604,6 +626,9 @@ pub const Prover = struct {
         target: ExprId,
         index: usize,
         open: usize,
+        /// The match's bindings when making it bound no wvar, so it
+        /// needs no redoing; owned by the prover's allocator.
+        bindings: ?[]const ?ExprId,
 
         fn lessThan(_: void, lhs: Alt, rhs: Alt) bool {
             if (lhs.open != rhs.open) return lhs.open < rhs.open;
@@ -618,6 +643,8 @@ pub const Prover = struct {
         entry: *const catalog_mod.Rule,
         target: ExprId,
         alts: *std.ArrayListUnmanaged(Alt),
+        /// The wvar log length before the match.
+        mark: usize,
         index: usize = 0,
 
         pub const Error = ProveError;
@@ -636,11 +663,14 @@ pub const Prover = struct {
                     if (prover.terms.mightFit(hyp, bindings, fact.expr)) break;
                 } else open += 1;
             }
+            const kept = if (prover.wvars.mark() == self.mark) try prover.allocator.dupe(?ExprId, bindings) else null;
+            errdefer if (kept) |slice| prover.allocator.free(slice);
             try self.alts.append(prover.allocator, .{
                 .entry = self.entry,
                 .target = self.target,
                 .index = self.index,
                 .open = open,
+                .bindings = kept,
             });
             self.index += 1;
             return false;
