@@ -4,8 +4,10 @@
 //!
 //! A goal is tried with the pool facts that state it and the closers, then
 //! the safe rules, and only when no safe rule applies, the unsafe rules one
-//! depth lower (with depth left). Safe rules cost no depth, so they apply
-//! at depth 0 too. A rule's premises go on the agenda ahead of the goal's
+//! depth lower (with depth left). A goal headed by a definition is tried
+//! with the rules for each head its unfoldings reach too, at no cost: the
+//! unfolding is a conversion the checker makes. Safe rules cost no depth,
+//! so they apply at depth 0 too. A rule's premises go on the agenda ahead of the goal's
 //! close marker; when the run reaches the marker the goal is proved, and
 //! the run goes on with the rest of the agenda. Each way of closing a goal
 //! is tried with its witness bindings in force, so a later goal sees what
@@ -401,17 +403,23 @@ pub const Prover = struct {
         var map = std.AutoHashMapUnmanaged(u32, ExprId).empty;
         defer map.deinit(self.allocator);
         for (proof.positions, order) |old, new| try map.put(self.allocator, old, self.wvars.vars.items[new].expr);
-        var memo = std.AutoHashMapUnmanaged(ExprId, ExprId).empty;
-        defer memo.deinit(self.allocator);
         for (proof.internals) |internal| {
             const wvar = self.wvars.vars.items[internal.wvar];
             const fresh = if (internal.introduced_at) |at|
-                try self.wvars.introduce(wvar.sort_name, try self.rename(at, &map, &memo))
+                try self.wvars.introduce(wvar.sort_name, at)
             else
                 try self.wvars.mint(wvar.sort_name, wvar.capture);
             try map.put(self.allocator, internal.wvar, fresh);
-            // Renamings made before this entry may hold the old leaf.
-            memo.clearRetainingCapacity();
+        }
+        var memo = std.AutoHashMapUnmanaged(ExprId, ExprId).empty;
+        defer memo.deinit(self.allocator);
+        // An introduction goal may hold eigenvariables introduced after it
+        // (an unfolding holds all its dummies), so it is renamed once every
+        // copy exists.
+        for (proof.internals) |internal| {
+            const at = internal.introduced_at orelse continue;
+            const copy = self.wvars.of(map.get(internal.wvar).?).?;
+            self.wvars.vars.items[copy].introduced_at = try self.rename(at, &map, &memo);
         }
         return self.renameNode(proof.node, &map, &memo);
     }
@@ -469,32 +477,46 @@ pub const Prover = struct {
     fn expand(self: *Prover, frame: *Frame, close: *const Agenda, path: *const PathCell) Error!Outcome {
         const goal = frame.goal;
         for (self.facts) |fact| {
-            var applier = Applier{ .prover = self, .frame = frame, .how = .{ .ref = fact.ref }, .close = close, .path = path };
-            if (try self.terms.unify(fact.expr, goal.expr, Applier, &applier)) return applier.outcome;
-        }
-        const head = switch (self.terms.theorem.interner.node(goal.expr).*) {
-            .app => |app| app.term_id,
-            else => return .failed,
-        };
-        var any_safe = false;
-        for (self.catalog.forHead(head)) |*entry| {
-            switch (entry.role) {
-                .closer => {},
-                .safe => {},
-                .unsafe => if (goal.depth == 0 or any_safe) break,
-            }
             var applier = Applier{
                 .prover = self,
                 .frame = frame,
-                .how = .{ .rule = entry },
-                .premise_depth = if (entry.role == .unsafe) goal.depth - 1 else goal.depth,
+                .target = goal.expr,
+                .how = .{ .ref = fact.ref },
                 .close = close,
                 .path = path,
             };
-            const rule = &self.context.env.rules.items[entry.rule_id];
-            const stopped = try self.terms.matchConclusion(rule, goal.expr, Applier, &applier);
-            if (applier.matched and entry.role == .safe) any_safe = true;
-            if (stopped) return applier.outcome;
+            if (try self.terms.unify(fact.expr, goal.expr, Applier, &applier)) return applier.outcome;
+        }
+        // The goal and its unfoldings, each tried with the rules for its
+        // head: unfolding is a conversion, which the checker makes.
+        var targets = std.ArrayListUnmanaged(ExprId).empty;
+        defer targets.deinit(self.allocator);
+        try targets.append(self.allocator, goal.expr);
+        while (try self.terms.unfold(targets.getLast())) |unfolded| try targets.append(self.allocator, unfolded);
+        // Closers and safe rules for every head first, then unsafe ones
+        // when no safe rule applied.
+        var any_safe = false;
+        for ([_]bool{ false, true }) |unsafe| {
+            if (unsafe and (goal.depth == 0 or any_safe)) break;
+            for (targets.items) |target| {
+                const head = self.terms.headOf(target) orelse continue;
+                for (self.catalog.forHead(head)) |*entry| {
+                    if ((entry.role == .unsafe) != unsafe) continue;
+                    var applier = Applier{
+                        .prover = self,
+                        .frame = frame,
+                        .target = target,
+                        .how = .{ .rule = entry },
+                        .premise_depth = if (unsafe) goal.depth - 1 else goal.depth,
+                        .close = close,
+                        .path = path,
+                    };
+                    const rule = &self.context.env.rules.items[entry.rule_id];
+                    const stopped = try self.terms.matchConclusion(rule, target, Applier, &applier);
+                    if (applier.matched and entry.role == .safe) any_safe = true;
+                    if (stopped) return applier.outcome;
+                }
+            }
         }
         return .failed;
     }
@@ -504,6 +526,8 @@ pub const Prover = struct {
     const Applier = struct {
         prover: *Prover,
         frame: *Frame,
+        /// The frame's goal, or the unfolding of it the step proves.
+        target: ExprId,
         how: union(enum) { rule: *const catalog_mod.Rule, ref: ProofScript.Ref },
         premise_depth: usize = 0,
         close: *const Agenda,
@@ -538,7 +562,7 @@ pub const Prover = struct {
                 for (full, bindings) |*value, binding| value.* = binding orelse undefined;
                 premises = entry.premises;
                 values = full;
-                if (entry.view) |view| values = try self.witness(entry, view, full, applier.frame.goal.expr);
+                if (entry.view) |view| values = try self.witness(entry, view, full, applier.target);
                 step = .{ .rule = .{ .rule_id = entry.rule_id, .bindings = full } };
             },
         }

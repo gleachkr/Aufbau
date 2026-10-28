@@ -21,6 +21,14 @@
 //! member (`pairBags`). An unbound wvar facing template structure does not
 //! match: the witnesses of these stages stand for terms the theory's rules
 //! never take apart.
+//!
+//! Matching and unification are modulo definitions on the expression
+//! side: where heads differ, an application of the later-declared
+//! definition unfolds one step (`unfold`) and the match goes on, since a
+//! definition's body only uses terms declared before it. Equal heads
+//! compare argument by argument. A rule template's own definitions never
+//! unfold. The checker makes the same conversion when it validates the
+//! proof.
 
 const std = @import("std");
 const ExprId = @import("../../../expr.zig").ExprId;
@@ -49,6 +57,12 @@ pub const Terms = struct {
     /// reads as.
     bags: std.AutoHashMapUnmanaged(u32, AcuiBag.Combiner) = .empty,
     canonical_memo: std.AutoHashMapUnmanaged(ExprId, ExprId) = .empty,
+    /// One-step unfoldings of definition applications; an expression maps
+    /// to itself when its body is past what the core reads.
+    unfold_memo: std.AutoHashMapUnmanaged(ExprId, ExprId) = .empty,
+    /// Whether an expression holds an application of a definition the core
+    /// can unfold.
+    defs: std.AutoHashMapUnmanaged(ExprId, bool) = .empty,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -71,6 +85,8 @@ pub const Terms = struct {
     pub fn deinit(self: *Terms) void {
         self.bags.deinit(self.allocator);
         self.canonical_memo.deinit(self.allocator);
+        self.unfold_memo.deinit(self.allocator);
+        self.defs.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -110,6 +126,66 @@ pub const Terms = struct {
                 return true;
             },
         }
+    }
+
+    /// `expr`, an application of a definition with a body, unfolded one
+    /// step: the body with the arguments in place and each dummy a fresh
+    /// eigenvariable introduced at the unfolding. Such a dummy may become
+    /// only a variable the unfolding does not otherwise mention, which is
+    /// MM0's condition on an unfolding: disjoint from the arguments, and
+    /// distinct from its siblings. An expression has one unfolding for the
+    /// run, so it unfolds with the same dummies wherever it appears. Null
+    /// when `expr` applies no such definition or its body is past what the
+    /// core reads.
+    pub fn unfold(self: *Terms, expr: ExprId) Error!?ExprId {
+        const app = switch (self.theorem.interner.node(expr).*) {
+            .app => |app| app,
+            .variable, .placeholder => return null,
+        };
+        const def = self.context.env.openableDef(app.term_id) orelse return null;
+        if (self.unfold_memo.get(expr)) |done| return if (done == expr) null else done;
+        const values = try self.allocator.alloc(ExprId, app.args.len + def.dummy_args.len);
+        defer self.allocator.free(values);
+        @memcpy(values[0..app.args.len], app.args);
+        const first = self.wvars.count();
+        for (def.dummy_args, values[app.args.len..]) |dummy, *value| {
+            value.* = try self.wvars.introduce(dummy.sort_name, expr);
+        }
+        const result = self.instantiate(def.body.?, values) catch |err| switch (err) {
+            error.Unsupported => {
+                try self.unfold_memo.put(self.allocator, expr, expr);
+                return null;
+            },
+            else => |e| return e,
+        };
+        for (first..self.wvars.count()) |idx| self.wvars.vars.items[idx].introduced_at = result;
+        try self.unfold_memo.put(self.allocator, expr, result);
+        return result;
+    }
+
+    /// The term `expr` applies, or null for a variable or placeholder.
+    pub fn headOf(self: *const Terms, expr: ExprId) ?u32 {
+        return switch (self.theorem.interner.node(expr).*) {
+            .app => |app| app.term_id,
+            .variable, .placeholder => null,
+        };
+    }
+
+    /// Whether `expr` holds an application of a definition `unfold` opens.
+    pub fn holdsDef(self: *Terms, expr: ExprId) Error!bool {
+        if (self.defs.get(expr)) |known| return known;
+        const result = switch (self.theorem.interner.node(expr).*) {
+            .variable, .placeholder => false,
+            .app => |app| blk: {
+                if (self.context.env.openableDef(app.term_id) != null) break :blk true;
+                for (app.args) |arg| {
+                    if (try self.holdsDef(arg)) break :blk true;
+                }
+                break :blk false;
+            },
+        };
+        try self.defs.put(self.allocator, expr, result);
+        return result;
     }
 
     /// `expr` with every bag in canonical form.
@@ -230,6 +306,7 @@ pub const Terms = struct {
                     }
                     return self.buildBag(combiner, &out);
                 }
+                if (app.args.len > catalog.max_args) return error.Unsupported;
                 var args: [catalog.max_args]ExprId = undefined;
                 for (app.args, 0..) |arg, idx| args[idx] = try self.instantiate(arg, bindings);
                 return self.theorem.interner.internApp(app.term_id, args[0..app.args.len]);
@@ -359,6 +436,9 @@ fn Matcher(comptime Sink: type) type {
                 .binder => |idx| try self.bind(idx, expr, next),
                 .app => |app| {
                     const target = self.terms.wvars.resolve(expr);
+                    if (try self.unfoldToward(app.term_id, target)) |unfolded| {
+                        return self.term(template, unfolded, next);
+                    }
                     if (self.terms.bagFor(app.term_id)) |combiner| {
                         return self.startBag(combiner, template, target, next);
                     }
@@ -374,6 +454,15 @@ fn Matcher(comptime Sink: type) type {
                     try self.run(&cell);
                 },
             }
+        }
+
+        /// `expr` unfolded one step when it applies a definition other than
+        /// `head` whose unfoldings can reach `head`: a definition's body
+        /// only uses terms declared before it.
+        fn unfoldToward(self: *Self, head: u32, expr: ExprId) Error!?ExprId {
+            const own = self.terms.headOf(expr) orelse return null;
+            if (own <= head) return null;
+            return self.terms.unfold(expr);
         }
 
         fn isBagTemplate(self: *const Self, template: TemplateExpr) bool {
@@ -395,20 +484,27 @@ fn Matcher(comptime Sink: type) type {
             const lhs = wvars.resolve(a);
             const rhs = wvars.resolve(b);
             if (lhs == rhs) return self.run(next);
-            // Ground terms are canonical, so distinct ids differ.
-            if (!try wvars.holdsWVar(lhs) and !try wvars.holdsWVar(rhs)) return;
+            // Ground terms are canonical, so distinct ids differ unless a
+            // definition unfolds.
+            if (!try wvars.holdsWVar(lhs) and !try wvars.holdsWVar(rhs) and
+                !try self.terms.holdsDef(lhs) and !try self.terms.holdsDef(rhs)) return;
             if (try self.bindWVar(lhs, rhs, next)) return;
             if (try self.bindWVar(rhs, lhs, next)) return;
+            const lhs_head = self.terms.headOf(lhs);
+            const rhs_head = self.terms.headOf(rhs);
+            if (lhs_head != rhs_head) {
+                // Only the later-declared definition's unfoldings can reach
+                // the other head.
+                const lhs_later = rhs_head == null or (lhs_head != null and lhs_head.? > rhs_head.?);
+                const later = if (lhs_later) lhs else rhs;
+                const unfolded = (try self.terms.unfold(later)) orelse return;
+                return self.unify(unfolded, if (lhs_later) rhs else lhs, next);
+            }
+            if (lhs_head == null) return;
             const interner = &self.terms.theorem.interner;
-            const lhs_app = switch (interner.node(lhs).*) {
-                .app => |app| app,
-                else => return,
-            };
-            const rhs_app = switch (interner.node(rhs).*) {
-                .app => |app| app,
-                else => return,
-            };
-            if (lhs_app.term_id != rhs_app.term_id or lhs_app.args.len != rhs_app.args.len) return;
+            const lhs_app = interner.node(lhs).app;
+            const rhs_app = interner.node(rhs).app;
+            if (lhs_app.args.len != rhs_app.args.len) return;
             if (self.terms.bagFor(lhs_app.term_id)) |combiner| {
                 if (try self.terms.same(lhs, rhs)) return self.run(next);
                 const pairing = (try @call(.never_inline, preparePairing, .{ self, combiner, lhs, rhs })) orelse return;

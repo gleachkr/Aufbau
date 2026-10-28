@@ -1523,6 +1523,9 @@ pub const GenerateOptions = struct {
     /// revision 2) before the generation ladder, which still runs when the
     /// core abstains or misses. Off only to measure the ladder alone.
     core: bool = true,
+    /// Run the generation ladder after the core. Off only to measure the
+    /// core alone.
+    ladder: bool = true,
 };
 
 pub const SourceSuggestionOptions = struct {

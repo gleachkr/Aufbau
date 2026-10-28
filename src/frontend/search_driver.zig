@@ -145,6 +145,8 @@ pub const Options = struct {
     params: []const ProofScript.SearchParam = &.{},
     /// Try the search core first (`GenerateOptions.core`).
     core: bool = true,
+    /// Run the generation ladder after it (`GenerateOptions.ladder`).
+    ladder: bool = true,
 };
 
 pub const Result = struct {
@@ -185,6 +187,7 @@ pub fn run(
     var marker_options = search_options;
     Search.tunables.applySearchParams(&marker_options.generate, options.params);
     marker_options.generate.core = options.core;
+    marker_options.generate.ladder = options.ladder;
 
     var markers = std.ArrayListUnmanaged(Marker).empty;
     // The found markers whose lines may have holes: where each proof went

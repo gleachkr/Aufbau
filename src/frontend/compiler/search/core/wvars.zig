@@ -15,7 +15,9 @@
 //! eigenvariables introduced before it; a γ wvar's level is the number
 //! introduced before it was minted. A γ wvar may hold an eigenvariable, or
 //! the variable one became, only of a lower level (W6), which keeps every
-//! eigenvariable out of the instances that existed before it.
+//! eigenvariable out of the instances that existed before it. A
+//! definition's dummy is an eigenvariable introduced at the unfolding that
+//! holds it (`Terms.unfold`).
 //!
 //! A wvar also carries the variables bound inside the formula it was swapped
 //! into: holding one of those would capture it.
@@ -315,11 +317,13 @@ pub const WVars = struct {
     }
 
     /// Whether wvar `idx` may hold, or as an eigenvariable become, the
-    /// variable `variable`.
+    /// variable `variable`. An eigenvariable becomes only a bound variable.
     pub fn admits(self: *WVars, idx: u32, variable: ExprId) bool {
         const wvar = self.vars.items[idx];
         if (std.mem.indexOfScalar(ExprId, wvar.capture, variable) != null) return false;
         if (wvar.introduced_at) |goal| {
+            const info = (self.theorem.currentLeafInfo(variable) catch null) orelse return false;
+            if (!info.bound) return false;
             return !self.eigens.contains(variable) and !self.mentions(goal, variable);
         }
         const level = self.eigens.get(variable) orelse return true;

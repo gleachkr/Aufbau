@@ -321,12 +321,12 @@ test "the search core matches a definition as an ordinary term" {
     try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
 }
 
-test "a goal that needs a definition unfolded goes on to the ladder" {
+test "the search core unfolds a definition to match a rule" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    // The core never unfolds `dn`, so `dn a ⊢ ¬ ¬ a` is out of its reach;
-    // the generation search finds a proof the checker accepts by unfolding.
+    // `ax` closes `dn a ⊢ ¬ ¬ a` once `dn a` unfolds; the checker accepts
+    // the step by unfolding `dn`.
     var suggestions = try search(&arena, dn_def ++
         \\theorem dn_unfold (a: wff): $ ∅ ⊢ dn a → ¬ ¬ a $;
     ,
@@ -336,7 +336,137 @@ test "a goal that needs a definition unfolded goes on to the ladder" {
     , &counters, true);
     defer suggestions.deinit();
 
+    try expectOffered(suggestions.items, &.{"imp_intro [ax []]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "a definition's dummy is a variable the proof names" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `some_p` unfolds to `∃ y P y` with `y` a dummy; `ex_intro` takes the
+    // witness `C` from the context, and the dummy, which the printed proof
+    // leaves to the checker, is named at close-out.
+    var suggestions = try ndFolSearch(
+        &arena,
+        "def some_p {.y: obj}: wff = $ ∃ y P y $;\n" ++
+            "theorem some_p_cc: $ P cc ⊢ some_p $;\n",
+        "some_p_cc",
+        "P cc ⊢ some_p",
+        &counters,
+        6,
+    );
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"ex_intro [ax (g := $ ∅ $, a := $ P C $) []]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "a hypothesis stated with a definition closes the unfolded goal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `#1`'s dummy unifies with the goal's bound `x`.
+    var suggestions = try ndFolSearch(
+        &arena,
+        "def all_q {.y: obj}: wff = $ ∀ y Q y $;\n" ++
+            "theorem all_q_use {x: obj}: $ ∅ ⊢ all_q $ > $ ∅ ⊢ (∀ x Q x) ∧ (∀ x Q x) $;\n",
+        "all_q_use",
+        "∅ ⊢ (∀ x Q x) ∧ (∀ x Q x)",
+        &counters,
+        6,
+    );
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"and_intro [#1, #1]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+}
+
+test "a definition's dummy never becomes a variable its arguments hold" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `other x` unfolds to `∀ y (P y → P x)`; reading `#1` as that unfolding
+    // would make the dummy `x` and capture the argument.
+    var suggestions = try ndFolSearch(
+        &arena,
+        "def other {.y: obj} (a: obj): wff = $ ∀ y (P y → P a) $;\n" ++
+            "theorem capture {x: obj}: $ ∅ ⊢ ∀ x (P x → P x) $ > $ ∅ ⊢ other x ∧ other x $;\n",
+        "capture",
+        "∅ ⊢ other x ∧ other x",
+        &counters,
+        2,
+    );
+    defer suggestions.deinit();
+
+    try std.testing.expect(counters.core_nodes > 0);
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+    try std.testing.expect(!std.mem.eql(u8, "the search core", generate.phaseName(counters.gen_last_phase)));
+}
+
+test "a definition's dummy never becomes an ordinary variable" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `all_p` unfolds to `∀ y P y`; `gen`, tried first, keeps the dummy as
+    // its bound variable, and `ax` would then make it `a`, which is not a
+    // bound variable at all. Unprovable, and the core must not hand the checker
+    // that proof.
+    var suggestions = try ndFolSearch(
+        &arena,
+        "def all_p {.y: obj}: wff = $ ∀ y P y $;\n" ++
+            "--| @auto eager 1\naxiom gen {x: obj} (g: ctx) (p: wff x): $ g ⊢ p $ > $ g ⊢ ∀ x p $;\n" ++
+            "theorem all_p_bad (a: obj): $ P a ⊢ all_p $;\n",
+        "all_p_bad",
+        "P a ⊢ all_p",
+        &counters,
+        2,
+    );
+    defer suggestions.deinit();
+
+    try std.testing.expect(counters.core_nodes > 0);
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+    try std.testing.expect(!std.mem.eql(u8, "the search core", generate.phaseName(counters.gen_last_phase)));
+}
+
+// `dn T` stated by an axiom: proving `¬ ¬ T` from it unfolds the rule's
+// conclusion, which the core does not do.
+const dn_axiom =
+    \\term T: wff;
+    \\axiom t_dn: $ ∅ ⊢ dn T $;
+    \\theorem dn_t: $ ∅ ⊢ ¬ ¬ T ∧ ¬ ¬ T $;
+;
+const dn_axiom_proof =
+    \\dn_t
+    \\----
+    \\l1: $ ∅ ⊢ ¬ ¬ T ∧ ¬ ¬ T $ by auto?
+;
+
+test "a goal that needs a rule's definition unfolded goes on to the ladder" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena, dn_def ++ dn_axiom, dn_axiom_proof, &counters, true);
+    defer suggestions.deinit();
+
     try std.testing.expect(suggestions.items.len > 0);
     try std.testing.expect(counters.core_nodes > 0);
     try std.testing.expect(!std.mem.eql(u8, "the search core", generate.phaseName(counters.gen_last_phase)));
+}
+
+test "with the ladder off, a goal the search core cannot prove has no proof" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // The ladder proves this goal (test above).
+    var suggestions = try suggestionsAtNeedle(&arena, nd_rules ++ dn_def ++ dn_axiom, dn_axiom_proof, "auto?", .{
+        .counters = &counters,
+        .generate = .{ .enabled = true, .ladder = false },
+    });
+    defer suggestions.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
+    try std.testing.expect(counters.core_nodes > 0);
 }

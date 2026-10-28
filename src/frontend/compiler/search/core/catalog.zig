@@ -15,11 +15,11 @@
 //! bound one is δ (`all_intro`'s `y`), an eigenvariable. Such a rule's
 //! premises are the view's, so a premise holds the instance itself, not a
 //! substitution redex. Rules are admitted over commutative `@acui` bags
-//! with at most one rest binder per bag. A definition is an ordinary term
-//! constructor: the core never unfolds it, and a proof that needs the
-//! unfolding is the checker's to find or the generation search's. Rules
-//! with other unfixed binders (cuts) or fresh variables wait for the later
-//! stages, as do bridges, which only link facts already in hand.
+//! with at most one rest binder per bag. A definition in a rule is an
+//! ordinary term constructor: the core unfolds definitions in goals and
+//! facts (`terms.zig`), never in a rule's own templates. Rules with other
+//! unfixed binders (cuts) or fresh variables wait for the later stages, as
+//! do bridges, which only link facts already in hand.
 
 const std = @import("std");
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;

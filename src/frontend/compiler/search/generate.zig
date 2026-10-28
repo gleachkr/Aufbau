@@ -511,7 +511,7 @@ pub fn generateTopLevel(
     }
     var applications = std.ArrayListUnmanaged(RuleApplication).empty;
     if (options.core and goal == .concrete) try runCore(&driver, theorem, goal_expr, &applications);
-    if (applications.items.len == 0) try runPhaseLadder(&driver, goal_expr, &applications, schedule);
+    if (applications.items.len == 0 and options.ladder) try runPhaseLadder(&driver, goal_expr, &applications, schedule);
 
     // Mirror the forward layer's meta-store activity into the bench counters.
     if (derived_pool) |*dpool| {

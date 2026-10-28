@@ -89,6 +89,9 @@ const SearchCommand = struct {
     /// ladder runs (`GenerateOptions.core`). A development switch for
     /// measuring the ladder alone, so the usage text does not list it.
     core: bool = true,
+    /// `--core-only`: leave the generation ladder out, so only the search
+    /// core runs (`GenerateOptions.ladder`). Unlisted, like `--no-core`.
+    ladder: bool = true,
 };
 
 const JoinCommand = struct {
@@ -190,6 +193,8 @@ fn parseSearchFlag(
         search.budget = try flagNumber(argv, i);
     } else if (std.mem.eql(u8, arg, "--no-core")) {
         search.core = false;
+    } else if (std.mem.eql(u8, arg, "--core-only")) {
+        search.ladder = false;
     } else return false;
     return true;
 }
@@ -477,7 +482,7 @@ fn runSearch(
         allocator,
         pair.mm0.text,
         proof.text,
-        .{ .only = cmd.only, .retries = cmd.retries, .params = params, .core = cmd.core },
+        .{ .only = cmd.only, .retries = cmd.retries, .params = params, .core = cmd.core, .ladder = cmd.ladder },
     );
     defer result.deinit();
     if (cmd.only) |only| if (result.markers.len == 0) {
