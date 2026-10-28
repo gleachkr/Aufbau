@@ -12,14 +12,17 @@ This file records notable user-facing changes to Aufbau. The project follows
   proof and fills it in by unification when a later step needs a
   particular term. It unfolds a definition in a goal or hypothesis where
   a rule needs what the definition stands for, with the definition's
-  hidden bound variables named once the proof needs them. A goal the core
-  does not take (holes, non-commutative `@acui` combiners) or cannot prove
-  goes on to the existing generation search in what is left of the same
-  budget, and the checker validates every proof either way. On the bench
-  corpus two more rows are found and none is lost; the `nd_fol` rows cost
-  97% fewer ticks and the `additive_fol` rows 29% fewer, and the Pelletier
-  battery goes from 39 to 43 of 48 problems found. The per-call `nodes` and `fuel` parameters
-  bound only the generation search.
+  hidden bound variables named once the proof needs them, and tries a
+  goal in its `@rewrite` normal form too, so an induction rule's premise
+  stated as a substitution meets the facts for what it reduces to. A
+  goal the core does not take (holes, non-commutative `@acui` combiners)
+  or cannot prove goes on to the existing generation search in what is
+  left of the same budget, and the checker validates every proof either
+  way. On the bench corpus nine more rows are found and none is lost;
+  the `nd_fol` rows cost 97% fewer ticks and the `additive_fol` rows 29%
+  fewer, and the Pelletier battery goes from 39 to 43 of 48 problems
+  found. The per-call `nodes` and `fuel` parameters bound only the
+  generation search.
 - `@auto focus $ PRINCIPAL $ : CONTINUATION...`: focused proof search. The
   annotation names the formula a rule decomposes and, per hypothesis, the
   formula that stays in focus there (`_` releases it). Applying a focus rule

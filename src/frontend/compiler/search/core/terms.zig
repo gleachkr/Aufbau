@@ -29,6 +29,13 @@
 //! compare argument by argument. A rule template's own definitions never
 //! unfold. The checker makes the same conversion when it validates the
 //! proof.
+//!
+//! A goal holding a term some `@rewrite` rule rewrites also has a normal
+//! form (`normalForm`), which the prover tries beside it: the conversion to
+//! it is the checker's normalization. A term holding a witness variable
+//! has none yet, since what the variable becomes decides a rewrite's
+//! dependency conditions (`sb_t x t a` drops the substitution only when `a`
+//! does not depend on `x`).
 
 const std = @import("std");
 const ExprId = @import("../../../expr.zig").ExprId;
@@ -39,6 +46,7 @@ const AcuiBag = @import("../../../acui_bag.zig");
 const Context = @import("../types.zig").Context;
 const catalog = @import("./catalog.zig");
 const WVars = @import("./wvars.zig").WVars;
+const Canonicalizer = @import("../../../normalizer.zig").Canonicalizer;
 
 pub const Error = error{
     OutOfMemory,
@@ -63,6 +71,14 @@ pub const Terms = struct {
     /// Whether an expression holds an application of a definition the core
     /// can unfold.
     defs: std.AutoHashMapUnmanaged(ExprId, bool) = .empty,
+    /// Whether an expression holds an application of a term some
+    /// `@rewrite` rule rewrites.
+    redexes: std.AutoHashMapUnmanaged(ExprId, bool) = .empty,
+    /// Normal forms; an expression maps to itself when it is its own, or
+    /// the rewrites fail on it.
+    normal_memo: std.AutoHashMapUnmanaged(ExprId, ExprId) = .empty,
+    /// Created on the first normal form; its cache lasts the run.
+    canonicalizer: ?Canonicalizer = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -87,6 +103,9 @@ pub const Terms = struct {
         self.canonical_memo.deinit(self.allocator);
         self.unfold_memo.deinit(self.allocator);
         self.defs.deinit(self.allocator);
+        self.redexes.deinit(self.allocator);
+        self.normal_memo.deinit(self.allocator);
+        if (self.canonicalizer) |*canonicalizer| canonicalizer.deinit();
         self.* = undefined;
     }
 
@@ -173,19 +192,63 @@ pub const Terms = struct {
 
     /// Whether `expr` holds an application of a definition `unfold` opens.
     pub fn holdsDef(self: *Terms, expr: ExprId) Error!bool {
-        if (self.defs.get(expr)) |known| return known;
+        return self.holdsHead(&self.defs, expr, isOpenableDef);
+    }
+
+    fn isOpenableDef(self: *const Terms, term_id: u32) bool {
+        return self.context.env.openableDef(term_id) != null;
+    }
+
+    fn isRewritten(self: *const Terms, term_id: u32) bool {
+        return self.context.registry.getRewriteRules(term_id).len != 0;
+    }
+
+    /// Whether `expr` holds an application of a term `pred` accepts,
+    /// memoized in `memo`.
+    fn holdsHead(
+        self: *Terms,
+        memo: *std.AutoHashMapUnmanaged(ExprId, bool),
+        expr: ExprId,
+        comptime pred: fn (*const Terms, u32) bool,
+    ) Error!bool {
+        if (memo.get(expr)) |known| return known;
         const result = switch (self.theorem.interner.node(expr).*) {
             .variable, .placeholder => false,
             .app => |app| blk: {
-                if (self.context.env.openableDef(app.term_id) != null) break :blk true;
+                if (pred(self, app.term_id)) break :blk true;
                 for (app.args) |arg| {
-                    if (try self.holdsDef(arg)) break :blk true;
+                    if (try self.holdsHead(memo, arg, pred)) break :blk true;
                 }
                 break :blk false;
             },
         };
-        try self.defs.put(self.allocator, expr, result);
+        try memo.put(self.allocator, expr, result);
         return result;
+    }
+
+    /// The canonical normal form of `expr` under the theory's `@rewrite`
+    /// rules, or null when `expr` is its own normal form, holds a witness
+    /// variable, or the normalizer fails on it (a rewrite cycle, or past
+    /// the step limit).
+    pub fn normalForm(self: *Terms, expr: ExprId) Error!?ExprId {
+        if (!try self.holdsHead(&self.redexes, expr, isRewritten)) return null;
+        if (try self.wvars.holdsWVar(expr)) return null;
+        if (self.normal_memo.get(expr)) |done| return if (done == expr) null else done;
+        if (self.canonicalizer == null) {
+            self.canonicalizer = Canonicalizer.init(self.allocator, self.theorem, self.context.registry, self.context.env, {});
+        }
+        const canonicalizer = &self.canonicalizer.?;
+        const normal = canonicalizer.canonicalizeWithFreshBudget(expr) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TooManyTheoremExprs => return error.TooManyTheoremExprs,
+            else => expr,
+        };
+        const result = if (normal == expr) expr else self.canonical(normal) catch |err| switch (err) {
+            error.Unsupported => expr,
+            else => |e| return e,
+        };
+        try self.normal_memo.put(self.allocator, expr, result);
+        return if (result == expr) null else result;
     }
 
     /// `expr` with every bag in canonical form.

@@ -4,12 +4,12 @@
 //! It searches ground goals with the rules whose conclusion fixes every
 //! binder but the quantifier witnesses (`catalog.zig`), over commutative
 //! `@acui` bags matched member by member (`terms.zig`), unfolding a
-//! definition in a goal or fact where its head does not match. A γ
-//! witness is a witness variable closed by unification, a δ one (or a
-//! definition's dummy) an eigenvariable whose name waits until the proof
-//! needs one (`wvars.zig`). It runs before the generation ladder
-//! (`GenerateOptions.core`, on by default), which still runs when the core
-//! abstains or misses.
+//! definition in a goal or fact where its head does not match, and trying
+//! a goal in its `@rewrite` normal form. A γ witness is a witness variable
+//! closed by unification, a δ one (or a definition's dummy) an
+//! eigenvariable whose name waits until the proof needs one (`wvars.zig`).
+//! It runs before the generation ladder (`GenerateOptions.core`, on by
+//! default), which still runs when the core abstains or misses.
 //!
 //! The run works in a clone of the call's theorem, discarded at the end.
 //! The proof record is rendered as one `RuleApplication` tree with every

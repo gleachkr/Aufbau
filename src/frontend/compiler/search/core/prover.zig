@@ -4,11 +4,12 @@
 //!
 //! A goal is tried with the pool facts that state it and the closers, then
 //! the safe rules, and only when no safe rule applies, the unsafe rules one
-//! depth lower (with depth left). A goal headed by a definition is tried
-//! with the rules for each head its unfoldings reach too, at no cost: the
-//! unfolding is a conversion the checker makes. Safe rules cost no depth,
-//! so they apply at depth 0 too. A rule's premises go on the agenda ahead of the goal's
-//! close marker; when the run reaches the marker the goal is proved, and
+//! depth lower (with depth left). A goal with an `@rewrite` normal form is
+//! tried in that form too, and one headed by a definition with the rules
+//! for each head its unfoldings reach, at no cost: each is a conversion the
+//! checker makes. Safe rules cost no depth, so they apply at depth 0 too.
+//! A rule's premises go on the agenda ahead of the goal's close marker;
+//! when the run reaches the marker the goal is proved, and
 //! the run goes on with the rest of the agenda. Each way of closing a goal
 //! is tried with its witness bindings in force, so a later goal sees what
 //! an earlier one bound.
@@ -476,22 +477,27 @@ pub const Prover = struct {
     /// or a cut.
     fn expand(self: *Prover, frame: *Frame, close: *const Agenda, path: *const PathCell) Error!Outcome {
         const goal = frame.goal;
-        for (self.facts) |fact| {
-            var applier = Applier{
-                .prover = self,
-                .frame = frame,
-                .target = goal.expr,
-                .how = .{ .ref = fact.ref },
-                .close = close,
-                .path = path,
-            };
-            if (try self.terms.unify(fact.expr, goal.expr, Applier, &applier)) return applier.outcome;
-        }
-        // The goal and its unfoldings, each tried with the rules for its
-        // head: unfolding is a conversion, which the checker makes.
+        // The goal, its normal form and the unfoldings of the last, each
+        // tried with the rules for its head: each is a conversion, which
+        // the checker makes. Facts meet the goal and its normal form, and
+        // unification unfolds definitions itself.
         var targets = std.ArrayListUnmanaged(ExprId).empty;
         defer targets.deinit(self.allocator);
         try targets.append(self.allocator, goal.expr);
+        if (try self.terms.normalForm(goal.expr)) |normal| try targets.append(self.allocator, normal);
+        for (targets.items) |target| {
+            for (self.facts) |fact| {
+                var applier = Applier{
+                    .prover = self,
+                    .frame = frame,
+                    .target = target,
+                    .how = .{ .ref = fact.ref },
+                    .close = close,
+                    .path = path,
+                };
+                if (try self.terms.unify(fact.expr, target, Applier, &applier)) return applier.outcome;
+            }
+        }
         while (try self.terms.unfold(targets.getLast())) |unfolded| try targets.append(self.allocator, unfolded);
         // Closers and safe rules for every head first, then unsafe ones
         // when no safe rule applied.
@@ -526,7 +532,7 @@ pub const Prover = struct {
     const Applier = struct {
         prover: *Prover,
         frame: *Frame,
-        /// The frame's goal, or the unfolding of it the step proves.
+        /// The frame's goal, or the conversion of it the step proves.
         target: ExprId,
         how: union(enum) { rule: *const catalog_mod.Rule, ref: ProofScript.Ref },
         premise_depth: usize = 0,

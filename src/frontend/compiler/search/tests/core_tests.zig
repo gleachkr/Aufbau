@@ -431,6 +431,31 @@ test "a definition's dummy never becomes an ordinary variable" {
     try std.testing.expect(!std.mem.eql(u8, "the search core", generate.phaseName(counters.gen_last_phase)));
 }
 
+test "the search core proves a premise in its rewrite normal form" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `twice_intro`'s premise holds the redex `dbl a`, which rewrites to
+    // `a ∧ a`; the checker accepts the step by normalizing the premise.
+    var suggestions = try search(&arena,
+        \\term dbl (a: wff): wff;
+        \\--| @rewrite
+        \\axiom dbl_an (a: wff): $ dbl a ↔ a ∧ a $;
+        \\term twice (a: wff): wff;
+        \\axiom twice_intro (g: ctx) (a: wff): $ g ⊢ dbl a $ > $ g ⊢ twice a $;
+        \\theorem twice_a (a: wff): $ a ⊢ twice a $;
+    ,
+        \\twice_a
+        \\-------
+        \\l1: $ a ⊢ twice a $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"twice_intro [and_intro [ax [], ax []]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
 // `dn T` stated by an axiom: proving `¬ ¬ T` from it unfolds the rule's
 // conclusion, which the core does not do.
 const dn_axiom =
