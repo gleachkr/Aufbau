@@ -12,7 +12,7 @@
 //!   above became) and which of the goal's eigenvariables are older than
 //!   it;
 //! - an eigenvariable: the variables it may not become, among those the
-//!   goal or a pool fact mentions, since no other variable can meet it.
+//!   goal or a fact mentions, since no other variable can meet it.
 //!
 //! Equal keys mean goals equal up to renaming their wvars, so a failure
 //! recorded under one key holds for every goal with that key. Bag members
@@ -35,7 +35,7 @@ pub const Keys = struct {
     arena: std.mem.Allocator,
     terms: *Terms,
     wvars: *WVars,
-    /// The variables the pool facts mention, sorted.
+    /// The variables the facts mention, sorted.
     fact_vars: []const ExprId,
     /// Per expression, a hash of its shape with every wvar leaf alike.
     shapes: std.AutoHashMapUnmanaged(ExprId, u64) = .empty,

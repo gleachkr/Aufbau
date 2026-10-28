@@ -2,9 +2,9 @@
 //! one agenda of open goals, solved most recent first in
 //! continuation-passing style, and one proof record.
 //!
-//! A goal is tried with the pool facts that state it and the closers, then
+//! A goal is tried with the facts that state it and the closers, then
 //! the safe rules, and only when no safe rule applies, the unsafe rules one
-//! depth lower (with depth left), those with fewer premises no pool fact
+//! depth lower (with depth left), those with fewer premises no fact
 //! might close first. A goal with an `@rewrite` normal form is tried in
 //! that form too, and one headed by a definition with the rules for each
 //! head its unfoldings reach, at no cost: each is a conversion the checker
@@ -15,9 +15,9 @@
 //! bindings in force, so a later goal sees what an earlier one bound.
 //!
 //! A cut wvar is chosen by the proof, never invented: a goal that holds
-//! one unbound is closed by a pool fact or a closer, or by a rule whose
+//! one unbound is closed by a fact or a closer, or by a rule whose
 //! conclusion match binds one of its cut wvars, and no other rule works on
-//! it. So a rule's premises that a pool fact might close come first, and
+//! it. So a rule's premises that a fact might close come first, and
 //! an unbound wvar premise waits for a sibling that fixes it.
 //!
 //! When the continuation of a proved goal fails, and proving the goal bound
@@ -69,11 +69,12 @@ pub const Node = struct {
 pub const Step = union(enum) {
     /// The rule's binder values; witnesses may still be wvars.
     rule: struct { rule_id: u32, bindings: []const ExprId },
-    /// A pool fact that states the goal.
+    /// A fact that states the goal.
     ref: ProofScript.Ref,
 };
 
-/// A pool fact and the canonical expression it states.
+/// A pool ref, or the recipe of a fact forward saturation derived, and
+/// the canonical expression it states.
 pub const Fact = struct {
     expr: ExprId,
     ref: ProofScript.Ref,
@@ -534,7 +535,7 @@ pub const Prover = struct {
         const goal_sort = self.wvars.sortOf(goal.expr);
         var any_safe = false;
         // Unsafe alternatives are tried after the closers and safe rules,
-        // those whose premises the pool facts might close first.
+        // those whose premises the facts might close first.
         var alts = std.ArrayListUnmanaged(Alt).empty;
         defer {
             for (alts.items) |alt| if (alt.bindings) |bindings| self.allocator.free(bindings);
@@ -618,7 +619,7 @@ pub const Prover = struct {
     }
 
     /// One way an unsafe rule's conclusion matches a goal: the `index`th
-    /// match and how many of its premises no pool fact might close. The
+    /// match and how many of its premises no fact might close. The
     /// rule's declaration order breaks ties.
     const Alt = struct {
         entry: *const catalog_mod.Rule,
@@ -782,7 +783,7 @@ pub const Prover = struct {
     }
 
     /// The order to prove the premises `exprs` in, as indices into `order`.
-    /// Those a pool fact might close go first: closing them binds the cut
+    /// Those a fact might close go first: closing them binds the cut
     /// wvars the others share. A premise that is an unbound wvar goes last
     /// when such a sibling holds it, since any fact fits the wvar: closing
     /// it first only guesses what the sibling fixes.

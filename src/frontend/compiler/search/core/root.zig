@@ -5,12 +5,13 @@
 //! binder but the quantifier witnesses and cuts (`catalog.zig`), over
 //! commutative `@acui` bags matched member by member (`terms.zig`),
 //! unfolding a definition in a goal or fact where its head does not match,
-//! and trying a goal in its `@rewrite` normal form. A γ witness or cut is a
-//! witness variable closed by unification, a δ one (or a definition's
-//! dummy) an eigenvariable whose name waits until the proof needs one
-//! (`wvars.zig`). It runs before the generation ladder
-//! (`GenerateOptions.core`, on by default), which still runs when the core
-//! abstains or misses.
+//! and trying a goal in its `@rewrite` normal form. Its facts are the pool
+//! refs and the ground facts forward saturation derived from them, each
+//! standing for its recipe. A γ witness or cut is a witness variable closed
+//! by unification, a δ one (or a definition's dummy) an eigenvariable whose
+//! name waits until the proof needs one (`wvars.zig`). It runs before the
+//! generation ladder (`GenerateOptions.core`, on by default), which still
+//! runs when the core abstains or misses.
 //!
 //! The run works in a clone of the call's theorem, discarded at the end.
 //! The proof record is rendered as one `RuleApplication` tree with every
@@ -49,6 +50,9 @@ pub const Request = struct {
     /// The theorem the pool refs are stated in.
     pool_theorem: *const TheoremContext,
     pool: []const refs_mod.RefPoolEntry,
+    /// Facts forward saturation derived from the pool; those forward rules
+    /// derived that hold no universal meta join the pool facts.
+    derived: ?*types.DerivedPool = null,
     goal: ExprId,
     max_depth: usize,
     stack_guard_bytes: usize,
@@ -89,7 +93,7 @@ pub fn run(request: Request) !Result {
 
     var catalog = try catalog_mod.build(request.scratch, request.context);
     defer catalog.deinit();
-    const facts = try poolFacts(request, &terms, arena.allocator());
+    const facts = try poolFacts(request, &theorem, &terms, arena.allocator());
     var keys = Keys{
         .allocator = request.scratch,
         .arena = arena.allocator(),
@@ -131,8 +135,9 @@ pub fn run(request: Request) !Result {
     return .missed;
 }
 
-/// The pool facts the core can close a goal with, canonical.
-fn poolFacts(request: Request, terms: *Terms, arena: std.mem.Allocator) ![]const prover_mod.Fact {
+/// The pool facts the core can close a goal with, canonical, then the
+/// ground facts forward rules derived, each standing for its recipe.
+fn poolFacts(request: Request, theorem: *TheoremContext, terms: *Terms, arena: std.mem.Allocator) ![]const prover_mod.Fact {
     var facts = std.ArrayListUnmanaged(prover_mod.Fact).empty;
     for (request.pool) |entry| {
         const expr = refs_mod.sourceRefExpr(request.context, request.pool_theorem, entry.ref) catch continue;
@@ -143,6 +148,26 @@ fn poolFacts(request: Request, terms: *Terms, arena: std.mem.Allocator) ![]const
         };
         try facts.append(arena, .{ .expr = canonical, .ref = entry.ref });
     }
+    if (request.derived) |dpool| for (dpool.refs) |*dref| {
+        // A trigger seed has no sources: an axiom instance the closers
+        // already give.
+        if (dref.sources.len == 0 or dref.has_universal_meta) continue;
+        if (!try terms.supported(dref.shape)) continue;
+        const canonical = terms.canonical(dref.shape) catch |err| switch (err) {
+            error.Unsupported => continue,
+            else => |e| return e,
+        };
+        const application = (try forward.materializeApplication(
+            dpool,
+            request.context,
+            theorem,
+            request.theorem_vars,
+            null,
+            dref,
+            null,
+        )) orelse continue;
+        try facts.append(arena, .{ .expr = canonical, .ref = .{ .application = application } });
+    };
     return facts.items;
 }
 
@@ -171,8 +196,12 @@ const CloseOut = struct {
 
     fn tryRoot(ctx: *anyopaque, root: *const Node) prover_mod.Error!bool {
         const self: *CloseOut = @ptrCast(@alignCast(ctx));
-        // A goal a pool fact states is direct `exact?`'s to report.
-        if (root.step != .rule) return false;
+        // A goal a pool fact states is direct `exact?`'s to report; one a
+        // derived fact states is proved by the fact's recipe.
+        switch (root.step) {
+            .rule => {},
+            .ref => |ref| if (ref != .application) return false,
+        }
         const request = self.request;
         var namer = forward.Namer.init(request.scratch);
         defer namer.deinit();
@@ -181,7 +210,10 @@ const CloseOut = struct {
         const mark = self.wvars.mark();
         defer self.wvars.rollback(mark);
         if (!try self.nameEigens(root)) return false;
-        const application = (try self.render(&namer, root)) orelse return false;
+        const application = switch (root.step) {
+            .rule => (try self.render(&namer, root)) orelse return false,
+            .ref => |ref| ref.application,
+        };
         if (request.counters) |c| c.full_try_candidate_calls += 1;
         if (request.budget) |budget| try budget.spendCandidate();
         var attempt = candidate_mod.probe(

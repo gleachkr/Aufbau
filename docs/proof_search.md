@@ -107,7 +107,11 @@ statement. It also tries a goal in its `@rewrite` normal form, so a
 premise a rule states as a redex (an induction rule's `sb_f x 0 p`)
 meets the hypotheses and rules for the form it reduces to; a goal
 holding a witness the core has not chosen waits, since what the witness
-becomes can decide a rewrite. A goal the core does not take (one with
+becomes can decide a rewrite. Besides the hypotheses, the core closes
+goals with the facts the `@auto forward` pass derives from them (those
+with no quantifier witness left open), so a rule it cannot apply backward,
+such as one joining two contexts, still reaches the proof through its
+forward instances. A goal the core does not take (one with
 holes or a non-commutative `@acui` combiner) or cannot prove within the
 depth limit goes on to the generation search, in what is left of the
 same work budget.

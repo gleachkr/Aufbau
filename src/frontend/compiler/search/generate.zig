@@ -551,6 +551,7 @@ fn runCore(
         .theorem_vars = driver.theorem_vars,
         .pool_theorem = theorem,
         .pool = try driver.session.getReferencePool(theorem, driver.counters),
+        .derived = driver.derived,
         .goal = goal_expr,
         .max_depth = driver.options.max_depth,
         .stack_guard_bytes = driver.options.stack_guard_bytes,
@@ -569,7 +570,9 @@ fn runCore(
                 c.gen_last_depth = found.depth;
                 c.gen_last_phase = search_core_phase;
             }
-            try applications.append(driver.arena, found.application);
+            // A derived fact's recipe lives in the derived pool, freed
+            // with the call.
+            try applications.append(driver.arena, try cloneApplication(driver.arena, found.application));
         },
     }
 }

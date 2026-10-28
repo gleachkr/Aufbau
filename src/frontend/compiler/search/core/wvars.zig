@@ -8,7 +8,7 @@
 //! closed by unification.
 //!
 //! An eigenvariable (δ) is a wvar too, so its name is chosen only once the
-//! proof needs one: a pool fact may state the goal for one particular
+//! proof needs one: a fact may state the goal for one particular
 //! variable, and MM0 has no alpha-equivalence to rename it. It may become
 //! a variable its introduction goal does not mention, and nothing else;
 //! leftovers are named at close-out. Its level is the number of

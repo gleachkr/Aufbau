@@ -575,3 +575,48 @@ test "the search core fixes a cut from a hypothesis before the premise only a cl
     try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
+
+// A forward rule joining two contexts, which the core cannot apply
+// backward: its conclusion's bag has two rest binders.
+const join_rules =
+    \\--| @auto forward
+    \\axiom imp_elim_m (g h: ctx) (a b: wff): $ g ⊢ a → b $ > $ h ⊢ a $ > $ g , h ⊢ b $;
+    \\
+;
+
+test "the search core closes a goal with a fact forward saturation derived" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena, join_rules ++
+        \\theorem join_mp (g h: ctx) (a b: wff): $ g ⊢ a → b $ > $ h ⊢ a $ > $ g , h ⊢ b $;
+    ,
+        \\join_mp
+        \\-------
+        \\l1: $ g , h ⊢ b $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"imp_elim_m [#1, #2]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "the search core closes premises with a fact forward saturation derived" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena, join_rules ++
+        \\theorem join_mp_pair (g h: ctx) (a b: wff):
+        \\  $ g ⊢ a → b $ > $ h ⊢ a $ > $ g , h ⊢ b ∧ b $;
+    ,
+        \\join_mp_pair
+        \\------------
+        \\l1: $ g , h ⊢ b ∧ b $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"and_intro [imp_elim_m [#1, #2], imp_elim_m [#1, #2]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}

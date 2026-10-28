@@ -18,12 +18,15 @@ This file records notable user-facing changes to Aufbau. The project follows
   with the definition's hidden bound variables named once the proof needs
   them, and tries a goal in its `@rewrite` normal form too, so an
   induction rule's premise stated as a substitution meets the facts for
-  what it reduces to. A goal the core does not take (holes,
+  what it reduces to. Besides the hypotheses, the core closes goals with
+  the facts the `@auto forward` pass derives from them, so it reaches
+  proofs through rules it cannot apply backward, such as one joining two
+  contexts. A goal the core does not take (holes,
   non-commutative `@acui` combiners) or cannot prove goes on to the
   existing generation search in what is left of the same budget, and the
   checker validates every proof either way. On the bench corpus the core
-  alone finds 69% of the depth rows the generation search finds, and
-  with both, 58 rows are new and 143 are lost, mostly Hilbert-style
+  alone finds 71% of the depth rows the generation search finds, and
+  with both, 57 rows are new and 147 are lost, mostly Hilbert-style
   theorems whose failed core search uses up the budget; the `nd_fol`
   rows cost 97% fewer ticks and the `additive_fol` rows 29% fewer, and
   the Pelletier battery goes from 39 to 43 of 48 problems found. The
