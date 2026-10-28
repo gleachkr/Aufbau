@@ -377,6 +377,52 @@ pub const Terms = struct {
         }
     }
 
+    /// Whether `template`, with the rule binders `bindings` fixes, might
+    /// be an instance of `expr`: a cheap structural check where an unfixed
+    /// binder, an unbound wvar and a bag stand for anything.
+    pub fn mightFit(self: *const Terms, template: TemplateExpr, bindings: []const ?ExprId, expr: ExprId) bool {
+        switch (template) {
+            .binder => |idx| return if (bindings[idx]) |value| self.mightEqual(value, expr) else true,
+            .app => |app| {
+                if (self.bagFor(app.term_id) != null) return true;
+                const target = switch (self.theorem.interner.node(self.wvars.resolve(expr)).*) {
+                    .app => |target| target,
+                    else => return false,
+                };
+                if (target.term_id != app.term_id or target.args.len != app.args.len) return false;
+                for (app.args, target.args) |arg, value| {
+                    if (!self.mightFit(arg, bindings, value)) return false;
+                }
+                return true;
+            },
+        }
+    }
+
+    /// Whether `a` and `b` might unify: a cheap structural check where an
+    /// unbound wvar and a bag stand for anything.
+    pub fn mightEqual(self: *const Terms, a: ExprId, b: ExprId) bool {
+        const lhs = self.wvars.resolve(a);
+        const rhs = self.wvars.resolve(b);
+        if (lhs == rhs) return true;
+        const interner = &self.theorem.interner;
+        const lhs_app = switch (interner.node(lhs).*) {
+            .app => |app| app,
+            .placeholder => return true,
+            .variable => return interner.node(rhs).* == .placeholder,
+        };
+        const rhs_app = switch (interner.node(rhs).*) {
+            .app => |app| app,
+            .placeholder => return true,
+            .variable => return false,
+        };
+        if (lhs_app.term_id != rhs_app.term_id or lhs_app.args.len != rhs_app.args.len) return false;
+        if (self.bagFor(lhs_app.term_id) != null) return true;
+        for (lhs_app.args, rhs_app.args) |x, y| {
+            if (!self.mightEqual(x, y)) return false;
+        }
+        return true;
+    }
+
     /// Call `sink.match(bindings)` for every way `rule`'s conclusion fits
     /// the canonical `goal`, until it returns true. `bindings` has one
     /// entry per rule binder, null for those the conclusion does not fix;

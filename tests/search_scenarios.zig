@@ -751,17 +751,16 @@ pub const scenarios = [_]Scenario{
     .{
         // STAGE 4 (bound_choice from @vars — SUPPORTED). The hidden bound x in
         // `bound_choice_use` has no surface occurrence in the conclusion `B`, so
-        // its witness is genuinely free. The open walk defers x to a
-        // `.bound_choice` meta (`P ?x`); no concrete/coupled member forces it,
-        // so the phase-3 `@vars`-pool invention grounds `?x` to the first pool
-        // dummy (X before Y, sorted), closing `P X` with `pred_any`. The wrong
-        // witness `x := K` (a constant, via `pred_K`) is rejected at validation
-        // because a bound binder requires a variable.
+        // its witness is genuinely free. The search core introduces x as an
+        // eigenvariable, closes `P ?x` with `pred_any`, and names it at
+        // close-out with the first pool variable (X before Y, sorted). The
+        // wrong witness `x := K` (a constant, via `pred_K`) is out: a bound
+        // binder takes a variable.
         .name = "bound @vars choice auto? (Stage 4 open backward)",
         .mm0_path = "tests/search_bench_cases/metavariable_capabilities.mm0",
         .proof_path = "tests/search_bench_cases/meta_bound_vars_choice.auf",
         .marker = "auto?",
-        .expected_replacement = "bound_choice_use (x := $ X $) [pred_any []]",
+        .expected_replacement = "bound_choice_use [pred_any (x := $ X $) []]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
@@ -802,13 +801,15 @@ pub const scenarios = [_]Scenario{
         // invention): the open walk defers `plain_only_use`'s `x`, the child
         // `pred_K` closes `P K`, and the match-back pins `x := K`. The
         // `@auto backward` annotation is therefore no longer load-bearing for
-        // child-pinned open witnesses in the final retry phase.
+        // child-pinned open witnesses in the final retry phase. The search
+        // core, which takes `x` as a cut, proves it first with `pred_any`, so
+        // it is off here.
         .name = "unannotated rule auto? (phase 5 constrained MP)",
         .mm0_path = "tests/search_bench_cases/metavariable_capabilities.mm0",
         .proof_path = "tests/search_bench_cases/meta_plain_hyp_only.auf",
         .marker = "auto?",
         .expected_replacement = "plain_only_use [pred_K []]",
-        .generate = .{ .enabled = true, .max_depth = 6 },
+        .generate = .{ .enabled = true, .max_depth = 6, .core = false },
     },
     .{
         // STAGE 4 negative control: an annotated rule whose deferred
@@ -1030,14 +1031,15 @@ pub const scenarios = [_]Scenario{
         // the hint through the meta wildcard) concludes through its @view, so
         // this pins the recover-surface match-back (the raw `[x/K]p` line
         // expr would conflict structurally); the pinned minor is generated
-        // from `P_K_nd []`.
+        // from `P_K_nd []`. The search core, which proves it first through the
+        // earlier `nd_fwd_bwd_minor_in_pool`, is off here.
         .name = "fwd/bwd compose nd open-minor auto? (Stage 4+7)",
         .mm0_path = "tests/search_bench_cases/nd_forward_backward.mm0",
         .proof_path = "tests/search_bench_cases/nd_fwd_bwd_minor_generated.auf",
         .marker = "auto?",
         .expected_replacement = "imp_elim (a := $ P K $) " ++
             "[all_elim [#1], P_K_nd []]",
-        .generate = .{ .enabled = true, .max_depth = 6 },
+        .generate = .{ .enabled = true, .max_depth = 6, .core = false },
     },
     .{
         // STAGE 8 saturation-loop stress (bounded, no result). `step` and

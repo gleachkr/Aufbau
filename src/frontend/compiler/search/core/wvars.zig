@@ -21,6 +21,10 @@
 //!
 //! A wvar also carries the variables bound inside the formula it was swapped
 //! into: holding one of those would capture it.
+//!
+//! A cut wvar stands for a binder of a cut rule (`imp_trans`'s `q`); the
+//! prover lets only a closure or a rule match that binds it work on a goal
+//! that holds it unbound.
 
 const std = @import("std");
 const ExprModule = @import("../../../expr.zig");
@@ -40,6 +44,7 @@ pub const WVar = struct {
     capture: []const ExprId,
     /// For an eigenvariable, the goal it was introduced at.
     introduced_at: ?ExprId = null,
+    cut: bool = false,
     value: ?ExprId = null,
 };
 
@@ -178,7 +183,7 @@ pub const WVars = struct {
                     break :blk young.items.len - 1;
                 };
                 const wvar = self.vars.items[idx];
-                try putWord(allocator, out, if (wvar.introduced_at != null) 'e' else 'y');
+                try putWord(allocator, out, if (wvar.introduced_at != null) 'e' else if (wvar.cut) 'c' else 'y');
                 try putWord(allocator, out, @intCast(pos));
                 try putWord(allocator, out, @min(wvar.level, level_cap));
                 for (wvar.capture) |variable| try putWord(allocator, out, variable);
@@ -192,9 +197,15 @@ pub const WVars = struct {
         }
     }
 
-    /// A new γ wvar.
-    pub fn mint(self: *WVars, sort_name: []const u8, capture: []const ExprId) Error!ExprId {
-        return self.add(.{ .expr = undefined, .sort_name = sort_name, .level = self.eigen_count, .capture = capture });
+    /// A new γ wvar, or cut wvar when `cut`.
+    pub fn mint(self: *WVars, sort_name: []const u8, capture: []const ExprId, cut: bool) Error!ExprId {
+        return self.add(.{
+            .expr = undefined,
+            .sort_name = sort_name,
+            .level = self.eigen_count,
+            .capture = capture,
+            .cut = cut,
+        });
     }
 
     /// A new eigenvariable introduced at `goal`.
@@ -415,7 +426,7 @@ pub const WVars = struct {
         }
     }
 
-    fn sortOf(self: *const WVars, expr: ExprId) ?[]const u8 {
+    pub fn sortOf(self: *const WVars, expr: ExprId) ?[]const u8 {
         const at = self.resolve(expr);
         if (self.of(at)) |idx| return self.vars.items[idx].sort_name;
         return switch (self.theorem.interner.node(at).*) {

@@ -97,16 +97,20 @@ take a couple of seconds before it does.
 **Two searches, one budget.** `auto?` first hands the goal to the *search
 core*, which leaves a quantifier witness it has not chosen as an unknown
 shared by the whole proof and fills it in when a later step needs a
-particular term, as tableau provers do. The core unfolds a definition in
-a goal or hypothesis where a rule or another formula needs what it
-stands for, but not one in a rule's own statement. It also tries a goal
-in its `@rewrite` normal form, so a premise a rule states as a redex (an
-induction rule's `sb_f x 0 p`) meets the hypotheses and rules for the
-form it reduces to; a goal holding a witness the core has not chosen
-waits, since what the witness becomes can decide a rewrite. A goal the core does
-not take (one with holes or a non-commutative `@acui` combiner) or
-cannot prove within the depth limit goes on to the generation search, in
-what is left of the same work budget.
+particular term, as tableau provers do. A premise variable a rule's
+conclusion leaves open, such as the middle formula of a transitivity
+rule, is such an unknown too; while a goal holds it unchosen, only a
+hypothesis, an axiom, or a rule whose conclusion fixes it may prove that
+goal. The core unfolds a definition in a goal or hypothesis where a rule
+or another formula needs what it stands for, but not one in a rule's own
+statement. It also tries a goal in its `@rewrite` normal form, so a
+premise a rule states as a redex (an induction rule's `sb_f x 0 p`)
+meets the hypotheses and rules for the form it reduces to; a goal
+holding a witness the core has not chosen waits, since what the witness
+becomes can decide a rewrite. A goal the core does not take (one with
+holes or a non-commutative `@acui` combiner) or cannot prove within the
+depth limit goes on to the generation search, in what is left of the
+same work budget.
 Either way the checker validates a proof before it is offered.
 
 A suggestion from `exact?` or `auto?` names a rule argument only when the

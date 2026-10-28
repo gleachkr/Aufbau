@@ -1558,7 +1558,8 @@ const NodeInference = struct {
         };
         errdefer allocator.free(bindings);
         // Inference may land on an ACUI rearrangement of the search's value,
-        // which states the same line.
+        // which states the same line. A rewritten value does not: the line
+        // may need a congruence the theory lacks to convert it.
         var canonicalizer = Canonicalizer.init(
             allocator,
             n.theorem,
@@ -1566,6 +1567,7 @@ const NodeInference = struct {
             n.context.env,
             {},
         );
+        canonicalizer.rewrites = false;
         defer canonicalizer.deinit();
         for (values, 0..) |value, idx| {
             const expected = value orelse continue;

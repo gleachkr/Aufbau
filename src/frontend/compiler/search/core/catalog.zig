@@ -8,18 +8,30 @@
 //! - an **unsafe** rule is any other rule; each application charges one
 //!   unit of the depth budget.
 //!
-//! The conclusion fixes every binder of a rule except its witnesses: a
-//! binder its `@view` reads back with `@recover` from a premise formula the
-//! view states as a substitution instance. A witness that is not a bound
-//! variable is γ (`all_left`'s `t`): it becomes a fresh witness variable. A
-//! bound one is δ (`all_intro`'s `y`), an eigenvariable. Such a rule's
-//! premises are the view's, so a premise holds the instance itself, not a
-//! substitution redex. Rules are admitted over commutative `@acui` bags
-//! with at most one rest binder per bag. A definition in a rule is an
-//! ordinary term constructor: the core unfolds definitions in goals and
-//! facts (`terms.zig`), never in a rule's own templates. Rules with other
-//! unfixed binders (cuts) or fresh variables wait for the later stages, as
-//! do bridges, which only link facts already in hand.
+//! A binder the conclusion does not fix is one of:
+//!
+//! - a **witness**: a binder a `@view` reads back with `@recover` from a
+//!   premise formula the view states as a substitution instance. One that
+//!   is not a bound variable is γ (`all_left`'s `t`): it becomes a fresh
+//!   witness variable. A bound one is δ (`all_intro`'s `y`), an
+//!   eigenvariable. Such a rule's premises are the view's, so a premise
+//!   holds the instance itself, not a substitution redex;
+//! - in a rule without a view, a **cut** (`imp_trans`'s `q`, `t_app`'s
+//!   `A`): a binder that is not bound becomes a fresh witness variable,
+//!   which only a premise's closure binds. A bound one that is an
+//!   eigenvariable (`subset_intro`'s `x`) is δ, stated by the premises
+//!   directly.
+//!
+//! A rule whose conclusion is a bare binder (`mp`'s `b`) applies to every
+//! goal of that binder's sort; its other binders are cuts.
+//!
+//! Rules are admitted over commutative `@acui` bags with at most one rest
+//! binder per bag. A definition in a rule is an ordinary term constructor:
+//! the core unfolds definitions in goals and facts (`terms.zig`), never in
+//! a rule's own templates. A relation's transport (`mpbi`) is left out:
+//! the core converts by unification, unfolding and normal forms instead.
+//! Rules mixing cuts with a view and rules with fresh variables wait for
+//! the later stages, as do bridges, which only link facts already in hand.
 
 const std = @import("std");
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
@@ -42,13 +54,28 @@ pub const Rule = struct {
     /// The view the premises are stated in, when the rule has witnesses.
     view: ?*const ViewDecl = null,
     witnesses: []const Witness = &.{},
+    /// The binders a rule without a view leaves open.
+    cuts: []const Cut = &.{},
+
+    /// Whether the rule has a γ cut, a value only a premise's closure picks.
+    pub fn hasGammaCut(self: *const Rule) bool {
+        for (self.cuts) |cut| {
+            if (cut.kind == .gamma) return true;
+        }
+        return false;
+    }
+
+    fn deinit(self: Rule, allocator: std.mem.Allocator) void {
+        allocator.free(self.witnesses);
+        allocator.free(self.cuts);
+    }
 };
 
 /// A binder the conclusion leaves open, and the view binder its premise
 /// formula is: `pattern` (a rule binder) with the bound variable `hole` (a
 /// rule binder) replaced by the witness.
 pub const Witness = struct {
-    kind: enum { gamma, delta },
+    kind: Kind,
     /// The rule binder the witness fills.
     arg: usize,
     /// The view binder holding the instance.
@@ -57,20 +84,34 @@ pub const Witness = struct {
     hole: usize,
 };
 
+/// A binder of a rule without a view that neither the conclusion fixes nor
+/// a view reads back: a fresh witness variable (γ) or an eigenvariable (δ).
+pub const Cut = struct {
+    kind: Kind,
+    /// The rule binder.
+    arg: usize,
+};
+
+pub const Kind = enum { gamma, delta };
+
 /// The most arguments one application may have: terms are rebuilt in
 /// fixed-size buffers. A rule with a wider application is left out.
 pub const max_args = 16;
 
+/// The head the rules with a bare-binder conclusion are listed under.
+pub const bare_head = std.math.maxInt(u32);
+
 pub const Catalog = struct {
     allocator: std.mem.Allocator,
-    /// Admitted rules by conclusion head: closers, then safe rules by
-    /// priority, then unsafe rules, each in declaration order.
+    /// Admitted rules by conclusion head (`bare_head` for a bare binder):
+    /// closers, then safe rules by priority, then unsafe rules, each in
+    /// declaration order.
     by_head: std.AutoHashMapUnmanaged(u32, []const Rule) = .empty,
 
     pub fn deinit(self: *Catalog) void {
         var it = self.by_head.valueIterator();
         while (it.next()) |rules| {
-            for (rules.*) |rule| self.allocator.free(rule.witnesses);
+            for (rules.*) |rule| rule.deinit(self.allocator);
             self.allocator.free(rules.*);
         }
         self.by_head.deinit(self.allocator);
@@ -88,7 +129,7 @@ pub fn build(allocator: std.mem.Allocator, context: *const Context) !Catalog {
     defer {
         var it = lists.valueIterator();
         while (it.next()) |list| {
-            for (list.items) |rule| allocator.free(rule.witnesses);
+            for (list.items) |rule| rule.deinit(allocator);
             list.deinit(allocator);
         }
         lists.deinit(allocator);
@@ -97,7 +138,7 @@ pub fn build(allocator: std.mem.Allocator, context: *const Context) !Catalog {
     for (0..count) |idx| {
         const rule_id: u32 = @intCast(idx);
         var entry = (try admit(allocator, context, rule_id)) orelse continue;
-        errdefer allocator.free(entry.witnesses);
+        errdefer entry.deinit(allocator);
         const rule = &context.env.rules.items[rule_id];
         if (rule.hyps.len == 0) {
             entry.role = .closer;
@@ -105,7 +146,11 @@ pub fn build(allocator: std.mem.Allocator, context: *const Context) !Catalog {
             entry.role = .safe;
             entry.priority = priority;
         }
-        const gop = try lists.getOrPut(allocator, rule.concl.app.term_id);
+        const head = switch (rule.concl) {
+            .app => |app| app.term_id,
+            .binder => bare_head,
+        };
+        const gop = try lists.getOrPut(allocator, head);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
         try gop.value_ptr.append(allocator, entry);
     }
@@ -118,7 +163,7 @@ pub fn build(allocator: std.mem.Allocator, context: *const Context) !Catalog {
         errdefer allocator.free(rules);
         std.mem.sort(Rule, rules, {}, ruleLessThan);
         try catalog.by_head.put(allocator, entry.key_ptr.*, rules);
-        // The catalog owns the witness lists now.
+        // The catalog owns the witness and cut lists now.
         entry.value_ptr.clearRetainingCapacity();
     }
     return catalog;
@@ -131,12 +176,16 @@ fn ruleLessThan(_: void, lhs: Rule, rhs: Rule) bool {
 }
 
 /// The catalog entry for `rule_id` (role still unset), or null when the
-/// core does not apply it. The caller owns the witness list.
+/// core does not apply it. The caller owns the witness and cut lists.
 fn admit(allocator: std.mem.Allocator, context: *const Context, rule_id: u32) !?Rule {
     const rule = &context.env.rules.items[rule_id];
-    // A bare-binder conclusion matches every goal (a relation transport, or
-    // a cut); its premises then fix nothing the goal does not.
-    if (rule.concl != .app) return null;
+    switch (rule.concl) {
+        .app => {},
+        .binder => |idx| {
+            if (rule.args[idx].bound or context.views.contains(rule_id)) return null;
+        },
+    }
+    if (context.registry.isRelationTransport(context.env, rule_id)) return null;
     if (context.registry.isAutoBridgeRule(rule_id)) return null;
     if (context.fresh_bindings.contains(rule_id)) return null;
     if (rule.args.len > 64) return null;
@@ -147,14 +196,30 @@ fn admit(allocator: std.mem.Allocator, context: *const Context, rule_id: u32) !?
         std.math.maxInt(u64)
     else
         (@as(u64, 1) << @intCast(rule.args.len)) - 1;
-    if (concl_mask.mask == all) {
+    // A rule the conclusion fixes keeps its own premises even with a view.
+    const view = (if (concl_mask.mask == all) null else context.views.getPtr(rule_id)) orelse {
         for (rule.hyps) |hyp| {
             if (!templateSupported(context, rule.args, hyp)) return null;
         }
-        return .{ .rule_id = rule_id, .role = .unsafe, .premises = rule.hyps };
-    }
-
-    const view = context.views.getPtr(rule_id) orelse return null;
+        var cuts = std.ArrayListUnmanaged(Cut).empty;
+        errdefer cuts.deinit(allocator);
+        for (rule.args, 0..) |arg, idx| {
+            if ((concl_mask.mask >> @intCast(idx)) & 1 != 0) continue;
+            const kind: Kind = if (!arg.bound)
+                .gamma
+            else if (Rules.isEigenvariable(rule.args, idx))
+                .delta
+            else
+                return null;
+            try cuts.append(allocator, .{ .kind = kind, .arg = idx });
+        }
+        return .{
+            .rule_id = rule_id,
+            .role = .unsafe,
+            .premises = rule.hyps,
+            .cuts = try cuts.toOwnedSlice(allocator),
+        };
+    };
     if (view.num_binders > 64) return null;
     var witnesses = std.ArrayListUnmanaged(Witness).empty;
     errdefer witnesses.deinit(allocator);
@@ -172,7 +237,7 @@ fn admit(allocator: std.mem.Allocator, context: *const Context, rule_id: u32) !?
         if ((concl_mask.mask >> @intCast(pattern)) & 1 == 0) return null;
         if ((concl_mask.mask >> @intCast(hole)) & 1 == 0) return null;
         if (!rule.args[hole].bound) return null;
-        const kind: @FieldType(Witness, "kind") = if (!rule.args[arg].bound)
+        const kind: Kind = if (!rule.args[arg].bound)
             .gamma
         else if (Rules.isEigenvariable(rule.args, arg))
             .delta

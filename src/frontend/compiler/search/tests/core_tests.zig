@@ -495,3 +495,83 @@ test "with the ladder off, a goal the search core cannot prove has no proof" {
     try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
     try std.testing.expect(counters.core_nodes > 0);
 }
+
+// `imp_elim`'s `a` is a cut: the conclusion does not fix it.
+const imp_elim_rule =
+    \\axiom imp_elim (g: ctx) (a b: wff): $ g ⊢ a → b $ > $ g ⊢ a $ > $ g ⊢ b $;
+    \\
+;
+
+test "the search core closes a cut by unification with a hypothesis" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena, imp_elim_rule ++
+        \\theorem mp_hyps (g: ctx) (a b: wff): $ g ⊢ a → b $ > $ g ⊢ a $ > $ g ⊢ b $;
+    ,
+        \\mp_hyps
+        \\-------
+        \\l1: $ g ⊢ b $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"imp_elim [#1, #2]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// `valid_intro`'s `w` is an eigenvariable its premise states directly.
+const valid_rules =
+    \\--| @vars w v
+    \\sort world;
+    \\term sat (w: world) (a: wff): wff;
+    \\term valid (a: wff): wff;
+    \\axiom valid_intro {w: world} (a: wff): $ ∅ ⊢ sat w (a → a) $ > $ valid (a → a) $;
+    \\axiom sat_refl (g: ctx) (w: world) (a: wff): $ g ⊢ sat w (a → a) $;
+    \\
+;
+
+test "the search core introduces an eigenvariable a premise states without a view" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena, valid_rules ++
+        \\theorem valid_refl (a: wff): $ valid (a → a) $;
+    ,
+        \\valid_refl
+        \\----------
+        \\l1: $ valid (a → a) $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"valid_intro [sat_refl (w := $ v $) []]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// Hilbert-style modus ponens: the conclusion `b` is a bare binder, `a` a cut.
+const hilbert_rules =
+    \\axiom mp (a b: wff): $ a → b $ > $ a $ > $ b $;
+    \\axiom and_elim_l_imp (a b: wff): $ a ∧ b → a $;
+    \\
+;
+
+test "the search core fixes a cut from a hypothesis before the premise only a closer proves" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // No pool fact fits `?a → a`, so the bare premise `?a` goes first and
+    // the hypothesis fixes it; the closer cannot give `?a` its structure.
+    var suggestions = try search(&arena, hilbert_rules ++
+        \\theorem and_elim_l (a b: wff): $ a ∧ b $ > $ a $;
+    ,
+        \\and_elim_l
+        \\----------
+        \\l1: $ a $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"mp [and_elim_l_imp [], #1]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}

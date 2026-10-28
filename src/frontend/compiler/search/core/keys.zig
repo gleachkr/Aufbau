@@ -7,9 +7,10 @@
 //! out with each wvar numbered in order of first occurrence (a subterm
 //! without wvars is its canonical id, a bag's members are sorted by how
 //! they are written), followed by each wvar's constraints:
-//! - a γ wvar: the variables it may not hold (its capture list and the
-//!   variables eigenvariables of its level or above became) and which of
-//!   the goal's eigenvariables are older than it;
+//! - a γ wvar: whether it is a cut wvar, the variables it may not hold
+//!   (its capture list and the variables eigenvariables of its level or
+//!   above became) and which of the goal's eigenvariables are older than
+//!   it;
 //! - an eigenvariable: the variables it may not become, among those the
 //!   goal or a pool fact mentions, since no other variable can meet it.
 //!
@@ -85,7 +86,7 @@ pub const Keys = struct {
                 }
                 try self.putSet(list.items);
             } else {
-                try self.bytes.append(self.allocator, 'g');
+                try self.bytes.append(self.allocator, if (wvar.cut) 'c' else 'g');
                 try list.appendSlice(self.allocator, wvar.capture);
                 var it = self.wvars.eigens.iterator();
                 while (it.next()) |entry| {

@@ -4,15 +4,21 @@
 //!
 //! A goal is tried with the pool facts that state it and the closers, then
 //! the safe rules, and only when no safe rule applies, the unsafe rules one
-//! depth lower (with depth left). A goal with an `@rewrite` normal form is
-//! tried in that form too, and one headed by a definition with the rules
-//! for each head its unfoldings reach, at no cost: each is a conversion the
-//! checker makes. Safe rules cost no depth, so they apply at depth 0 too.
-//! A rule's premises go on the agenda ahead of the goal's close marker;
-//! when the run reaches the marker the goal is proved, and
-//! the run goes on with the rest of the agenda. Each way of closing a goal
-//! is tried with its witness bindings in force, so a later goal sees what
-//! an earlier one bound.
+//! depth lower (with depth left), those with fewer premises no pool fact
+//! might close first. A goal with an `@rewrite` normal form is tried in
+//! that form too, and one headed by a definition with the rules for each
+//! head its unfoldings reach, at no cost: each is a conversion the checker
+//! makes. Safe rules cost no depth, so they apply at depth 0 too. A rule's
+//! premises go on the agenda ahead of the goal's close marker; when the run
+//! reaches the marker the goal is proved, and the run goes on with the rest
+//! of the agenda. Each way of closing a goal is tried with its witness
+//! bindings in force, so a later goal sees what an earlier one bound.
+//!
+//! A cut wvar is chosen by the proof, never invented: a goal that holds
+//! one unbound is closed by a pool fact or a closer, or by a rule whose
+//! conclusion match binds one of its cut wvars, and no other rule works on
+//! it. So a rule's premises that a pool fact might close come first, and
+//! an unbound wvar premise waits for a sibling that fixes it.
 //!
 //! When the continuation of a proved goal fails, and proving the goal bound
 //! or narrowed no witness variable that existed when it was entered, the
@@ -97,6 +103,8 @@ const Goal = struct {
 
 const PathCell = struct {
     expr: ExprId,
+    /// The number of goals above this one.
+    level: usize,
     next: ?*const PathCell,
 };
 
@@ -110,6 +118,9 @@ const Frame = struct {
     mark: usize,
     wvars: u32,
     eigens: u32,
+    /// The cut wvars the goal holds unbound; owned by the caller of
+    /// `expand`.
+    cuts: []const u32 = &.{},
     reached: bool = false,
     /// Signatures (`WVars.signature`) of the proofs of the goal whose
     /// continuation failed; owned by the prover's allocator.
@@ -153,6 +164,8 @@ const Internal = struct {
     introduced_at: ?ExprId,
 };
 
+const no_prune = std.math.maxInt(usize);
+
 pub const Prover = struct {
     allocator: std.mem.Allocator,
     /// Owns the proof record; lives for the run.
@@ -182,9 +195,12 @@ pub const Prover = struct {
     next_frame: u32 = 0,
     /// The root goal's slot during `solve`.
     root: ?*const ?*const Node = null,
-    /// Path repeats pruned so far. A failure below a prune depends on the
-    /// path, so it is not memoized.
-    prunes: usize = 0,
+    /// The lowest path level a pruned path repeat has hit in the current
+    /// goal's search so far. A goal that repeats itself or a goal below it
+    /// is pruned without loss: a proof of a goal that uses the goal again
+    /// contains a smaller proof of it. Only a repeat of a goal above makes
+    /// a failure depend on the path, and then it is not memoized.
+    prune_floor: usize = no_prune,
     stats: Stats = .{},
 
     pub fn deinit(self: *Prover) void {
@@ -254,6 +270,9 @@ pub const Prover = struct {
 
     fn prove(self: *Prover, raw: Goal, next: ?*const Agenda) Error!Outcome {
         try self.charge();
+        const outer_floor = self.prune_floor;
+        self.prune_floor = no_prune;
+        defer self.prune_floor = @min(outer_floor, self.prune_floor);
         var goal = raw;
         goal.expr = try self.terms.resolveGoal(raw.expr);
         const ground = !try self.wvars.holdsWVar(goal.expr);
@@ -285,12 +304,24 @@ pub const Prover = struct {
         var on_path = goal.path;
         while (on_path) |cell| : (on_path = cell.next) {
             if (cell.expr == goal.expr) {
-                self.prunes += 1;
+                self.prune_floor = @min(self.prune_floor, cell.level);
                 return .failed;
             }
         }
         self.stats.nodes += 1;
 
+        var cuts = std.ArrayListUnmanaged(u32).empty;
+        defer cuts.deinit(self.allocator);
+        if (!ground) {
+            try self.wvars.collectUnbound(self.allocator, goal.expr, &cuts);
+            var kept: usize = 0;
+            for (cuts.items) |idx| {
+                if (!self.wvars.vars.items[idx].cut) continue;
+                cuts.items[kept] = idx;
+                kept += 1;
+            }
+            cuts.shrinkRetainingCapacity(kept);
+        }
         var frame = Frame{
             .id = self.next_frame,
             .goal = goal,
@@ -298,6 +329,7 @@ pub const Prover = struct {
             .mark = self.wvars.mark(),
             .wvars = self.wvars.count(),
             .eigens = self.wvars.eigen_count,
+            .cuts = cuts.items,
             .key = key,
             .order = order,
         };
@@ -308,14 +340,14 @@ pub const Prover = struct {
         }
         self.next_frame += 1;
         const close = Agenda{ .item = .{ .close = &frame }, .next = next };
-        const path = PathCell{ .expr = goal.expr, .next = goal.path };
-        const prunes_at_entry = self.prunes;
+        const level = if (goal.path) |above| above.level + 1 else 0;
+        const path = PathCell{ .expr = goal.expr, .level = level, .next = goal.path };
         switch (try self.expand(&frame, &close, &path)) {
             .proved => return .proved,
             .failed => {},
             .cut => |id| if (id != frame.id) return .{ .cut = id },
         }
-        if (!frame.reached and self.prunes == prunes_at_entry) {
+        if (!frame.reached and self.prune_floor >= level) {
             // Every binding made below is undone, so the key is the
             // entry's again.
             const failed_at = if (ground) blk: {
@@ -409,7 +441,7 @@ pub const Prover = struct {
             const fresh = if (internal.introduced_at) |at|
                 try self.wvars.introduce(wvar.sort_name, at)
             else
-                try self.wvars.mint(wvar.sort_name, wvar.capture);
+                try self.wvars.mint(wvar.sort_name, wvar.capture, wvar.cut);
             try map.put(self.allocator, internal.wvar, fresh);
         }
         var memo = std.AutoHashMapUnmanaged(ExprId, ExprId).empty;
@@ -499,33 +531,136 @@ pub const Prover = struct {
             }
         }
         while (try self.terms.unfold(targets.getLast())) |unfolded| try targets.append(self.allocator, unfolded);
-        // Closers and safe rules for every head first, then unsafe ones
-        // when no safe rule applied.
+        const goal_sort = self.wvars.sortOf(goal.expr);
         var any_safe = false;
-        for ([_]bool{ false, true }) |unsafe| {
-            if (unsafe and (goal.depth == 0 or any_safe)) break;
-            for (targets.items) |target| {
-                const head = self.terms.headOf(target) orelse continue;
-                for (self.catalog.forHead(head)) |*entry| {
-                    if ((entry.role == .unsafe) != unsafe) continue;
+        // Unsafe alternatives are tried after the closers and safe rules,
+        // those whose premises the pool facts might close first.
+        var alts = std.ArrayListUnmanaged(Alt).empty;
+        defer alts.deinit(self.allocator);
+        for (targets.items, 0..) |target, at| {
+            const by_head = if (self.terms.headOf(target)) |head| self.catalog.forHead(head) else &.{};
+            // A bare-binder conclusion matches the goal as it stands.
+            const bare = if (at == 0) self.catalog.forHead(catalog_mod.bare_head) else &.{};
+            for ([_][]const catalog_mod.Rule{ by_head, bare }) |rules| {
+                for (rules) |*entry| {
+                    switch (entry.role) {
+                        .closer => {},
+                        .safe => {},
+                        .unsafe => if (goal.depth == 0 or any_safe) break,
+                    }
+                    const rule = &self.context.env.rules.items[entry.rule_id];
+                    // A bare-binder conclusion matches only goals of its sort.
+                    switch (rule.concl) {
+                        .app => {},
+                        .binder => |idx| if (!std.mem.eql(u8, rule.args[idx].sort_name, goal_sort orelse break)) continue,
+                    }
+                    if (entry.role == .unsafe) {
+                        var scorer = Scorer{ .prover = self, .entry = entry, .target = target, .alts = &alts };
+                        _ = try self.terms.matchConclusion(rule, target, Scorer, &scorer);
+                        continue;
+                    }
                     var applier = Applier{
                         .prover = self,
                         .frame = frame,
                         .target = target,
                         .how = .{ .rule = entry },
-                        .premise_depth = if (unsafe) goal.depth - 1 else goal.depth,
+                        .premise_depth = goal.depth,
                         .close = close,
                         .path = path,
                     };
-                    const rule = &self.context.env.rules.items[entry.rule_id];
                     const stopped = try self.terms.matchConclusion(rule, target, Applier, &applier);
                     if (applier.matched and entry.role == .safe) any_safe = true;
                     if (stopped) return applier.outcome;
                 }
             }
         }
+        if (any_safe) return .failed;
+        std.mem.sort(Alt, alts.items, {}, Alt.lessThan);
+        for (alts.items) |alt| {
+            var picker = Picker{
+                .target = alt.index,
+                .applier = .{
+                    .prover = self,
+                    .frame = frame,
+                    .target = alt.target,
+                    .how = .{ .rule = alt.entry },
+                    .premise_depth = goal.depth - 1,
+                    .close = close,
+                    .path = path,
+                },
+            };
+            const rule = &self.context.env.rules.items[alt.entry.rule_id];
+            if (try self.terms.matchConclusion(rule, alt.target, Picker, &picker)) return picker.applier.outcome;
+        }
         return .failed;
     }
+
+    /// One way an unsafe rule's conclusion matches a goal: the `index`th
+    /// match and how many of its premises no pool fact might close. The
+    /// rule's declaration order breaks ties.
+    const Alt = struct {
+        entry: *const catalog_mod.Rule,
+        /// The goal or unfolding of it the rule matched.
+        target: ExprId,
+        index: usize,
+        open: usize,
+
+        fn lessThan(_: void, lhs: Alt, rhs: Alt) bool {
+            if (lhs.open != rhs.open) return lhs.open < rhs.open;
+            if (lhs.entry.rule_id != rhs.entry.rule_id) return lhs.entry.rule_id < rhs.entry.rule_id;
+            return lhs.index < rhs.index;
+        }
+    };
+
+    /// The matcher's sink that lists an unsafe rule's matches as `Alt`s.
+    const Scorer = struct {
+        prover: *Prover,
+        entry: *const catalog_mod.Rule,
+        target: ExprId,
+        alts: *std.ArrayListUnmanaged(Alt),
+        index: usize = 0,
+
+        pub const Error = ProveError;
+
+        pub fn match(self: *Scorer, bindings: []const ?ExprId) ProveError!bool {
+            const prover = self.prover;
+            const rule = &prover.context.env.rules.items[self.entry.rule_id];
+            var open: usize = 0;
+            for (rule.hyps) |hyp| {
+                // A premise the match leaves unfixed takes any fact: a guess.
+                if (hyp == .binder and bindings[hyp.binder] == null) {
+                    open += 1;
+                    continue;
+                }
+                for (prover.facts) |fact| {
+                    if (prover.terms.mightFit(hyp, bindings, fact.expr)) break;
+                } else open += 1;
+            }
+            try self.alts.append(prover.allocator, .{
+                .entry = self.entry,
+                .target = self.target,
+                .index = self.index,
+                .open = open,
+            });
+            self.index += 1;
+            return false;
+        }
+    };
+
+    /// The matcher's sink that applies only the `target`th match.
+    const Picker = struct {
+        target: usize,
+        index: usize = 0,
+        applier: Applier,
+
+        pub const Error = ProveError;
+
+        pub fn match(self: *Picker, bindings: []const ?ExprId) ProveError!bool {
+            defer self.index += 1;
+            if (self.index != self.target) return false;
+            return self.applier.match(bindings);
+        }
+    };
 
     /// The matcher's sink: applies each way of closing a goal while its
     /// witness bindings hold, and stops at the first that does not fail.
@@ -564,11 +699,13 @@ pub const Prover = struct {
         switch (applier.how) {
             .ref => |ref| step = .{ .ref = ref },
             .rule => |entry| {
+                if (entry.role != .closer and !self.bindsCut(applier.frame.cuts)) return .failed;
                 const full = try self.arena.alloc(ExprId, bindings.len);
                 for (full, bindings) |*value, binding| value.* = binding orelse undefined;
                 premises = entry.premises;
                 values = full;
                 if (entry.view) |view| values = try self.witness(entry, view, full, applier.target);
+                if (entry.cuts.len != 0) try self.cut(entry, full, applier.target);
                 step = .{ .rule = .{ .rule_id = entry.rule_id, .bindings = full } };
             },
         }
@@ -582,28 +719,72 @@ pub const Prover = struct {
         frame.goal.slot.* = node;
 
         // On the heap: the run stays on the stack for the rest of the proof.
-        const cells = try self.allocator.alloc(Agenda, premises.len);
-        defer self.allocator.free(cells);
-        var head: *const Agenda = applier.close;
-        var idx = premises.len;
-        while (idx > 0) {
-            idx -= 1;
-            const expr = self.terms.instantiate(premises[idx], values) catch |err| switch (err) {
+        const exprs = try self.allocator.alloc(ExprId, premises.len);
+        defer self.allocator.free(exprs);
+        for (exprs, premises) |*expr, premise| {
+            expr.* = self.terms.instantiate(premise, values) catch |err| switch (err) {
                 error.Unsupported => return .failed,
                 else => |e| return e,
             };
-            cells[idx] = .{
+        }
+        const order = try self.allocator.alloc(usize, premises.len);
+        defer self.allocator.free(order);
+        try self.orderPremises(exprs, order);
+        const cells = try self.allocator.alloc(Agenda, premises.len);
+        defer self.allocator.free(cells);
+        var head: *const Agenda = applier.close;
+        var at = premises.len;
+        while (at > 0) {
+            at -= 1;
+            const idx = order[at];
+            cells[at] = .{
                 .item = .{ .goal = .{
-                    .expr = expr,
+                    .expr = exprs[idx],
                     .depth = applier.premise_depth,
                     .slot = &children[idx],
                     .path = applier.path,
                 } },
                 .next = head,
             };
-            head = &cells[idx];
+            head = &cells[at];
         }
         return self.run(head);
+    }
+
+    /// The order to prove the premises `exprs` in, as indices into `order`.
+    /// Those a pool fact might close go first: closing them binds the cut
+    /// wvars the others share. A premise that is an unbound wvar goes last
+    /// when such a sibling holds it, since any fact fits the wvar: closing
+    /// it first only guesses what the sibling fixes.
+    fn orderPremises(self: *Prover, exprs: []const ExprId, order: []usize) Error!void {
+        const ranks = try self.allocator.alloc(u2, exprs.len);
+        defer self.allocator.free(ranks);
+        for (ranks, exprs) |*rank, expr| {
+            rank.* = for (self.facts) |fact| {
+                if (self.terms.mightEqual(fact.expr, expr)) break 0;
+            } else 1;
+        }
+        var held = std.ArrayListUnmanaged(u32).empty;
+        defer held.deinit(self.allocator);
+        for (ranks, exprs, 0..) |*rank, expr, idx| {
+            const wvar = self.wvars.of(self.wvars.resolve(expr)) orelse continue;
+            for (exprs, ranks, 0..) |sibling, sibling_rank, sibling_idx| {
+                if (sibling_idx == idx or sibling_rank != 0) continue;
+                if (self.wvars.of(self.wvars.resolve(sibling)) != null) continue;
+                held.clearRetainingCapacity();
+                try self.wvars.collectUnbound(self.allocator, sibling, &held);
+                if (std.mem.indexOfScalar(u32, held.items, wvar) != null) {
+                    rank.* = 2;
+                    break;
+                }
+            }
+        }
+        var placed: usize = 0;
+        for (0..3) |pass| for (ranks, 0..) |rank, idx| {
+            if (rank != pass) continue;
+            order[placed] = idx;
+            placed += 1;
+        };
     }
 
     /// Fill `entry`'s witnesses in `full` (a fresh wvar for each γ, an
@@ -625,7 +806,7 @@ pub const Prover = struct {
                 .gamma => {
                     var capture = std.ArrayListUnmanaged(ExprId).empty;
                     try self.terms.boundVariables(self.arena, pattern.*, &capture);
-                    full[w.arg] = try self.wvars.mint(sort_name, capture.items);
+                    full[w.arg] = try self.wvars.mint(sort_name, capture.items, false);
                 },
                 .delta => full[w.arg] = try self.wvars.introduce(sort_name, goal),
             }
@@ -638,6 +819,52 @@ pub const Prover = struct {
             values[w.source] = try self.terms.swap(pattern, full[w.hole], full[w.arg]);
         }
         return values;
+    }
+
+    /// Whether a goal whose unbound cut wvars were `cuts` has none, or the
+    /// match just made binds one.
+    fn bindsCut(self: *const Prover, cuts: []const u32) bool {
+        for (cuts) |idx| {
+            if (self.wvars.vars.items[idx].value != null) return true;
+        }
+        return cuts.len == 0;
+    }
+
+    /// Fill `entry`'s cuts in `full`: a fresh wvar for each γ, an
+    /// eigenvariable introduced at `goal` for each δ. A γ cut that depends
+    /// on no δ one is minted before them, so it cannot hold one; nor may it
+    /// hold the variable of a bound binder of the conclusion it does not
+    /// depend on.
+    fn cut(self: *Prover, entry: *const catalog_mod.Rule, full: []ExprId, goal: ExprId) Error!void {
+        const args = self.context.env.rules.items[entry.rule_id].args;
+        var cut_mask: u64 = 0;
+        var delta_deps: u64 = 0;
+        for (entry.cuts) |c| {
+            cut_mask |= @as(u64, 1) << @intCast(c.arg);
+            if (c.kind == .delta) delta_deps |= args[c.arg].deps;
+        }
+        for (0..3) |pass| for (entry.cuts) |c| {
+            const arg = args[c.arg];
+            const stage: usize = switch (c.kind) {
+                .gamma => if (arg.deps & delta_deps == 0) 0 else 2,
+                .delta => 1,
+            };
+            if (stage != pass) continue;
+            full[c.arg] = switch (c.kind) {
+                .gamma => blk: {
+                    var capture = std.ArrayListUnmanaged(ExprId).empty;
+                    for (args, full, 0..) |other, value, idx| {
+                        if (!other.bound or (cut_mask >> @intCast(idx)) & 1 != 0) continue;
+                        if (arg.deps & other.deps != 0) continue;
+                        const variable = try self.wvars.deref(value, null);
+                        if (self.terms.theorem.interner.node(variable).* != .variable) continue;
+                        try capture.append(self.arena, variable);
+                    }
+                    break :blk try self.wvars.mint(arg.sort_name, capture.items, true);
+                },
+                .delta => try self.wvars.introduce(arg.sort_name, goal),
+            };
+        };
     }
 
     pub fn pool(self: *Prover, sort_name: []const u8) Error![]const ExprId {

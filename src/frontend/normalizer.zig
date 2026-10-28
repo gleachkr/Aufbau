@@ -60,6 +60,9 @@ fn Engine(comptime mode: Mode) type {
         hidden_witness_provider: ?DefOps.HiddenWitnessProvider = null,
         /// Each expression's normal form; null while it is being normalized.
         cache: std.AutoHashMap(ExprId, ?NormalizeResult),
+        /// Whether `@rewrite` rules apply. Off, the normal form is the ACUI
+        /// one: bags ordered, grouped and rid of units and repeats only.
+        rewrites: bool = true,
         /// Rewrite steps taken since the budget was last reset. A step past
         /// `step_limit` fails with `RewriteStepLimit`.
         step_count: usize = 0,

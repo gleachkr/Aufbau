@@ -130,6 +130,7 @@ pub fn normalizeUncached(
             .placeholder => break,
         };
 
+        if (!self.rewrites) break;
         const rules = self.registry.getRewriteRules(head_id);
         var applied = false;
         for (rules) |rule| {
