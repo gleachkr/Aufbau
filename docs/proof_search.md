@@ -117,8 +117,12 @@ other parts leave or the whole context. Besides the hypotheses, the core
 closes goals with the facts the `@auto forward` pass derives from them
 (those with no quantifier witness left open), so a rule it cannot apply
 backward, such as an `@auto bridge`, still reaches the proof through its
-forward instances. A goal the core does not take (one with holes or a
-non-commutative `@acui` combiner) or cannot prove within the
+forward instances. A context that is a sequence (an `@acui` combiner with
+neither commutativity nor idempotence, as in `martin_lof`) is matched in
+order: a rule's `g , x : A` takes the last entry as `x : A` and the
+entries before it as `g`. A goal the core does not take (one with holes
+or an idempotent but non-commutative `@acui` combiner) or cannot prove
+within the
 depth limit goes on to the generation search, in what is left of the
 same work budget.
 Either way the checker validates a proof before it is offered.

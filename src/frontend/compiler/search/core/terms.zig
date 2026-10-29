@@ -3,11 +3,13 @@
 //!
 //! Every expression the core works on is canonical: each commutative
 //! `@acui` bag lists its members once per occurrence its law counts, in
-//! `ExprId` order, so two ground goals equal modulo ACUI are the same
-//! `ExprId`. The order is only stable within one theorem's interner, which
-//! is all one core run uses. A goal holding witness variables
-//! (`wvars.zig`) is canonical as written, with each wvar a leaf; once a
-//! binding changes it, `resolveGoal` makes it canonical again.
+//! `ExprId` order, and a sequence (associative with a unit, nothing more)
+//! lists its members in their own order, so two ground goals equal modulo
+//! ACUI are the same `ExprId`. The order is only stable within one
+//! theorem's interner, which is all one core run uses. A goal holding
+//! witness variables (`wvars.zig`) is canonical as written, with each wvar
+//! a leaf; once a binding changes it, `resolveGoal` makes it canonical
+//! again.
 //!
 //! Matching enumerates every way a conclusion template fits a goal, and
 //! unifies through the witness variables: a binder met twice must agree
@@ -22,9 +24,12 @@
 //! the prover to settle. Two bags holding wvars unify member by member
 //! (`pairBags`); an unbound wvar of the bag's own sort, such as a share,
 //! stands for a part of the bag and takes the other bag's members nothing
-//! else pairs with. An unbound wvar facing template structure does not
-//! match: the witnesses of these stages stand for terms the theory's rules
-//! never take apart.
+//! else pairs with. A sequence matches in order instead: a template member
+//! takes the next goal member and a rest binder a run of them, and two
+//! sequences unify member by member, where one unbound wvar of the
+//! sequence's sort takes the run its neighbours leave. An unbound wvar
+//! facing template structure does not match: the witnesses of these
+//! stages stand for terms the theory's rules never take apart.
 //!
 //! Matching and unification are modulo definitions: where heads differ,
 //! an application of the later-declared definition unfolds one step
@@ -72,8 +77,7 @@ pub const Terms = struct {
     /// The bag the shares of the conclusion match in progress split, while
     /// the sink runs.
     split: ?SplitBag = null,
-    /// The commutative bag combiner each combiner head and each unit term
-    /// reads as.
+    /// The bag combiner each combiner head and each unit term reads as.
     bags: std.AutoHashMapUnmanaged(u32, AcuiBag.Combiner) = .empty,
     canonical_memo: std.AutoHashMapUnmanaged(ExprId, ExprId) = .empty,
     /// One-step unfoldings of definition applications; an expression maps
@@ -115,7 +119,7 @@ pub const Terms = struct {
         var it = context.registry.acui_by_head.keyIterator();
         while (it.next()) |head| {
             const combiner = AcuiBag.Combiner.of(context.registry, context.env, head.*) orelse continue;
-            if (!combiner.law.isCommutative()) continue;
+            if (!catalog.readsLaw(combiner.law)) continue;
             try self.bags.put(allocator, combiner.head, combiner);
             if (combiner.unit) |unit| try self.bags.put(allocator, unit, combiner);
         }
@@ -136,16 +140,16 @@ pub const Terms = struct {
         self.* = undefined;
     }
 
-    /// The commutative bag combiner that reads `term_id`: the combiner
-    /// itself or its unit. A non-commutative combiner reads as an
-    /// ordinary term; `supported` keeps such goals out.
+    /// The bag combiner that reads `term_id`: the combiner itself or its
+    /// unit. A combiner the core does not read (`catalog.readsLaw`) reads
+    /// as an ordinary term; `supported` keeps such goals out.
     pub fn bagFor(self: *const Terms, term_id: u32) ?AcuiBag.Combiner {
         return self.bags.get(term_id);
     }
 
-    /// Whether the core can search `expr`: no placeholders or
-    /// non-commutative combiners. A definition is an ordinary term here,
-    /// never unfolded. O(size of `expr`) over shared nodes.
+    /// Whether the core can search `expr`: no placeholders or combiners
+    /// it does not read. A definition is an ordinary term here, never
+    /// unfolded. O(size of `expr`) over shared nodes.
     pub fn supported(self: *Terms, expr: ExprId) Error!bool {
         var seen = std.AutoHashMapUnmanaged(ExprId, void).empty;
         defer seen.deinit(self.allocator);
@@ -164,7 +168,7 @@ pub const Terms = struct {
             .app => |app| {
                 if (app.term_id >= self.context.env.terms.items.len) return false;
                 if (AcuiBag.Combiner.of(self.context.registry, self.context.env, app.term_id)) |combiner| {
-                    if (!combiner.law.isCommutative()) return false;
+                    if (!catalog.readsLaw(combiner.law)) return false;
                 }
                 for (app.args) |arg| {
                     if (!try self.supportedWalk(arg, seen)) return false;
@@ -422,10 +426,14 @@ pub const Terms = struct {
         return result;
     }
 
-    /// The canonical bag of `members`, each already canonical: sorted, and
-    /// deduplicated under a set law.
+    /// The canonical bag of `members`, each already canonical: a
+    /// commutative bag sorted, and deduplicated under a set law; a
+    /// sequence as it stands.
     fn buildBag(self: *Terms, combiner: AcuiBag.Combiner, members: *AcuiBag.ExprBag) Error!ExprId {
         const items = members.items[0..members.len];
+        if (!combiner.law.isCommutative()) {
+            return (try combiner.build(self.theorem, items)) orelse error.Unsupported;
+        }
         std.mem.sort(ExprId, items, {}, std.sort.asc(ExprId));
         const kept = if (combiner.law.isIdempotent()) AcuiBag.mergeRepeats(items) else items;
         return (try combiner.build(self.theorem, kept)) orelse error.Unsupported;
@@ -635,8 +643,30 @@ const Pending = struct {
         unify: struct { a: []const ExprId, b: []const ExprId, at: usize },
         bag: *const BagState,
         pairing: *const BagPairing,
+        seq: *const SeqState,
     },
     next: ?*const Pending,
+};
+
+/// A sequence being matched part by part, in order: the template's parts,
+/// the goal's members, the next part and the first member it may take.
+const SeqState = struct {
+    combiner: AcuiBag.Combiner,
+    template: []const TemplateExpr,
+    goal: []const ExprId,
+    part: usize = 0,
+    at: usize = 0,
+};
+
+/// Two sequences to unify member by member, `a`'s against `b`'s at the
+/// same position. A `part` is an unbound wvar taken out of `a`, which
+/// first takes `run`: the members of `b` its neighbours in `a` leave
+/// between them.
+const SeqPairing = struct {
+    a: []const ExprId,
+    b: []const ExprId,
+    part: ?ExprId = null,
+    run: ExprId = undefined,
 };
 
 /// A bag being matched member by member: template members in match order,
@@ -705,6 +735,7 @@ fn Matcher(comptime Sink: type) type {
                 },
                 .bag => |state| try self.bag(state.*, node.next),
                 .pairing => |state| try self.pairBags(state.*, node.next),
+                .seq => |state| try self.seq(state.*, node.next),
             }
         }
 
@@ -720,6 +751,7 @@ fn Matcher(comptime Sink: type) type {
                         return self.term(unfolded, target, next);
                     }
                     if (self.terms.bagFor(app.term_id)) |combiner| {
+                        if (!combiner.law.isCommutative()) return self.startSeq(combiner, template, target, next);
                         return self.startBag(combiner, template, target, next);
                     }
                     const goal_app = switch (self.terms.theorem.interner.node(target).*) {
@@ -786,6 +818,10 @@ fn Matcher(comptime Sink: type) type {
                 for ([_]?u32{ lhs_head, rhs_head }) |head| {
                     const combiner = self.terms.bagFor(head orelse continue) orelse continue;
                     if (combiner.head != head.?) continue;
+                    if (!combiner.law.isCommutative()) {
+                        if (try self.unifySeq(combiner, lhs, rhs, next, true)) return;
+                        break;
+                    }
                     const pairing = (try @call(.never_inline, preparePairing, .{ self, combiner, lhs, rhs })) orelse break;
                     if (pairing.absorb == null) {
                         self.terms.allocator.free(pairing.a);
@@ -810,6 +846,10 @@ fn Matcher(comptime Sink: type) type {
             if (lhs_app.args.len != rhs_app.args.len) return;
             if (self.terms.bagFor(lhs_app.term_id)) |combiner| {
                 if (try self.terms.same(lhs, rhs)) return self.run(next);
+                if (!combiner.law.isCommutative()) {
+                    _ = try self.unifySeq(combiner, lhs, rhs, next, false);
+                    return;
+                }
                 const pairing = (try @call(.never_inline, preparePairing, .{ self, combiner, lhs, rhs })) orelse return;
                 defer self.terms.allocator.free(pairing.a);
                 defer self.terms.allocator.free(pairing.b);
@@ -1068,6 +1108,122 @@ fn Matcher(comptime Sink: type) type {
             // The goal's members are canonical and in order, so the
             // leftover is canonical as it stands.
             return state.combiner.build(self.terms.theorem, left.slice());
+        }
+
+        fn startSeq(
+            self: *Self,
+            combiner: AcuiBag.Combiner,
+            template: TemplateExpr,
+            expr: ExprId,
+            next: ?*const Pending,
+        ) MatchError!void {
+            const state = try @call(.never_inline, prepareSeq, .{ self, combiner, template, expr });
+            defer self.terms.allocator.free(state.template);
+            defer self.terms.allocator.free(state.goal);
+            try self.seq(state, next);
+        }
+
+        /// The sequence's template parts and the goal's members, copied out
+        /// of the fixed-capacity bags as `prepareBag` does.
+        fn prepareSeq(self: *Self, combiner: AcuiBag.Combiner, template: TemplateExpr, expr: ExprId) Error!SeqState {
+            const parts = combiner.flattenTemplate(template) orelse return error.Unsupported;
+            const members = combiner.flatten(self.terms.theorem, try self.terms.resolveGoal(expr)) orelse
+                return error.Unsupported;
+            const allocator = self.terms.allocator;
+            const owned = try allocator.dupe(TemplateExpr, parts.slice());
+            errdefer allocator.free(owned);
+            return .{ .combiner = combiner, .template = owned, .goal = try allocator.dupe(ExprId, members.slice()) };
+        }
+
+        /// Match the sequence's parts in order: a member takes the next goal
+        /// member, a rest binder a run of them. When no rest binder follows,
+        /// the run is what the members after it leave; otherwise each length
+        /// is an alternative.
+        fn seq(self: *Self, state: SeqState, next: ?*const Pending) MatchError!void {
+            if (state.part == state.template.len) {
+                if (state.at == state.goal.len) try self.run(next);
+                return;
+            }
+            const part = state.template[state.part];
+            var after = state;
+            after.part += 1;
+            const cell = Pending{ .step = .{ .seq = &after }, .next = next };
+            if (!self.isRestBinder(state.combiner, part)) {
+                if (state.at == state.goal.len) return;
+                after.at += 1;
+                return self.term(part, state.goal[state.at], &cell);
+            }
+            var members: usize = 0;
+            var open = false;
+            for (state.template[state.part + 1 ..]) |later| {
+                if (self.isRestBinder(state.combiner, later)) open = true else members += 1;
+            }
+            const left = state.goal.len - state.at;
+            if (members > left) return;
+            var len = if (open) 0 else left - members;
+            while (len <= left - members) : (len += 1) {
+                // A run of canonical members in order is canonical.
+                const value = (try state.combiner.build(self.terms.theorem, state.goal[state.at..][0..len])) orelse continue;
+                after.at = state.at + len;
+                try self.term(part, value, &cell);
+                if (self.stop) return;
+            }
+        }
+
+        /// Unify the sequences `lhs` and `rhs` member by member, in order.
+        /// When exactly one holds one unbound wvar of the sequence's sort,
+        /// that wvar takes the run of the other's members its neighbours
+        /// leave. With `need_part`, a pairing without such a wvar is not
+        /// run. Returns whether the pairing ran.
+        fn unifySeq(
+            self: *Self,
+            combiner: AcuiBag.Combiner,
+            lhs: ExprId,
+            rhs: ExprId,
+            next: ?*const Pending,
+            need_part: bool,
+        ) MatchError!bool {
+            const pairing = (try @call(.never_inline, prepareSeqPairing, .{ self, combiner, lhs, rhs })) orelse return false;
+            defer self.terms.allocator.free(pairing.a);
+            defer self.terms.allocator.free(pairing.b);
+            const cell = Pending{ .step = .{ .unify = .{ .a = pairing.a, .b = pairing.b, .at = 0 } }, .next = next };
+            const part = pairing.part orelse {
+                if (need_part) return false;
+                try self.run(&cell);
+                return true;
+            };
+            _ = try self.bindWVar(part, pairing.run, &cell);
+            return true;
+        }
+
+        /// The members `unifySeq` pairs up, copied out of the fixed-capacity
+        /// bags; null when no pairing can make the sequences equal.
+        fn prepareSeqPairing(self: *Self, combiner: AcuiBag.Combiner, lhs: ExprId, rhs: ExprId) Error!?SeqPairing {
+            const theorem = self.terms.theorem;
+            var a = combiner.flatten(theorem, try self.terms.resolveGoal(lhs)) orelse return error.Unsupported;
+            var b = combiner.flatten(theorem, try self.terms.resolveGoal(rhs)) orelse return error.Unsupported;
+            const a_part = self.partOf(combiner, a.slice());
+            const b_part = self.partOf(combiner, b.slice());
+            const allocator = self.terms.allocator;
+            if ((a_part == null) == (b_part == null)) {
+                if (a.len != b.len) return null;
+                const a_members = try allocator.dupe(ExprId, a.slice());
+                errdefer allocator.free(a_members);
+                return .{ .a = a_members, .b = try allocator.dupe(ExprId, b.slice()) };
+            }
+            if (a_part == null) std.mem.swap(AcuiBag.ExprBag, &a, &b);
+            const at = (a_part orelse b_part).?;
+            if (b.len + 1 < a.len) return null;
+            const end = b.len - (a.len - 1 - at);
+            const taken = (try combiner.build(theorem, b.items[at..end])) orelse return null;
+            const a_members = try allocator.alloc(ExprId, a.len - 1);
+            errdefer allocator.free(a_members);
+            @memcpy(a_members[0..at], a.items[0..at]);
+            @memcpy(a_members[at..], a.items[at + 1 .. a.len]);
+            const b_members = try allocator.alloc(ExprId, a.len - 1);
+            @memcpy(b_members[0..at], b.items[0..at]);
+            @memcpy(b_members[at..], b.items[end..b.len]);
+            return .{ .a = a_members, .b = b_members, .part = a.items[at], .run = taken };
         }
     };
 }

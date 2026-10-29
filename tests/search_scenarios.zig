@@ -639,13 +639,14 @@ pub const scenarios = [_]Scenario{
     },
     .{
         // martin_lof id_sym_ty: `J_elim` (path induction) whose large motive
-        // and eigenvariables are not conclusion-pinned.
+        // and eigenvariables are not conclusion-pinned. The search core
+        // proves it, as `J_elim [l5, l6, #1]`.
         .name = "auto martin_lof id_sym_ty J_elim auto? (no result)",
         .mm0_path = "tests/search_bench_cases/martin_lof_regular.mm0",
         .proof_path = "tests/search_bench_cases/ml_id_sym_ty_auto.auf",
         .marker = "auto?",
         .expected_replacement = "",
-        .generate = .{ .enabled = true, .max_depth = 6 },
+        .generate = .{ .enabled = true, .max_depth = 6, .core = false },
         .expect_result = false,
         .expected_suggestion_count = 4,
     },

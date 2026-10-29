@@ -24,7 +24,8 @@
 //! A rule whose conclusion is a bare binder (`mp`'s `b`) applies to every
 //! goal of that binder's sort; its other binders are cuts.
 //!
-//! Rules are admitted over commutative `@acui` bags. A conclusion bag with
+//! Rules are admitted over `@acui` bags, commutative ones and sequences
+//! (`martin_lof`'s ordered contexts `g , x : A`). A conclusion bag with
 //! more than one rest binder (`or_elim`'s `G , H , K`) needs an idempotent
 //! law: its rest binders are **shares**, which split the goal's context
 //! between the premises (`Prover.Split`). A definition in a rule is an
@@ -105,6 +106,13 @@ pub const Kind = enum { gamma, delta };
 /// The most arguments one application may have: terms are rebuilt in
 /// fixed-size buffers. A rule with a wider application is left out.
 pub const max_args = 16;
+
+/// Whether the core reads an `@acui` combiner with `law` as a bag: a
+/// commutative one as a set or multiset, a sequence in order. An
+/// idempotent sequence, which no theory uses yet, is left out.
+pub fn readsLaw(law: AcuiBag.Law) bool {
+    return law != .idempotent_sequence;
+}
 
 /// The head the rules with a bare-binder conclusion are listed under.
 pub const bare_head = std.math.maxInt(u32);
@@ -307,9 +315,9 @@ fn readsBack(context: *const Context, rule_id: u32, concl_mask: u64) ?*const Vie
 }
 
 /// A template the core can match and build: applications of at most
-/// `max_args` arguments and only commutative `@acui` combiners. A
-/// conclusion bag with more than one rest binder also needs an idempotent
-/// law, so its shares can overlap.
+/// `max_args` arguments and only `@acui` combiners the core reads
+/// (`readsLaw`). A conclusion bag with more than one rest binder also
+/// needs an idempotent law, so its shares can overlap.
 fn templateSupported(
     context: *const Context,
     args: []const ArgInfo,
@@ -323,7 +331,7 @@ fn templateSupported(
     if (app.args.len > max_args) return false;
     if (app.term_id >= context.env.terms.items.len) return false;
     if (AcuiBag.Combiner.of(context.registry, context.env, app.term_id)) |combiner| {
-        if (!combiner.law.isCommutative()) return false;
+        if (!readsLaw(combiner.law)) return false;
         const members = combiner.flattenTemplate(template) orelse return false;
         // Distinct rest binders: `g , g` has one.
         var rests: u64 = 0;

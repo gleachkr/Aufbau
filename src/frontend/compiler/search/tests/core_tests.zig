@@ -949,3 +949,130 @@ test "an eigenvariable is named by a bound variable" {
     try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
+
+// Contexts as sequences (`martin_lof`'s `join`): `@acui` with neither
+// commutativity nor idempotence. `ax` takes the last entry only.
+const seq_rules =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\sort ctx;
+    \\term im (a b: wff): wff;
+    \\infixr im: $→$ prec 25;
+    \\term an (a b: wff): wff;
+    \\infixr an: $∧$ prec 35;
+    \\term bi (a b: wff): wff;
+    \\infixl bi: $↔$ prec 20;
+    \\term ctx_eq (g h: ctx): wff;
+    \\term emp: ctx;
+    \\notation emp: ctx = ($∅$:max);
+    \\--| @acui ctx_assoc _ emp _
+    \\term join (g h: ctx): ctx;
+    \\infixl join: $,$ prec 5;
+    \\term hyp (a: wff): ctx;
+    \\coercion hyp: wff > ctx;
+    \\term nd (g: ctx) (a: wff): wff;
+    \\infixl nd: $⊢$ prec 1;
+    \\term ok (g: ctx): wff;
+    \\--| @relation wff bi biid bitr bisym mpbi
+    \\axiom biid (a: wff): $ a ↔ a $;
+    \\axiom bitr (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+    \\axiom bisym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+    \\axiom mpbi (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+    \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+    \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+    \\axiom ctx_trans (g h i: ctx):
+    \\  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+    \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+    \\axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+    \\axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+    \\--| @congr
+    \\axiom join_congr (g1 g2 h1 h2: ctx):
+    \\  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+    \\--| @congr
+    \\axiom hyp_congr (a b: wff): $ a ↔ b $ > $ ctx_eq (hyp a) (hyp b) $;
+    \\--| @congr
+    \\axiom nd_congr (e f: ctx) (a b: wff):
+    \\  $ ctx_eq e f $ > $ a ↔ b $ > $ (e ⊢ a) ↔ (f ⊢ b) $;
+    \\axiom ax (g: ctx) (a: wff): $ g , a ⊢ a $;
+    \\--| @auto eager
+    \\axiom imp_intro (g: ctx) (a b: wff): $ g , a ⊢ b $ > $ g ⊢ a → b $;
+    \\--| @auto eager 2
+    \\axiom and_intro (g: ctx) (a b: wff): $ g ⊢ a $ > $ g ⊢ b $ > $ g ⊢ a ∧ b $;
+    \\
+;
+
+const seq_weaken =
+    \\axiom wk (g: ctx) (a b: wff): $ g ⊢ a $ > $ g , b ⊢ a $;
+    \\
+;
+
+fn seqSearch(
+    arena: *std.heap.ArenaAllocator,
+    comptime theorem: []const u8,
+    comptime proof: []const u8,
+    counters: *types.SearchCounters,
+) !types.SourceSuggestions {
+    return suggestionsAtNeedle(arena, seq_rules ++ theorem, proof, "auto?", .{
+        .counters = counters,
+        .generate = .{ .enabled = true, .ladder = false },
+    });
+}
+
+test "the search core takes a context entry only at its place in a sequence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `a` is not the last entry once `b` is assumed, so `ax` needs `wk`.
+    var suggestions = try seqSearch(&arena, seq_weaken ++
+        \\theorem k_seq (g: ctx) (a b: wff): $ g ⊢ a → b → a $;
+    ,
+        \\k_seq
+        \\-----
+        \\l1: $ g ⊢ a → b → a $ by auto?
+    , &counters);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"imp_intro [imp_intro [wk [ax []]]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "a sequence's earlier entry does not close the goal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `#1` makes `a` an older term than `b`, so a context read in term
+    // order would put `b` last and let `ax` close the goal.
+    var suggestions = try seqSearch(&arena,
+        \\theorem not_last (g: ctx) (a b: wff): $ ∅ , a ⊢ a $ > $ g , b , a ⊢ b $;
+    ,
+        \\not_last
+        \\--------
+        \\l1: $ g , b , a ⊢ b $ by auto?
+    , &counters);
+    defer suggestions.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
+    try std.testing.expect(counters.core_nodes > 0);
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "an open context in a sequence takes the run of entries around which the rest pair up" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `strengthen`'s `h` is a cut that only `#1` can fix: to `b , c`.
+    var suggestions = try seqSearch(&arena,
+        \\axiom strengthen (g h: ctx) (a: wff): $ g , h ⊢ a $ > $ g ⊢ a $;
+        \\theorem drop_two (g: ctx) (a b c: wff): $ g , b , c ⊢ a $ > $ g ⊢ a $;
+    ,
+        \\drop_two
+        \\--------
+        \\l1: $ g ⊢ a $ by auto?
+    , &counters);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"strengthen [#1]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}

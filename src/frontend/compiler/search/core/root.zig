@@ -3,7 +3,8 @@
 //!
 //! It searches ground goals with the rules whose conclusion fixes every
 //! binder but the quantifier witnesses and cuts (`catalog.zig`), over
-//! commutative `@acui` bags matched member by member (`terms.zig`),
+//! `@acui` bags matched member by member, commutative ones in any order
+//! and sequences in theirs (`terms.zig`),
 //! unfolding a definition in a goal or fact where its head does not match,
 //! and trying a goal in its `@rewrite` normal form. Its facts are the pool
 //! refs and the ground facts forward saturation derived from them, each

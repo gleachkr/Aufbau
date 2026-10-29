@@ -5,8 +5,9 @@
 //! as any goal that differs from it only in which wvars it holds, provided
 //! the wvars stand under the same constraints. The key is the goal written
 //! out with each wvar numbered in order of first occurrence (a subterm
-//! without wvars is its canonical id, a bag's members are sorted by how
-//! they are written), followed by each wvar's constraints:
+//! without wvars is its canonical id, a commutative bag's members are
+//! sorted by how they are written, a sequence's keep their order),
+//! followed by each wvar's constraints:
 //! - a γ wvar: whether it is a cut wvar, the variables it may not hold
 //!   (its capture list and the variables eigenvariables of its level or
 //!   above became) and which of the goal's eigenvariables are older than
@@ -151,7 +152,10 @@ pub const Keys = struct {
                             std.mem.swap(ExprId, &ctx.members[a], &ctx.members[b]);
                         }
                     };
-                    std.sort.pdqContext(0, sorted.len, Order{ .shapes = shapes, .members = sorted });
+                    // A sequence's members keep their order.
+                    if (combiner.law.isCommutative()) {
+                        std.sort.pdqContext(0, sorted.len, Order{ .shapes = shapes, .members = sorted });
+                    }
                     for (sorted) |member| try self.collect(member);
                     return;
                 }
@@ -195,7 +199,7 @@ pub const Keys = struct {
                     written[done] = try bytes.toOwnedSlice(self.allocator);
                     done += 1;
                 }
-                std.mem.sort([]u8, written, {}, struct {
+                if (combiner.law.isCommutative()) std.mem.sort([]u8, written, {}, struct {
                     fn lessThan(_: void, a: []u8, b: []u8) bool {
                         return std.mem.order(u8, a, b) == .lt;
                     }
@@ -231,7 +235,7 @@ pub const Keys = struct {
                     const shapes = try self.allocator.alloc(u64, members.len);
                     defer self.allocator.free(shapes);
                     for (members.slice(), shapes) |member, *out| out.* = try self.shape(member);
-                    std.mem.sort(u64, shapes, {}, std.sort.asc(u64));
+                    if (combiner.law.isCommutative()) std.mem.sort(u64, shapes, {}, std.sort.asc(u64));
                     hasher.update(std.mem.sliceAsBytes(shapes));
                 } else {
                     for (app.args) |arg| {
