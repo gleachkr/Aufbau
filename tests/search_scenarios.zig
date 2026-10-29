@@ -279,7 +279,8 @@ pub const scenarios = [_]Scenario{
         // against a single goal context, collapsing `G=H={p∧q}` by idempotency)
         // from an EMPTY pool under an `imp_intro`. Was an unfound probe until
         // constrained backward MP (256e05d) let the split's minors generate.
-        // Same proof as `nd_and_comm_split` but with no pooled `l1`.
+        // Same proof as `nd_and_comm_split` but with no pooled `l1`. The
+        // search core splits the context too and finds another proof first.
         .name = "zermelo nd_and_comm auto?",
         .mm0_path = "tests/proof_cases/zermelo.mm0",
         .proof_path = "tests/search_bench_cases/nd_and_comm.auf",
@@ -287,7 +288,7 @@ pub const scenarios = [_]Scenario{
         .expected_replacement = "imp_intro [and_intro " ++
             "(G := $ p ∧ q $, H := $ p ∧ q $) " ++
             "[and_elim_r [ax []], and_elim_l [ax []]]]",
-        .generate = .{ .enabled = true },
+        .generate = .{ .enabled = true, .core = false },
     },
     .{
         // Zermelo ND tautology over equality (probe): deep chain with eq rules.
@@ -443,7 +444,8 @@ pub const scenarios = [_]Scenario{
         .proof_path = "tests/search_bench_cases/nd_union_intro_imp.auf",
         .marker = "auto?",
         .expected_replacement = "union_intro (y := $ y $) [ax [], ax []]",
-        .generate = .{ .enabled = true },
+        // The search core proves it too, naming each `ax`'s context.
+        .generate = .{ .enabled = true, .core = false },
     },
     .{
         // Multiplicative `ex_elim` with a non-trivial complement: the major
@@ -959,7 +961,8 @@ pub const scenarios = [_]Scenario{
         .proof_path = "tests/search_bench_cases/euclid_dvd_fact_chain_auto.auf",
         .marker = "auto?",
         .expected_replacement = "le_iff_add [lt_implies_le_ax [and_elim_l [l1]]]",
-        .generate = .{ .enabled = true, .max_depth = 6 },
+        // The search core proves it too, through `pos_of_one_lt_ax`.
+        .generate = .{ .enabled = true, .max_depth = 6, .core = false },
     },
     .{
         // STAGES 4+7 composition, Hilbert style (minor premise in the pool):

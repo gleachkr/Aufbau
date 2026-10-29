@@ -17,25 +17,31 @@
 //! goal member; each choice is an alternative. The bag's rest binder takes
 //! what is left over, which is the minimal complement: a set law would
 //! also allow the rest to keep a member the template already claims, which
-//! the core does not try yet. Two bags holding wvars unify member by
-//! member (`pairBags`). An unbound wvar facing template structure does not
+//! the core does not try yet. A bag with several rest binders (shares,
+//! under a set law) leaves them unbound and reports the split (`split`) for
+//! the prover to settle. Two bags holding wvars unify member by member
+//! (`pairBags`); an unbound wvar of the bag's own sort, such as a share,
+//! stands for a part of the bag and takes the other bag's members nothing
+//! else pairs with. An unbound wvar facing template structure does not
 //! match: the witnesses of these stages stand for terms the theory's rules
 //! never take apart.
 //!
-//! Matching and unification are modulo definitions on the expression
-//! side: where heads differ, an application of the later-declared
-//! definition unfolds one step (`unfold`) and the match goes on, since a
-//! definition's body only uses terms declared before it. Equal heads
-//! compare argument by argument. A rule template's own definitions never
-//! unfold. The checker makes the same conversion when it validates the
-//! proof.
+//! Matching and unification are modulo definitions: where heads differ,
+//! an application of the later-declared definition unfolds one step
+//! (`unfold`, or `unfoldTemplate` for one in a rule's template) and the
+//! match goes on, since a definition's body only uses terms declared
+//! before it. Equal heads compare argument by argument. A template's
+//! definition with dummies does not unfold: its dummies would need binders
+//! the rule does not have. The checker makes the same conversion when it
+//! validates the proof.
 //!
 //! A goal holding a term some `@rewrite` rule rewrites also has a normal
 //! form (`normalForm`), which the prover tries beside it: the conversion to
-//! it is the checker's normalization. A term holding a witness variable
-//! has none yet, since what the variable becomes decides a rewrite's
-//! dependency conditions (`sb_t x t a` drops the substitution only when `a`
-//! does not depend on `x`).
+//! it is the checker's normalization. A part of it holding a γ witness
+//! variable has none yet, since what the variable becomes decides a
+//! rewrite's dependency conditions (`sb_t x t a` drops the substitution
+//! only when `a` does not depend on `x`); an eigenvariable normalizes as a
+//! fresh bound variable, which is what it becomes.
 
 const std = @import("std");
 const ExprId = @import("../../../expr.zig").ExprId;
@@ -56,11 +62,16 @@ pub const Error = error{
     Unsupported,
 };
 
+const TemplateKey = struct { args: usize, term_id: u32 };
+
 pub const Terms = struct {
     allocator: std.mem.Allocator,
     context: *const Context,
     theorem: *TheoremContext,
     wvars: *WVars,
+    /// The bag the shares of the conclusion match in progress split, while
+    /// the sink runs.
+    split: ?SplitBag = null,
     /// The commutative bag combiner each combiner head and each unit term
     /// reads as.
     bags: std.AutoHashMapUnmanaged(u32, AcuiBag.Combiner) = .empty,
@@ -79,6 +90,13 @@ pub const Terms = struct {
     normal_memo: std.AutoHashMapUnmanaged(ExprId, ExprId) = .empty,
     /// Created on the first normal form; its cache lasts the run.
     canonicalizer: ?Canonicalizer = null,
+    /// Template unfoldings (`unfoldTemplate`), null for a definition that
+    /// does not unfold; their argument lists live in `template_arena`.
+    template_unfolds: std.AutoHashMapUnmanaged(TemplateKey, ?TemplateExpr) = .empty,
+    template_arena: std.heap.ArenaAllocator,
+    /// Bound variables that stand in for eigenvariables while a goal is
+    /// normalized (`eigenNormal`), each with its sort.
+    stand_ins: std.ArrayListUnmanaged(struct { sort_name: []const u8, expr: ExprId }) = .empty,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -86,7 +104,13 @@ pub const Terms = struct {
         theorem: *TheoremContext,
         wvars: *WVars,
     ) Error!Terms {
-        var self = Terms{ .allocator = allocator, .context = context, .theorem = theorem, .wvars = wvars };
+        var self = Terms{
+            .allocator = allocator,
+            .context = context,
+            .theorem = theorem,
+            .wvars = wvars,
+            .template_arena = std.heap.ArenaAllocator.init(allocator),
+        };
         errdefer self.deinit();
         var it = context.registry.acui_by_head.keyIterator();
         while (it.next()) |head| {
@@ -106,6 +130,9 @@ pub const Terms = struct {
         self.redexes.deinit(self.allocator);
         self.normal_memo.deinit(self.allocator);
         if (self.canonicalizer) |*canonicalizer| canonicalizer.deinit();
+        self.stand_ins.deinit(self.allocator);
+        self.template_unfolds.deinit(self.allocator);
+        self.template_arena.deinit();
         self.* = undefined;
     }
 
@@ -168,7 +195,7 @@ pub const Terms = struct {
         @memcpy(values[0..app.args.len], app.args);
         const first = self.wvars.count();
         for (def.dummy_args, values[app.args.len..]) |dummy, *value| {
-            value.* = try self.wvars.introduce(dummy.sort_name, expr);
+            value.* = try self.wvars.introduce(dummy.sort_name, expr, null);
         }
         const result = self.instantiate(def.body.?, values) catch |err| switch (err) {
             error.Unsupported => {
@@ -180,6 +207,30 @@ pub const Terms = struct {
         for (first..self.wvars.count()) |idx| self.wvars.vars.items[idx].introduced_at = result;
         try self.unfold_memo.put(self.allocator, expr, result);
         return result;
+    }
+
+    /// The template application `app` of a definition unfolded one step:
+    /// its body with `app`'s arguments for its binders. Null when the
+    /// definition does not unfold or has dummies.
+    pub fn unfoldTemplate(self: *Terms, app: TemplateExpr.App) Error!?TemplateExpr {
+        const def = self.context.env.openableDef(app.term_id) orelse return null;
+        if (def.dummy_args.len != 0) return null;
+        const key = TemplateKey{ .args = @intFromPtr(app.args.ptr), .term_id = app.term_id };
+        if (self.template_unfolds.get(key)) |known| return known;
+        const result = try self.substTemplate(def.body.?, app.args);
+        try self.template_unfolds.put(self.allocator, key, result);
+        return result;
+    }
+
+    fn substTemplate(self: *Terms, body: TemplateExpr, args: []const TemplateExpr) Error!TemplateExpr {
+        return switch (body) {
+            .binder => |idx| args[idx],
+            .app => |app| blk: {
+                const out = try self.template_arena.allocator().alloc(TemplateExpr, app.args.len);
+                for (out, app.args) |*slot, arg| slot.* = try self.substTemplate(arg, args);
+                break :blk .{ .app = .{ .term_id = app.term_id, .args = out } };
+            },
+        };
     }
 
     /// The term `expr` applies, or null for a variable or placeholder.
@@ -227,13 +278,109 @@ pub const Terms = struct {
     }
 
     /// The canonical normal form of `expr` under the theory's `@rewrite`
-    /// rules, or null when `expr` is its own normal form, holds a witness
-    /// variable, or the normalizer fails on it (a rewrite cycle, or past
-    /// the step limit).
+    /// rules, or null when `expr` is its own normal form or the normalizer
+    /// fails on it (a rewrite cycle, or past the step limit). Where a γ
+    /// wvar decides a rewrite, the arguments around it are normalized
+    /// alone.
     pub fn normalForm(self: *Terms, expr: ExprId) Error!?ExprId {
         if (!try self.holdsHead(&self.redexes, expr, isRewritten)) return null;
-        if (try self.wvars.holdsWVar(expr)) return null;
-        if (self.normal_memo.get(expr)) |done| return if (done == expr) null else done;
+        const result = try self.normalPart(expr);
+        return if (result == expr) null else result;
+    }
+
+    fn normalPart(self: *Terms, expr: ExprId) Error!ExprId {
+        if (!try self.holdsHead(&self.redexes, expr, isRewritten)) return expr;
+        if (!try self.wvars.holdsWVar(expr)) return self.groundNormal(expr);
+        if (try self.eigenNormal(expr)) |normal| return normal;
+        const app = switch (self.theorem.interner.node(expr).*) {
+            .app => |app| app,
+            .variable, .placeholder => return expr,
+        };
+        if (app.args.len > catalog.max_args) return expr;
+        var args: [catalog.max_args]ExprId = undefined;
+        var changed = false;
+        for (app.args, 0..) |arg, idx| {
+            args[idx] = try self.normalPart(arg);
+            if (args[idx] != arg) changed = true;
+        }
+        if (!changed) return expr;
+        return self.canonical(try self.theorem.interner.internApp(app.term_id, args[0..app.args.len])) catch |err| switch (err) {
+            error.Unsupported => expr,
+            else => |e| return e,
+        };
+    }
+
+    /// The normal form of `expr` when its only unbound wvars are
+    /// eigenvariables, which normalize as fresh bound variables: each is
+    /// one, which nothing else in the goal depends on. Null when it holds
+    /// a γ wvar, whose value decides a rewrite's dependency conditions.
+    fn eigenNormal(self: *Terms, expr: ExprId) Error!?ExprId {
+        var held = std.ArrayListUnmanaged(u32).empty;
+        defer held.deinit(self.allocator);
+        try self.wvars.collectUnbound(self.allocator, expr, &held);
+        var eigens: [catalog.max_args]ExprId = undefined;
+        var stand_ins: [catalog.max_args]ExprId = undefined;
+        if (held.items.len > eigens.len) return null;
+        for (held.items, 0..) |idx, at| {
+            if (!self.wvars.isEigen(idx)) return null;
+            const sort_name = self.wvars.vars.items[idx].sort_name;
+            var nth: usize = 0;
+            for (held.items[0..at]) |other| {
+                if (std.mem.eql(u8, self.wvars.vars.items[other].sort_name, sort_name)) nth += 1;
+            }
+            eigens[at] = self.wvars.vars.items[idx].expr;
+            stand_ins[at] = (try self.standIn(sort_name, nth)) orelse return null;
+        }
+        const n = held.items.len;
+        const ground = try self.replace(expr, eigens[0..n], stand_ins[0..n]);
+        const normal = try self.groundNormal(ground);
+        if (normal == ground) return expr;
+        return self.canonical(try self.replace(normal, stand_ins[0..n], eigens[0..n])) catch |err| switch (err) {
+            error.Unsupported => expr,
+            else => |e| return e,
+        };
+    }
+
+    /// The `nth` bound variable of `sort_name` that stands in for an
+    /// eigenvariable, minted on first use; null when the theorem has no
+    /// dependency slot left for it.
+    fn standIn(self: *Terms, sort_name: []const u8, nth: usize) Error!?ExprId {
+        var seen: usize = 0;
+        for (self.stand_ins.items) |stand_in| {
+            if (!std.mem.eql(u8, stand_in.sort_name, sort_name)) continue;
+            if (seen == nth) return stand_in.expr;
+            seen += 1;
+        }
+        const sort_id = self.context.parser.core.sort_names.get(sort_name) orelse return null;
+        const expr = self.theorem.addDummyVarResolved(sort_name, sort_id) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return null,
+        };
+        try self.stand_ins.append(self.allocator, .{ .sort_name = sort_name, .expr = expr });
+        return expr;
+    }
+
+    /// `expr` with each leaf in `from` replaced by its counterpart in `to`.
+    fn replace(self: *Terms, expr: ExprId, from: []const ExprId, to: []const ExprId) Error!ExprId {
+        if (std.mem.indexOfScalar(ExprId, from, expr)) |at| return to[at];
+        const app = switch (self.theorem.interner.node(expr).*) {
+            .app => |app| app,
+            .variable, .placeholder => return expr,
+        };
+        if (app.args.len > catalog.max_args) return error.Unsupported;
+        var args: [catalog.max_args]ExprId = undefined;
+        var changed = false;
+        for (app.args, 0..) |arg, idx| {
+            args[idx] = try self.replace(arg, from, to);
+            if (args[idx] != arg) changed = true;
+        }
+        if (!changed) return expr;
+        return self.theorem.interner.internApp(app.term_id, args[0..app.args.len]);
+    }
+
+    /// The normal form of the wvar-free `expr`, or `expr` itself.
+    fn groundNormal(self: *Terms, expr: ExprId) Error!ExprId {
+        if (self.normal_memo.get(expr)) |done| return done;
         if (self.canonicalizer == null) {
             self.canonicalizer = Canonicalizer.init(self.allocator, self.theorem, self.context.registry, self.context.env, {});
         }
@@ -248,7 +395,7 @@ pub const Terms = struct {
             else => |e| return e,
         };
         try self.normal_memo.put(self.allocator, expr, result);
-        return if (result == expr) null else result;
+        return result;
     }
 
     /// `expr` with every bag in canonical form.
@@ -380,9 +527,9 @@ pub const Terms = struct {
     /// Whether `template`, with the rule binders `bindings` fixes, might
     /// be an instance of `expr`: a cheap structural check where an unfixed
     /// binder, an unbound wvar and a bag stand for anything.
-    pub fn mightFit(self: *const Terms, template: TemplateExpr, bindings: []const ?ExprId, expr: ExprId) bool {
+    pub fn mightFit(self: *Terms, template: TemplateExpr, bindings: []const ?ExprId, expr: ExprId) Error!bool {
         switch (template) {
-            .binder => |idx| return if (bindings[idx]) |value| self.mightEqual(value, expr) else true,
+            .binder => |idx| return if (bindings[idx]) |value| self.mightEqual(value, expr, .strict) else true,
             .app => |app| {
                 if (self.bagFor(app.term_id) != null) return true;
                 const target = switch (self.theorem.interner.node(self.wvars.resolve(expr)).*) {
@@ -391,7 +538,7 @@ pub const Terms = struct {
                 };
                 if (target.term_id != app.term_id or target.args.len != app.args.len) return false;
                 for (app.args, target.args) |arg, value| {
-                    if (!self.mightFit(arg, bindings, value)) return false;
+                    if (!try self.mightFit(arg, bindings, value)) return false;
                 }
                 return true;
             },
@@ -399,8 +546,10 @@ pub const Terms = struct {
     }
 
     /// Whether `a` and `b` might unify: a cheap structural check where an
-    /// unbound wvar and a bag stand for anything.
-    pub fn mightEqual(self: *const Terms, a: ExprId, b: ExprId) bool {
+    /// unbound wvar and a bag stand for anything, and with `.unfolding`,
+    /// where heads differ, an application of a definition declared after
+    /// the other head is compared unfolded.
+    pub fn mightEqual(self: *Terms, a: ExprId, b: ExprId, how: enum { strict, unfolding }) Error!bool {
         const lhs = self.wvars.resolve(a);
         const rhs = self.wvars.resolve(b);
         if (lhs == rhs) return true;
@@ -415,10 +564,16 @@ pub const Terms = struct {
             .placeholder => return true,
             .variable => return false,
         };
-        if (lhs_app.term_id != rhs_app.term_id or lhs_app.args.len != rhs_app.args.len) return false;
+        if (lhs_app.term_id != rhs_app.term_id) {
+            if (how == .strict) return false;
+            const later, const other = if (lhs_app.term_id > rhs_app.term_id) .{ lhs, rhs } else .{ rhs, lhs };
+            const unfolded = (try self.unfold(later)) orelse return false;
+            return self.mightEqual(unfolded, other, how);
+        }
+        if (lhs_app.args.len != rhs_app.args.len) return false;
         if (self.bagFor(lhs_app.term_id) != null) return true;
         for (lhs_app.args, rhs_app.args) |x, y| {
-            if (!self.mightEqual(x, y)) return false;
+            if (!try self.mightEqual(x, y, how)) return false;
         }
         return true;
     }
@@ -460,6 +615,14 @@ pub const Terms = struct {
     }
 };
 
+/// A conclusion bag whose rest binders are shares (`catalog.Rule.shares`):
+/// the goal bag's members and those the template's own members took.
+pub const SplitBag = struct {
+    combiner: AcuiBag.Combiner,
+    members: []const ExprId,
+    taken: u64,
+};
+
 /// What is left to match after the current step, as a stack-allocated
 /// list: the arguments of an application from position `at` on (template
 /// against goal, or two terms unified), and the next member of a bag in
@@ -477,7 +640,8 @@ const Pending = struct {
 };
 
 /// A bag being matched member by member: template members in match order,
-/// the goal's members, which of those are taken, and the rest binder.
+/// the goal's members, which of those are taken, and the rest binder, or
+/// whether several rest binders share the leftover.
 const BagState = struct {
     combiner: AcuiBag.Combiner,
     template: []const TemplateExpr,
@@ -485,17 +649,21 @@ const BagState = struct {
     used: u64 = 0,
     index: usize = 0,
     rest: ?usize = null,
+    shared: bool = false,
 };
 
 /// Two bags being unified member by member: each of `a`'s members against
-/// one of `b`'s, distinct ones unless the law is idempotent, and then,
-/// under an idempotent law, each of `b`'s members none was paired with
-/// against one of `a`'s. `index` counts over `a`, then over `b`.
+/// one of `b`'s, distinct ones unless the law is idempotent, and then each
+/// of `b`'s members none was paired with: into `absorb`, an unbound wvar of
+/// the bag's sort taken out of `a`, or under an idempotent law against one
+/// of `a`'s. `index` counts over `a`, then over `b`.
 const BagPairing = struct {
-    idempotent: bool,
+    combiner: AcuiBag.Combiner,
     a: []const ExprId,
     b: []const ExprId,
+    absorb: ?ExprId = null,
     paired: u64 = 0,
+    absorbed: u64 = 0,
     index: usize = 0,
 };
 
@@ -548,6 +716,9 @@ fn Matcher(comptime Sink: type) type {
                     if (try self.unfoldToward(app.term_id, target)) |unfolded| {
                         return self.term(template, unfolded, next);
                     }
+                    if (try self.unfoldTemplateToward(app, target)) |unfolded| {
+                        return self.term(unfolded, target, next);
+                    }
                     if (self.terms.bagFor(app.term_id)) |combiner| {
                         return self.startBag(combiner, template, target, next);
                     }
@@ -572,6 +743,14 @@ fn Matcher(comptime Sink: type) type {
             const own = self.terms.headOf(expr) orelse return null;
             if (own <= head) return null;
             return self.terms.unfold(expr);
+        }
+
+        /// The template application `app` unfolded one step when it applies
+        /// a definition declared after `expr`'s head.
+        fn unfoldTemplateToward(self: *Self, app: TemplateExpr.App, expr: ExprId) Error!?TemplateExpr {
+            const own = self.terms.headOf(expr) orelse return null;
+            if (own >= app.term_id) return null;
+            return self.terms.unfoldTemplate(app);
         }
 
         fn isBagTemplate(self: *const Self, template: TemplateExpr) bool {
@@ -602,6 +781,21 @@ fn Matcher(comptime Sink: type) type {
             const lhs_head = self.terms.headOf(lhs);
             const rhs_head = self.terms.headOf(rhs);
             if (lhs_head != rhs_head) {
+                // A bag holding a part of itself meets a one-member bag or
+                // the unit.
+                for ([_]?u32{ lhs_head, rhs_head }) |head| {
+                    const combiner = self.terms.bagFor(head orelse continue) orelse continue;
+                    if (combiner.head != head.?) continue;
+                    const pairing = (try @call(.never_inline, preparePairing, .{ self, combiner, lhs, rhs })) orelse break;
+                    if (pairing.absorb == null) {
+                        self.terms.allocator.free(pairing.a);
+                        self.terms.allocator.free(pairing.b);
+                        break;
+                    }
+                    defer self.terms.allocator.free(pairing.a);
+                    defer self.terms.allocator.free(pairing.b);
+                    return self.pairBags(pairing, next);
+                }
                 // Only the later-declared definition's unfoldings can reach
                 // the other head.
                 const lhs_later = rhs_head == null or (lhs_head != null and lhs_head.? > rhs_head.?);
@@ -630,19 +824,52 @@ fn Matcher(comptime Sink: type) type {
 
         /// The members of bags `lhs` and `rhs`, copied out of the
         /// fixed-capacity bags as `prepareBag` does; null when no pairing
-        /// can make them equal.
+        /// can make them equal. When exactly one bag holds one unbound wvar
+        /// of the bag's sort, that bag is `a` and the wvar its `absorb`.
         fn preparePairing(self: *Self, combiner: AcuiBag.Combiner, lhs: ExprId, rhs: ExprId) Error!?BagPairing {
-            const a = combiner.flatten(self.terms.theorem, lhs) orelse return error.Unsupported;
-            const b = combiner.flatten(self.terms.theorem, rhs) orelse return error.Unsupported;
-            const idempotent = combiner.law.isIdempotent();
-            if (!idempotent and a.len != b.len) return null;
+            var a = combiner.flatten(self.terms.theorem, lhs) orelse return error.Unsupported;
+            var b = combiner.flatten(self.terms.theorem, rhs) orelse return error.Unsupported;
+            const a_part = self.partOf(combiner, a.slice());
+            const b_part = self.partOf(combiner, b.slice());
+            var absorb: ?ExprId = null;
+            if ((a_part == null) != (b_part == null)) {
+                if (a_part == null) std.mem.swap(AcuiBag.ExprBag, &a, &b);
+                const at = (a_part orelse b_part).?;
+                absorb = a.items[at];
+                a.items[at] = a.items[a.len - 1];
+                a.len -= 1;
+                if (a.len > b.len) return null;
+            } else if (!combiner.law.isIdempotent() and a.len != b.len) return null;
             const allocator = self.terms.allocator;
             const a_members = try allocator.dupe(ExprId, a.slice());
             errdefer allocator.free(a_members);
-            return .{ .idempotent = idempotent, .a = a_members, .b = try allocator.dupe(ExprId, b.slice()) };
+            return .{
+                .combiner = combiner,
+                .a = a_members,
+                .b = try allocator.dupe(ExprId, b.slice()),
+                .absorb = absorb,
+            };
+        }
+
+        /// The position of the one member of `members` that is an unbound
+        /// wvar of the bag's own sort, standing for a part of the bag; null
+        /// when there is none or more than one.
+        fn partOf(self: *Self, combiner: AcuiBag.Combiner, members: []const ExprId) ?usize {
+            const wvars = self.terms.wvars;
+            const bag_sort = self.terms.context.env.terms.items[combiner.head].ret_sort_name;
+            var found: ?usize = null;
+            for (members, 0..) |member, at| {
+                const idx = wvars.of(member) orelse continue;
+                if (wvars.vars.items[idx].value != null) continue;
+                if (!std.mem.eql(u8, wvars.vars.items[idx].sort_name, bag_sort)) continue;
+                if (found != null) return null;
+                found = at;
+            }
+            return found;
         }
 
         fn pairBags(self: *Self, state: BagPairing, next: ?*const Pending) MatchError!void {
+            const idempotent = state.combiner.law.isIdempotent();
             var after = state;
             after.index += 1;
             const cell = Pending{ .step = .{ .pairing = &after }, .next = next };
@@ -653,14 +880,14 @@ fn Matcher(comptime Sink: type) type {
                 if (!try self.terms.wvars.holdsWVar(member)) {
                     for (state.b, 0..) |other, at| {
                         const bit = @as(u64, 1) << @intCast(at);
-                        if (other != member or (!state.idempotent and state.paired & bit != 0)) continue;
+                        if (other != member or (!idempotent and state.paired & bit != 0)) continue;
                         after.paired |= bit;
                         return self.pairBags(after, next);
                     }
                 }
                 for (state.b, 0..) |other, at| {
                     const bit = @as(u64, 1) << @intCast(at);
-                    if (!state.idempotent and state.paired & bit != 0) continue;
+                    if (!idempotent and state.paired & bit != 0) continue;
                     after.paired = state.paired | bit;
                     try self.unify(member, other, &cell);
                     if (self.stop) return;
@@ -668,11 +895,27 @@ fn Matcher(comptime Sink: type) type {
                 return;
             }
             const at = state.index - state.a.len;
-            if (at == state.b.len) return self.run(next);
+            if (at == state.b.len) {
+                const absorb = state.absorb orelse return self.run(next);
+                var part: AcuiBag.ExprBag = .{};
+                for (state.b, 0..) |member, idx| {
+                    if (state.absorbed & (@as(u64, 1) << @intCast(idx)) != 0) _ = part.append(member);
+                }
+                // `b`'s members are canonical and in order, so the part is
+                // canonical as it stands.
+                const value = (try state.combiner.build(self.terms.theorem, part.slice())) orelse return;
+                _ = try self.bindWVar(absorb, value, next);
+                return;
+            }
             const member = state.b[at];
-            if (state.paired & (@as(u64, 1) << @intCast(at)) != 0 or
-                (!try self.terms.wvars.holdsWVar(member) and std.mem.indexOfScalar(ExprId, state.a, member) != null))
+            const bit = @as(u64, 1) << @intCast(at);
+            if (state.paired & bit != 0 or (idempotent and !try self.terms.wvars.holdsWVar(member) and
+                std.mem.indexOfScalar(ExprId, state.a, member) != null))
             {
+                return self.pairBags(after, next);
+            }
+            if (state.absorb != null) {
+                after.absorbed |= bit;
                 return self.pairBags(after, next);
             }
             for (state.a) |other| {
@@ -722,12 +965,15 @@ fn Matcher(comptime Sink: type) type {
             const parts = combiner.flattenTemplate(template) orelse return error.Unsupported;
             const members = combiner.flatten(self.terms.theorem, expr) orelse return error.Unsupported;
             // Bound rest binders and structured members first, the unbound
-            // rest binder last: it takes what the others leave.
+            // rest binder last: it takes what the others leave. Several
+            // distinct unbound ones share it.
             var rest: ?usize = null;
+            var rests: u64 = 0;
             var kept: usize = 0;
             for (parts.slice()) |part| {
                 if (self.isRestBinder(combiner, part) and self.bindings[part.binder] == null) {
                     rest = part.binder;
+                    rests |= @as(u64, 1) << @intCast(part.binder);
                 } else {
                     kept += 1;
                 }
@@ -745,7 +991,8 @@ fn Matcher(comptime Sink: type) type {
                 .combiner = combiner,
                 .template = ordered,
                 .goal = try allocator.dupe(ExprId, members.slice()),
-                .rest = rest,
+                .rest = if (@popCount(rests) > 1) null else rest,
+                .shared = @popCount(rests) > 1,
             };
         }
 
@@ -798,6 +1045,12 @@ fn Matcher(comptime Sink: type) type {
         }
 
         fn finishBag(self: *Self, state: BagState, next: ?*const Pending) MatchError!void {
+            if (state.shared) {
+                const outer = self.terms.split;
+                self.terms.split = .{ .combiner = state.combiner, .members = state.goal, .taken = state.used };
+                defer self.terms.split = outer;
+                return self.run(next);
+            }
             const rest = state.rest orelse {
                 if (@popCount(state.used) == state.goal.len) try self.run(next);
                 return;

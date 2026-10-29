@@ -182,7 +182,7 @@ fn ndFolSearch(
     comptime name: []const u8,
     comptime statement: []const u8,
     counters: *types.SearchCounters,
-    max_depth: usize,
+    options: struct { max_depth: usize = 6, ladder: bool = true },
 ) !types.SourceSuggestions {
     const allocator = arena.allocator();
     const fixture = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/nd_fol.mm0", allocator, .unlimited);
@@ -191,7 +191,7 @@ fn ndFolSearch(
     const proof_src = name ++ "\n" ++ underline ++ "\nl1: $ " ++ statement ++ " $ by auto?\n";
     return suggestionsAtNeedle(arena, mm0_src, proof_src, "auto?", .{
         .counters = counters,
-        .generate = .{ .enabled = true, .core = true, .max_depth = max_depth },
+        .generate = .{ .enabled = true, .core = true, .max_depth = options.max_depth, .ladder = options.ladder },
     });
 }
 
@@ -199,7 +199,7 @@ test "the search core closes a quantifier witness by unification" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try ndFolSearch(&arena, "", "all_inst", "∅ ⊢ (∀ x P x) → P C", &counters, 6);
+    var suggestions = try ndFolSearch(&arena, "", "all_inst", "∅ ⊢ (∀ x P x) → P C", &counters, .{ .max_depth = 6 });
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"imp_intro [all_left [ax (g := $ ∀ x P x $) []]]"});
@@ -211,7 +211,7 @@ test "the search core introduces eigenvariables and closes later witnesses with 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try ndFolSearch(&arena, "", "ex_swap", "∅ ⊢ (∃ x ∃ y R x y) → (∃ z ∃ w R w z)", &counters, 6);
+    var suggestions = try ndFolSearch(&arena, "", "ex_swap", "∅ ⊢ (∃ x ∃ y R x y) → (∃ z ∃ w R w z)", &counters, .{ .max_depth = 6 });
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{
@@ -225,7 +225,7 @@ test "the search core names a witness the proof leaves open" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try ndFolSearch(&arena, "", "all_ex_inst", "∅ ⊢ (∀ x P x) → (∃ y P y)", &counters, 6);
+    var suggestions = try ndFolSearch(&arena, "", "all_ex_inst", "∅ ⊢ (∀ x P x) → (∃ y P y)", &counters, .{ .max_depth = 6 });
     defer suggestions.deinit();
 
     // Any object closes `P ?t ⊢ P ?t`; the first `@vars` name stands in.
@@ -245,7 +245,7 @@ test "a witness never takes an eigenvariable introduced after it" {
         "swap_bad",
         "∅ ⊢ (∀ x ∃ y R x y) → ∃ y ∀ x R x y",
         &counters,
-        2,
+        .{ .max_depth = 2 },
     );
     defer suggestions.deinit();
 
@@ -267,7 +267,7 @@ test "an eigenvariable becomes the variable a hypothesis names" {
         "gen",
         "∅ ⊢ ∀ x (P x ∧ P x)",
         &counters,
-        6,
+        .{ .max_depth = 6 },
     );
     defer suggestions.deinit();
 
@@ -289,7 +289,7 @@ test "a witness in a context member is closed by a hypothesis's context" {
         "wit",
         "Q C ⊢ ∃ x (P x → R C C)",
         &counters,
-        6,
+        .{ .max_depth = 6 },
     );
     defer suggestions.deinit();
 
@@ -355,7 +355,7 @@ test "a definition's dummy is a variable the proof names" {
         "some_p_cc",
         "P cc ⊢ some_p",
         &counters,
-        6,
+        .{ .max_depth = 6 },
     );
     defer suggestions.deinit();
 
@@ -376,7 +376,7 @@ test "a hypothesis stated with a definition closes the unfolded goal" {
         "all_q_use",
         "∅ ⊢ (∀ x Q x) ∧ (∀ x Q x)",
         &counters,
-        6,
+        .{ .max_depth = 6 },
     );
     defer suggestions.deinit();
 
@@ -397,7 +397,7 @@ test "a definition's dummy never becomes a variable its arguments hold" {
         "capture",
         "∅ ⊢ other x ∧ other x",
         &counters,
-        2,
+        .{ .max_depth = 2 },
     );
     defer suggestions.deinit();
 
@@ -422,7 +422,7 @@ test "a definition's dummy never becomes an ordinary variable" {
         "all_p_bad",
         "P a ⊢ all_p",
         &counters,
-        2,
+        .{ .max_depth = 2 },
     );
     defer suggestions.deinit();
 
@@ -456,24 +456,40 @@ test "the search core proves a premise in its rewrite normal form" {
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
-// `dn T` stated by an axiom: proving `¬ ¬ T` from it unfolds the rule's
-// conclusion, which the core does not do.
-const dn_axiom =
-    \\term T: wff;
-    \\axiom t_dn: $ ∅ ⊢ dn T $;
-    \\theorem dn_t: $ ∅ ⊢ ¬ ¬ T ∧ ¬ ¬ T $;
-;
-const dn_axiom_proof =
-    \\dn_t
-    \\----
-    \\l1: $ ∅ ⊢ ¬ ¬ T ∧ ¬ ¬ T $ by auto?
-;
-
-test "a goal that needs a rule's definition unfolded goes on to the ladder" {
+test "the search core unfolds a rule's definition to match a goal" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try search(&arena, dn_def ++ dn_axiom, dn_axiom_proof, &counters, true);
+    // `t_dn` states `dn T`; the goal holds its unfolding `¬ ¬ T`.
+    var suggestions = try search(&arena, dn_def ++
+        \\term T: wff;
+        \\axiom t_dn: $ ∅ ⊢ dn T $;
+        \\theorem dn_t: $ ∅ ⊢ ¬ ¬ T ∧ ¬ ¬ T $;
+    ,
+        \\dn_t
+        \\----
+        \\l1: $ ∅ ⊢ ¬ ¬ T ∧ ¬ ¬ T $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"and_intro [t_dn [], t_dn []]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// `all_p` stated by an axiom: proving `∀ x P x` from it unfolds the
+// axiom's conclusion, whose dummy the core has no binder for
+// (`Terms.unfoldTemplate`).
+const all_p_axiom =
+    "def all_p {.y: obj}: wff = $ ∀ y P y $;\n" ++
+    "axiom all_p_ax (g: ctx): $ g ⊢ all_p $;\n" ++
+    "theorem all_p_x {x: obj}: $ ∅ ⊢ ∀ x P x ∧ ∀ x P x $;\n";
+
+test "a goal that needs a rule's definition with a dummy unfolded goes on to the ladder" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try ndFolSearch(&arena, all_p_axiom, "all_p_x", "∅ ⊢ ∀ x P x ∧ ∀ x P x", &counters, .{});
     defer suggestions.deinit();
 
     try std.testing.expect(suggestions.items.len > 0);
@@ -486,10 +502,7 @@ test "with the ladder off, a goal the search core cannot prove has no proof" {
     defer arena.deinit();
     var counters = types.SearchCounters{};
     // The ladder proves this goal (test above).
-    var suggestions = try suggestionsAtNeedle(&arena, nd_rules ++ dn_def ++ dn_axiom, dn_axiom_proof, "auto?", .{
-        .counters = &counters,
-        .generate = .{ .enabled = true, .ladder = false },
-    });
+    var suggestions = try ndFolSearch(&arena, all_p_axiom, "all_p_x", "∅ ⊢ ∀ x P x ∧ ∀ x P x", &counters, .{ .ladder = false });
     defer suggestions.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
@@ -576,10 +589,11 @@ test "the search core fixes a cut from a hypothesis before the premise only a cl
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
-// A forward rule joining two contexts, which the core cannot apply
-// backward: its conclusion's bag has two rest binders.
+// A forward rule joining two contexts that the core leaves out: as a
+// bridge it only links facts in hand.
 const join_rules =
     \\--| @auto forward
+    \\--| @auto bridge
     \\axiom imp_elim_m (g h: ctx) (a b: wff): $ g ⊢ a → b $ > $ h ⊢ a $ > $ g , h ⊢ b $;
     \\
 ;
@@ -617,6 +631,321 @@ test "the search core closes premises with a fact forward saturation derived" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"and_intro [imp_elim_m [#1, #2], imp_elim_m [#1, #2]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// The conclusions' bags have two rest binders, which split the goal's
+// context between the premises.
+const split_rules =
+    \\axiom imp_elim_s (g h: ctx) (a b: wff): $ g ⊢ a → b $ > $ h ⊢ a $ > $ g , h ⊢ b $;
+    \\axiom weaken_s (g h: ctx) (a: wff): $ g ⊢ a $ > $ g , h ⊢ a $;
+    \\
+;
+
+const cut_rule =
+    \\axiom cut_s (g h: ctx) (a b: wff): $ g ⊢ a $ > $ h , a ⊢ b $ > $ g , h ⊢ b $;
+    \\
+;
+
+test "the search core splits a context between the hypotheses that close a rule's premises" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena, split_rules ++
+        \\theorem split_mp (g h: ctx) (a b: wff): $ g ⊢ a → b $ > $ h ⊢ a $ > $ g , h ⊢ b $;
+    ,
+        \\split_mp
+        \\--------
+        \\l1: $ g , h ⊢ b $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"imp_elim_s [#1, #2]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "a hypothesis fixes a share that sits beside other members" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `#2` states `h , k , a ⊢ b`: the share beside `a` takes `h , k`.
+    var suggestions = try search(&arena, cut_rule ++
+        \\theorem cut_hyps (g h k: ctx) (a b: wff):
+        \\  $ g ⊢ a $ > $ h , k , a ⊢ b $ > $ g , h , k ⊢ b ∧ b $;
+    ,
+        \\cut_hyps
+        \\--------
+        \\l1: $ g , h , k ⊢ b ∧ b $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"and_intro [cut_s [#1, #2], cut_s [#1, #2]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "a share a hypothesis leaves open takes the rest of the context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `#1` fixes the first share to `g`; the second takes `h`, which `#2`
+    // needs exactly.
+    var suggestions = try search(&arena, split_rules ++
+        \\theorem rest_mp (g h: ctx) (a b: wff): $ g ⊢ a ∧ a → b $ > $ h ⊢ a $ > $ g , h ⊢ b $;
+    ,
+        \\rest_mp
+        \\-------
+        \\l1: $ g , h ⊢ b $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"imp_elim_s [#1, and_intro [#2, #2]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "a share takes the whole context when the rest is not enough" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `#1` takes the whole context, so `ax` needs all of it again.
+    var suggestions = try search(&arena, split_rules ++
+        \\theorem whole_mp (g: ctx) (a b: wff): $ g , a ⊢ a → b $ > $ g , a ⊢ b $;
+    ,
+        \\whole_mp
+        \\--------
+        \\l1: $ g , a ⊢ b $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"imp_elim_s [#1, ax (g := $ g $, a := $ a $) []]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "a share no premise holds takes the rest of the context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena, split_rules ++
+        \\theorem weak (g h: ctx) (a: wff): $ g ⊢ a $ > $ g , h ⊢ a ∧ a $;
+    ,
+        \\weak
+        \\----
+        \\l1: $ g , h ⊢ a ∧ a $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"and_intro [weaken_s [#1], weaken_s [#1]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "shares never hold what the goal's context does not" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `#1` would put `h` into a share of `g`'s context.
+    var suggestions = try suggestionsAtNeedle(&arena, nd_rules ++ split_rules ++
+        \\theorem stray_mp (g h: ctx) (a b: wff): $ h ⊢ a → b $ > $ g ⊢ a $ > $ g ⊢ b $;
+    ,
+        \\stray_mp
+        \\--------
+        \\l1: $ g ⊢ b $ by auto?
+    , "auto?", .{
+        .counters = &counters,
+        .generate = .{ .enabled = true, .ladder = false },
+    });
+    defer suggestions.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
+    try std.testing.expect(counters.core_nodes > 0);
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// `ex_elim2`'s `z` is bound and only its premises hold it, though the
+// contexts may depend on it; its view reads back nothing. The core takes
+// `z` for an eigenvariable, which the first hypothesis names `x`.
+test "a bound binder the contexts may depend on is an eigenvariable" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena,
+        \\--| @vars x y
+        \\sort obj;
+        \\term ex {x: obj} (p: wff x): wff;
+        \\term P (a: obj): wff;
+        \\term Q: wff;
+        \\--| @view {z: obj} (g h: ctx z) (p: wff z) (c: wff): $ g ⊢ ex z p $ > $ h , p ⊢ c $ > $ g , h ⊢ c $
+        \\--| @freshen c z
+        \\axiom ex_elim2 {z: obj} (g h: ctx z) (p: wff z) (c: wff):
+        \\  $ g ⊢ ex z p $ > $ h , p ⊢ c $ > $ g , h ⊢ c $;
+        \\theorem ex_q (g h: ctx) {x: obj}: $ g ⊢ ex x (P x) $ > $ h , P x ⊢ Q $ > $ g , h ⊢ Q ∧ Q $;
+    ,
+        \\ex_q
+        \\----
+        \\l1: $ g , h ⊢ Q ∧ Q $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"and_intro [ex_elim2 [#1, #2], ex_elim2 [#1, #2]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// `le_trans`'s `y` is shared by both premises. The first premise's fact
+// `suc a ≤ b` gives `y = b`, and `b ≤ c` has no proof; the second
+// premise's fact `suc b ≤ c` gives `y = suc b`, and the first premise
+// then follows by `le_suc_suc`.
+test "a step whose first premise fixes a cut wrongly retries with another first" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena,
+        \\sort obj;
+        \\term suc (a: obj): obj;
+        \\term le (a b: obj): wff;
+        \\infixl le: $≤$ prec 30;
+        \\axiom le_trans (g h: ctx) (x y z: obj):
+        \\  $ g ⊢ x ≤ y $ > $ h ⊢ y ≤ z $ > $ g , h ⊢ x ≤ z $;
+        \\axiom le_suc_suc (g: ctx) (a b: obj): $ g ⊢ a ≤ b $ > $ g ⊢ suc a ≤ suc b $;
+        \\theorem le_chain (g h: ctx) (a b c: obj):
+        \\  $ g ⊢ suc a ≤ b $ > $ h ⊢ suc b ≤ c $ > $ g ⊢ a ≤ b $ > $ g , h ⊢ suc a ≤ c $;
+    ,
+        \\le_chain
+        \\--------
+        \\l1: $ g , h ⊢ suc a ≤ c $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"le_trans [le_suc_suc [#3], #2]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// The goal's context mentions `x`, under `ex`; `g` may depend on
+// `ex_elim3`'s `z`, so `z` still becomes `x`, which only `h` and `c` must
+// not mention.
+test "an eigenvariable becomes a variable only dependent arguments mention" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena,
+        \\--| @vars x y
+        \\sort obj;
+        \\term ex {x: obj} (p: wff x): wff;
+        \\term P (a: obj): wff;
+        \\term Q: wff;
+        \\--| @freshen h z
+        \\--| @freshen c z
+        \\axiom ex_elim3 {z: obj} (g: ctx z) (h: ctx) (p: wff z) (c: wff):
+        \\  $ g ⊢ ex z p $ > $ h , p ⊢ c $ > $ g , h ⊢ c $;
+        \\theorem ex_q3 (h: ctx) {x: obj}:
+        \\  $ ex x (P x) ⊢ ex x (P x) $ > $ h , P x ⊢ Q $ > $ ex x (P x) , h ⊢ Q ∧ Q $;
+    ,
+        \\ex_q3
+        \\-----
+        \\l1: $ ex x (P x) , h ⊢ Q ∧ Q $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"and_intro [ex_elim3 [#1, #2], ex_elim3 [#1, #2]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// `has_P a` unfolds to `holds y a (P y)` with its dummy `y` an
+// eigenvariable; `holds_intro`'s premise `sb y a (P y)` then has the
+// normal form `P a`, with `y` read as a fresh bound variable.
+test "a goal holding a definition's dummy is tried in its normal form" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena,
+        \\--| @vars x y
+        \\sort obj;
+        \\term sb {x: obj} (t: obj) (p: wff x): wff;
+        \\term P (a: obj): wff;
+        \\--| @rewrite
+        \\axiom sb_P {x: obj} (t: obj): $ sb x t (P x) ↔ P t $;
+        \\term holds {x: obj} (t: obj) (p: wff x): wff;
+        \\axiom holds_intro {x: obj} (g: ctx) (t: obj) (p: wff x):
+        \\  $ g ⊢ sb x t p $ > $ g ⊢ holds x t p $;
+        \\def has_P (t: obj) (.y: obj): wff = $ holds y t (P y) $;
+        \\theorem has_p_both (g: ctx) (a: obj): $ g ⊢ P a $ > $ g ⊢ has_P a ∧ has_P a $;
+    ,
+        \\has_p_both
+        \\----------
+        \\l1: $ g ⊢ has_P a ∧ has_P a $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"and_intro [holds_intro [#1], holds_intro [#1]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// `or_elim`'s minor premises each fit `#2`, which would make `q` the `a`
+// of `p`; the major premise holds both `p` and `q` and a hypothesis
+// stated with `either` fixes them, so it goes first. The second minor
+// premise then needs `b_c`, a rule no hypothesis closes.
+test "the premise holding the most shared cuts goes first" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena,
+        \\term or (a b: wff): wff;
+        \\infixr or: $∨$ prec 30;
+        \\axiom or_elim (g h k: ctx) (p q r: wff):
+        \\  $ g ⊢ p ∨ q $ > $ h , p ⊢ r $ > $ k , q ⊢ r $ > $ g , h , k ⊢ r $;
+        \\term A: wff;
+        \\term B: wff;
+        \\term C: wff;
+        \\def either: wff = $ A ∨ B $;
+        \\axiom b_c (g: ctx): $ g ⊢ B $ > $ g ⊢ C $;
+        \\theorem cases (g h: ctx): $ g ⊢ either $ > $ h , A ⊢ C $ > $ g , h ⊢ C $;
+    ,
+        \\cases
+        \\-----
+        \\l1: $ g , h ⊢ C $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try std.testing.expect(suggestions.items.len > 0);
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// `has_c` unfolds to `holds y c (P y)`, which does not mention `a`; the
+// proof keeps the dummy, and naming it `a`, first in the `@vars` pool but
+// an ordinary variable, would fail the checker.
+test "an eigenvariable is named by a bound variable" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena,
+        \\--| @vars a x y
+        \\sort obj;
+        \\term sb {x: obj} (t: obj) (p: wff x): wff;
+        \\term P (a: obj): wff;
+        \\term c: obj;
+        \\--| @rewrite
+        \\axiom sb_P {x: obj} (t: obj): $ sb x t (P x) ↔ P t $;
+        \\term holds {x: obj} (t: obj) (p: wff x): wff;
+        \\axiom holds_intro {x: obj} (g: ctx) (t: obj) (p: wff x):
+        \\  $ g ⊢ sb x t p $ > $ g ⊢ holds x t p $;
+        \\def has_c (.y: obj): wff = $ holds y c (P y) $;
+        \\theorem has_c_both (g: ctx) (a: obj): $ g , P a ⊢ P c $ > $ g , P a ⊢ has_c ∧ has_c $;
+    ,
+        \\has_c_both
+        \\----------
+        \\l1: $ g , P a ⊢ has_c ∧ has_c $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"and_intro [holds_intro [#1], holds_intro [#1]]"});
     try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }

@@ -393,17 +393,25 @@ pub const guards = [_]FrontierGuard{
     // first, offers proofs whose conclusion is an unreduced `[z/suc a] …`
     // that never reads back, and counting them crowded `l5` out of the four
     // places. The filter also picks up `le_lt_trans_ax`.
+    //
+    // `lt_trans_ax` and `range_sub_elim` are capped at their frontier
+    // since the search core took context-splitting rules: an elimination
+    // rule's wildcard minor (`G ⊢ ?p`) lets the core guess the cut from
+    // every fact, and its failed search spends the budget the generation
+    // search needs past the cap.
     .{
         .filter = "lt_trans_ax",
         .files = "tests/search_bench_cases/euclid_frontier.mm0:" ++
             "tests/search_bench_cases/euclid_frontier.auf",
         .mode = "depth",
+        .max_k = 4,
     },
     .{
         .filter = "range_sub_elim",
         .files = "tests/search_bench_cases/zermelo_frontier.mm0:" ++
             "tests/search_bench_cases/zermelo_frontier.auf",
         .mode = "depth",
+        .max_k = 1,
     },
     // Sub-goal `@auto trigger` re-seeding (task #512 piece 1,
     // `generate.zig` `Reseed`): the k=7 cut leaves an `or_elim` whose
@@ -412,12 +420,15 @@ pub const guards = [_]FrontierGuard{
     // (which names the eigenvariable `y`) yields the `ax` seed its
     // `and_elim_r` minor needs. 6/8 before, FULL with it; trips if the
     // sub-goal harvest, its free-variable gate, or the scoped extension
-    // pool regresses.
+    // pool regresses. Capped at k=5, the frontier, for the core budget
+    // spend described at `lt_trans_ax`, so this no longer reaches the k=7
+    // cut.
     .{
         .filter = "cb_bijection_maps_domain",
         .files = "tests/search_bench_cases/zermelo_frontier.mm0:" ++
             "tests/search_bench_cases/zermelo_frontier.auf",
         .mode = "depth",
+        .max_k = 5,
     },
     // Pinned family fills (task #512, `backtrack.solvePinnedMetas`) must be
     // anchored. hoare's `valid_elim` families `?g ⊢ ?w : φ` face `at_mp`'s

@@ -14,6 +14,14 @@
 //! of the agenda. Each way of closing a goal is tried with its witness
 //! bindings in force, so a later goal sees what an earlier one bound.
 //!
+//! A rule whose conclusion bag has several rest binders splits the goal's
+//! context between its premises (`Split`): each such binder is a share, a
+//! wvar a fact may bind to the part of the context it needs. A goal that
+//! still holds a share when its rules come up binds it first, to what the
+//! other shares leave of the context or to the whole context, and once the
+//! premises are proved the shares must make up the context again. A share
+//! a step binds must hold only members of its context from then on.
+//!
 //! A cut wvar is chosen by the proof, never invented: a goal that holds
 //! one unbound is closed by a fact or a closer, or by a rule whose
 //! conclusion match binds one of its cut wvars, and no other rule works on
@@ -52,6 +60,7 @@ const terms_mod = @import("./terms.zig");
 const Terms = terms_mod.Terms;
 const WVars = @import("./wvars.zig").WVars;
 const Keys = @import("./keys.zig").Keys;
+const AcuiBag = @import("../../../acui_bag.zig");
 
 pub const Error = terms_mod.Error || error{
     SearchBudgetExhausted,
@@ -135,9 +144,22 @@ const Frame = struct {
 const Agenda = struct {
     item: union(enum) {
         goal: Goal,
+        /// The premises of the rule that made `split` are proved.
+        settle: *const Split,
         close: *Frame,
     },
     next: ?*const Agenda,
+};
+
+/// The shares of one rule application (`catalog.Rule.shares`), which split
+/// the members of a goal bag between the premises. A share is a wvar that
+/// a fact may bind to a part of the bag; a goal that still holds one when
+/// rules come to it binds it first (`expand`).
+const Split = struct {
+    shares: []const u32,
+    bag: terms_mod.SplitBag,
+    /// The split whose premises were being proved when this one was made.
+    outer: ?*const Split,
 };
 
 /// How a run ended: the whole proof was accepted, this branch failed, or
@@ -161,8 +183,10 @@ const Proved = struct {
 
 const Internal = struct {
     wvar: u32,
-    /// For an eigenvariable, its introduction goal, resolved.
+    /// For an eigenvariable, its introduction goal and the arguments it
+    /// may not occur in, resolved.
     introduced_at: ?ExprId,
+    fresh_in: ?[]const ExprId,
 };
 
 const no_prune = std.math.maxInt(usize);
@@ -193,6 +217,8 @@ pub const Prover = struct {
     proved_open: std.StringHashMapUnmanaged(Proved) = .empty,
     /// Each sort's `@vars` pool variables, in pool order.
     pools: std.StringHashMapUnmanaged([]const ExprId) = .empty,
+    /// The innermost split whose premises are being proved.
+    splits: ?*const Split = null,
     next_frame: u32 = 0,
     /// The root goal's slot during `solve`.
     root: ?*const ?*const Node = null,
@@ -232,6 +258,7 @@ pub const Prover = struct {
         const cell = agenda orelse return self.finish();
         switch (cell.item) {
             .goal => |goal| return self.prove(goal, cell.next),
+            .settle => |split| return self.settle(split, cell.next),
             .close => |frame| {
                 frame.reached = true;
                 const constrained = self.wvars.constrainedOlderSince(frame.mark, frame.wvars);
@@ -277,6 +304,22 @@ pub const Prover = struct {
         var goal = raw;
         goal.expr = try self.terms.resolveGoal(raw.expr);
         const ground = !try self.wvars.holdsWVar(goal.expr);
+        var cuts = std.ArrayListUnmanaged(u32).empty;
+        defer cuts.deinit(self.allocator);
+        // Whether the goal can fail for reasons outside it: the shares it
+        // holds take their values from the rest of their split.
+        var shared = false;
+        if (!ground) {
+            try self.wvars.collectUnbound(self.allocator, goal.expr, &cuts);
+            var kept: usize = 0;
+            for (cuts.items) |idx| {
+                if (self.splitOf(idx) != null) shared = true;
+                if (!self.wvars.vars.items[idx].cut) continue;
+                cuts.items[kept] = idx;
+                kept += 1;
+            }
+            cuts.shrinkRetainingCapacity(kept);
+        }
         var key: []const u8 = &.{};
         var order: []const u32 = &.{};
         defer self.allocator.free(key);
@@ -289,9 +332,9 @@ pub const Prover = struct {
         } else blk: {
             key = try self.allocator.dupe(u8, try self.keys.key(goal.expr));
             order = try self.allocator.dupe(u32, self.keys.order.items);
-            if (self.failed_open.get(key)) |failed_at| {
+            if (!shared) if (self.failed_open.get(key)) |failed_at| {
                 if (failed_at >= goal.depth) return .failed;
-            }
+            };
             break :blk self.proved_open.get(key);
         };
         if (known) |proof| if (proof.depth <= goal.depth) {
@@ -311,18 +354,6 @@ pub const Prover = struct {
         }
         self.stats.nodes += 1;
 
-        var cuts = std.ArrayListUnmanaged(u32).empty;
-        defer cuts.deinit(self.allocator);
-        if (!ground) {
-            try self.wvars.collectUnbound(self.allocator, goal.expr, &cuts);
-            var kept: usize = 0;
-            for (cuts.items) |idx| {
-                if (!self.wvars.vars.items[idx].cut) continue;
-                cuts.items[kept] = idx;
-                kept += 1;
-            }
-            cuts.shrinkRetainingCapacity(kept);
-        }
         var frame = Frame{
             .id = self.next_frame,
             .goal = goal,
@@ -348,7 +379,7 @@ pub const Prover = struct {
             .failed => {},
             .cut => |id| if (id != frame.id) return .{ .cut = id },
         }
-        if (!frame.reached and self.prune_floor >= level) {
+        if (!frame.reached and !shared and self.prune_floor >= level) {
             // Every binding made below is undone, so the key is the
             // entry's again.
             const failed_at = if (ground) blk: {
@@ -387,10 +418,17 @@ pub const Prover = struct {
                 if (std.mem.indexOfScalar(u32, frame.order, idx) == null) return;
                 continue;
             }
-            const at = self.wvars.vars.items[idx].introduced_at;
+            const wvar = self.wvars.vars.items[idx];
+            var fresh_in: ?[]const ExprId = null;
+            if (wvar.fresh_in) |exprs| {
+                const resolved = try self.arena.alloc(ExprId, exprs.len);
+                for (resolved, exprs) |*out, expr| out.* = try self.wvars.deref(expr, null);
+                fresh_in = resolved;
+            }
             try internals.append(self.arena, .{
                 .wvar = idx,
-                .introduced_at = if (at) |goal| try self.wvars.deref(goal, null) else null,
+                .introduced_at = if (wvar.introduced_at) |goal| try self.wvars.deref(goal, null) else null,
+                .fresh_in = fresh_in,
             });
         }
         const proof = Proved{
@@ -440,7 +478,7 @@ pub const Prover = struct {
         for (proof.internals) |internal| {
             const wvar = self.wvars.vars.items[internal.wvar];
             const fresh = if (internal.introduced_at) |at|
-                try self.wvars.introduce(wvar.sort_name, at)
+                try self.wvars.introduce(wvar.sort_name, at, null)
             else
                 try self.wvars.mint(wvar.sort_name, wvar.capture, wvar.cut);
             try map.put(self.allocator, internal.wvar, fresh);
@@ -452,8 +490,13 @@ pub const Prover = struct {
         // copy exists.
         for (proof.internals) |internal| {
             const at = internal.introduced_at orelse continue;
-            const copy = self.wvars.of(map.get(internal.wvar).?).?;
-            self.wvars.vars.items[copy].introduced_at = try self.rename(at, &map, &memo);
+            const copy = &self.wvars.vars.items[self.wvars.of(map.get(internal.wvar).?).?];
+            copy.introduced_at = try self.rename(at, &map, &memo);
+            if (internal.fresh_in) |exprs| {
+                const renamed = try self.arena.alloc(ExprId, exprs.len);
+                for (renamed, exprs) |*out, expr| out.* = try self.rename(expr, &map, &memo);
+                copy.fresh_in = renamed;
+            }
         }
         return self.renameNode(proof.node, &map, &memo);
     }
@@ -510,10 +553,8 @@ pub const Prover = struct {
     /// or a cut.
     fn expand(self: *Prover, frame: *Frame, close: *const Agenda, path: *const PathCell) Error!Outcome {
         const goal = frame.goal;
-        // The goal, its normal form and the unfoldings of the last, each
-        // tried with the rules for its head: each is a conversion, which
-        // the checker makes. Facts meet the goal and its normal form, and
-        // unification unfolds definitions itself.
+        // Facts meet the goal and its normal form, and unification unfolds
+        // definitions itself.
         var targets = std.ArrayListUnmanaged(ExprId).empty;
         defer targets.deinit(self.allocator);
         try targets.append(self.allocator, goal.expr);
@@ -531,8 +572,39 @@ pub const Prover = struct {
                 if (try self.terms.unify(fact.expr, target, Applier, &applier)) return applier.outcome;
             }
         }
+        var held = std.ArrayListUnmanaged(u32).empty;
+        defer held.deinit(self.allocator);
+        const split = try self.heldShares(goal.expr, &held) orelse return self.expandRules(frame, goal.expr, close, path);
+        // The rules see the goal with its shares bound: to what the other
+        // shares leave of the bag, or to the whole bag.
+        const rest = try self.remainder(split);
+        const whole = try split.bag.combiner.build(self.terms.theorem, split.bag.members);
+        for ([_]?ExprId{ rest, if (whole == rest) null else whole }) |candidate| {
+            const value = candidate orelse continue;
+            const start = self.wvars.mark();
+            defer self.wvars.rollback(start);
+            for (held.items) |idx| {
+                if (!try self.wvars.bind(idx, value)) break;
+            } else {
+                const outcome = try self.expandRules(frame, try self.terms.resolveGoal(goal.expr), close, path);
+                if (outcome != .failed) return outcome;
+            }
+        }
+        return .failed;
+    }
+
+    /// Try the rules for `expr`, `frame`'s goal or the goal with its shares
+    /// bound, until one leads to a proof or a cut. The goal, its normal
+    /// form and the unfoldings of the last are each tried with the rules
+    /// for its head: each is a conversion, which the checker makes.
+    fn expandRules(self: *Prover, frame: *Frame, expr: ExprId, close: *const Agenda, path: *const PathCell) Error!Outcome {
+        const goal = frame.goal;
+        var targets = std.ArrayListUnmanaged(ExprId).empty;
+        defer targets.deinit(self.allocator);
+        try targets.append(self.allocator, expr);
+        if (try self.terms.normalForm(expr)) |normal| try targets.append(self.allocator, normal);
         while (try self.terms.unfold(targets.getLast())) |unfolded| try targets.append(self.allocator, unfolded);
-        const goal_sort = self.wvars.sortOf(goal.expr);
+        const goal_sort = self.wvars.sortOf(expr);
         var any_safe = false;
         // Unsafe alternatives are tried after the closers and safe rules,
         // those whose premises the facts might close first.
@@ -619,8 +691,9 @@ pub const Prover = struct {
     }
 
     /// One way an unsafe rule's conclusion matches a goal: the `index`th
-    /// match and how many of its premises no fact might close. The
-    /// rule's declaration order breaks ties.
+    /// match and how many of its premises no fact might close. The more
+    /// specific conclusion (`catalog.Rule.specificity`), then the rule's
+    /// declaration order break ties.
     const Alt = struct {
         entry: *const catalog_mod.Rule,
         /// The goal or unfolding of it the rule matched.
@@ -633,6 +706,7 @@ pub const Prover = struct {
 
         fn lessThan(_: void, lhs: Alt, rhs: Alt) bool {
             if (lhs.open != rhs.open) return lhs.open < rhs.open;
+            if (lhs.entry.specificity != rhs.entry.specificity) return lhs.entry.specificity > rhs.entry.specificity;
             if (lhs.entry.rule_id != rhs.entry.rule_id) return lhs.entry.rule_id < rhs.entry.rule_id;
             return lhs.index < rhs.index;
         }
@@ -661,10 +735,15 @@ pub const Prover = struct {
                     continue;
                 }
                 for (prover.facts) |fact| {
-                    if (prover.terms.mightFit(hyp, bindings, fact.expr)) break;
+                    if (try prover.terms.mightFit(hyp, bindings, fact.expr)) break;
                 } else open += 1;
             }
-            const kept = if (prover.wvars.mark() == self.mark) try prover.allocator.dupe(?ExprId, bindings) else null;
+            // A rule with shares is matched again: the match reports its
+            // split only while it runs.
+            const kept = if (prover.wvars.mark() == self.mark and self.entry.shares.len == 0)
+                try prover.allocator.dupe(?ExprId, bindings)
+            else
+                null;
             errdefer if (kept) |slice| prover.allocator.free(slice);
             try self.alts.append(prover.allocator, .{
                 .entry = self.entry,
@@ -727,6 +806,8 @@ pub const Prover = struct {
         var step: Step = undefined;
         var premises: []const TemplateExpr = &.{};
         var values: []const ExprId = &.{};
+        var split: ?Split = null;
+        if (!try self.sharesFit()) return .failed;
         switch (applier.how) {
             .ref => |ref| step = .{ .ref = ref },
             .rule => |entry| {
@@ -735,8 +816,18 @@ pub const Prover = struct {
                 for (full, bindings) |*value, binding| value.* = binding orelse undefined;
                 premises = entry.premises;
                 values = full;
-                if (entry.view) |view| values = try self.witness(entry, view, full, applier.target);
-                if (entry.cuts.len != 0) try self.cut(entry, full, applier.target);
+                const filled = try self.arena.alloc(bool, bindings.len);
+                for (filled, bindings) |*known, binding| known.* = binding != null;
+                // A share goes before the eigenvariables the step
+                // introduces, so none can end up in it, unless it depends
+                // on one (`ex_elim`'s `G: ctx x`).
+                const eigen_deps = self.eigenDeps(entry);
+                var shares = std.ArrayListUnmanaged(u32).empty;
+                try self.share(entry, eigen_deps, false, full, filled, &shares);
+                if (entry.view) |view| values = try self.witness(entry, view, full, filled, applier.target);
+                if (entry.cuts.len != 0) try self.cut(entry, full, filled, applier.target);
+                try self.share(entry, eigen_deps, true, full, filled, &shares);
+                if (shares.items.len != 0) split = .{ .shares = shares.items, .bag = self.terms.split.?, .outer = self.splits };
                 step = .{ .rule = .{ .rule_id = entry.rule_id, .bindings = full } };
             },
         }
@@ -760,11 +851,54 @@ pub const Prover = struct {
         }
         const order = try self.allocator.alloc(usize, premises.len);
         defer self.allocator.free(order);
-        try self.orderPremises(exprs, order);
-        const cells = try self.allocator.alloc(Agenda, premises.len);
-        defer self.allocator.free(cells);
+        var firsts = std.ArrayListUnmanaged(usize).empty;
+        defer firsts.deinit(self.allocator);
+        try self.orderPremises(exprs, order, &firsts);
         var head: *const Agenda = applier.close;
-        var at = premises.len;
+        var settle_cell: Agenda = undefined;
+        if (split) |*made| {
+            settle_cell = .{ .item = .{ .settle = made }, .next = head };
+            head = &settle_cell;
+            self.splits = made;
+        }
+        defer if (split) |made| {
+            self.splits = made.outer;
+        };
+        const outcome = try self.runPremises(applier, exprs, order, children, head);
+        if (outcome != .failed) return outcome;
+        // Another premise holding a cut of the first may be the one whose
+        // fact fixes it: `le_trans_ax`'s `y` in `suc a ≤ y` and `y ≤ c` is
+        // `suc b` when `suc b ≤ c` is a fact and `suc a ≤ b` is the only
+        // one for the first.
+        const reordered = try self.allocator.alloc(usize, order.len);
+        defer self.allocator.free(reordered);
+        for (firsts.items) |first| {
+            reordered[0] = first;
+            var at: usize = 1;
+            for (order) |idx| {
+                if (idx == first) continue;
+                reordered[at] = idx;
+                at += 1;
+            }
+            const retried = try self.runPremises(applier, exprs, reordered, children, head);
+            if (retried != .failed) return retried;
+        }
+        return .failed;
+    }
+
+    /// Run the premises `exprs` in `order`, then `next`.
+    fn runPremises(
+        self: *Prover,
+        applier: *const Applier,
+        exprs: []const ExprId,
+        order: []const usize,
+        children: []?*const Node,
+        next: *const Agenda,
+    ) Error!Outcome {
+        const cells = try self.allocator.alloc(Agenda, exprs.len);
+        defer self.allocator.free(cells);
+        var head = next;
+        var at = exprs.len;
         while (at > 0) {
             at -= 1;
             const idx = order[at];
@@ -784,38 +918,84 @@ pub const Prover = struct {
 
     /// The order to prove the premises `exprs` in, as indices into `order`.
     /// Those a fact might close go first: closing them binds the cut
-    /// wvars the others share. A premise that is an unbound wvar goes last
-    /// when such a sibling holds it, since any fact fits the wvar: closing
-    /// it first only guesses what the sibling fixes.
-    fn orderPremises(self: *Prover, exprs: []const ExprId, order: []usize) Error!void {
-        const ranks = try self.allocator.alloc(u2, exprs.len);
+    /// wvars the others share, and the more of those a premise holds, the
+    /// earlier it goes (`or_elim`'s major premise fixes what both minor
+    /// ones take). A fact that might close a premise only once a
+    /// definition unfolds (`cb_branch` for `p ∨ q`) breaks no tie. A
+    /// premise that is an unbound wvar goes last when such a sibling holds
+    /// it, since any fact fits the wvar: closing it first only guesses what
+    /// the sibling fixes. The other premises a fact might close that hold
+    /// an unbound cut wvar of the first go to `firsts`, to go first in its
+    /// stead if it fails.
+    fn orderPremises(self: *Prover, exprs: []const ExprId, order: []usize, firsts: *std.ArrayListUnmanaged(usize)) Error!void {
+        const Rank = struct {
+            /// 0: a fact might close the premise; 1: none might; 2: an
+            /// unbound wvar such a sibling holds.
+            class: u2,
+            cuts: usize,
+            /// A fact might close it without unfolding.
+            strict: bool,
+
+            fn before(ranks: []const @This(), lhs: usize, rhs: usize) bool {
+                const a = ranks[lhs];
+                const b = ranks[rhs];
+                if (a.class != b.class) return a.class < b.class;
+                if (a.cuts != b.cuts) return a.cuts > b.cuts;
+                if (a.strict != b.strict) return a.strict;
+                return lhs < rhs;
+            }
+        };
+        const ranks = try self.allocator.alloc(Rank, exprs.len);
         defer self.allocator.free(ranks);
-        for (ranks, exprs) |*rank, expr| {
-            rank.* = for (self.facts) |fact| {
-                if (self.terms.mightEqual(fact.expr, expr)) break 0;
-            } else 1;
-        }
         var held = std.ArrayListUnmanaged(u32).empty;
         defer held.deinit(self.allocator);
+        for (ranks, exprs) |*rank, expr| {
+            rank.* = .{ .class = 1, .cuts = 0, .strict = false };
+            for (self.facts) |fact| {
+                if (try self.terms.mightEqual(fact.expr, expr, .strict)) {
+                    rank.* = .{ .class = 0, .cuts = 0, .strict = true };
+                    break;
+                }
+                if (try self.terms.mightEqual(fact.expr, expr, .unfolding)) rank.class = 0;
+            }
+            if (rank.class != 0) continue;
+            held.clearRetainingCapacity();
+            try self.wvars.collectUnbound(self.allocator, expr, &held);
+            for (held.items) |idx| {
+                if (self.wvars.vars.items[idx].cut) rank.cuts += 1;
+            }
+        }
         for (ranks, exprs, 0..) |*rank, expr, idx| {
             const wvar = self.wvars.of(self.wvars.resolve(expr)) orelse continue;
             for (exprs, ranks, 0..) |sibling, sibling_rank, sibling_idx| {
-                if (sibling_idx == idx or sibling_rank != 0) continue;
+                if (sibling_idx == idx or sibling_rank.class != 0) continue;
                 if (self.wvars.of(self.wvars.resolve(sibling)) != null) continue;
                 held.clearRetainingCapacity();
                 try self.wvars.collectUnbound(self.allocator, sibling, &held);
                 if (std.mem.indexOfScalar(u32, held.items, wvar) != null) {
-                    rank.* = 2;
+                    rank.class = 2;
                     break;
                 }
             }
         }
-        var placed: usize = 0;
-        for (0..3) |pass| for (ranks, 0..) |rank, idx| {
-            if (rank != pass) continue;
-            order[placed] = idx;
-            placed += 1;
-        };
+        for (order, 0..) |*slot, idx| slot.* = idx;
+        std.mem.sort(usize, order, @as([]const Rank, ranks), Rank.before);
+
+        if (order.len < 2 or ranks[order[0]].cuts == 0) return;
+        var first_cuts = std.ArrayListUnmanaged(u32).empty;
+        defer first_cuts.deinit(self.allocator);
+        try self.wvars.collectUnbound(self.allocator, exprs[order[0]], &first_cuts);
+        for (order[1..]) |idx| {
+            if (ranks[idx].class != 0) continue;
+            held.clearRetainingCapacity();
+            try self.wvars.collectUnbound(self.allocator, exprs[idx], &held);
+            for (held.items) |wvar| {
+                if (!self.wvars.vars.items[wvar].cut) continue;
+                if (std.mem.indexOfScalar(u32, first_cuts.items, wvar) == null) continue;
+                try firsts.append(self.allocator, idx);
+                break;
+            }
+        }
     }
 
     /// Fill `entry`'s witnesses in `full` (a fresh wvar for each γ, an
@@ -826,6 +1006,7 @@ pub const Prover = struct {
         entry: *const catalog_mod.Rule,
         view: *const ViewDecl,
         full: []ExprId,
+        filled: []bool,
         goal: ExprId,
     ) Error![]const ExprId {
         const rule = &self.context.env.rules.items[entry.rule_id];
@@ -839,8 +1020,9 @@ pub const Prover = struct {
                     try self.terms.boundVariables(self.arena, pattern.*, &capture);
                     full[w.arg] = try self.wvars.mint(sort_name, capture.items, false);
                 },
-                .delta => full[w.arg] = try self.wvars.introduce(sort_name, goal),
+                .delta => full[w.arg] = try self.wvars.introduce(sort_name, goal, null),
             }
+            filled[w.arg] = true;
         }
         const values = try self.arena.alloc(ExprId, view.num_binders);
         for (view.binder_map, values) |mapped, *value| {
@@ -861,12 +1043,153 @@ pub const Prover = struct {
         return cuts.len == 0;
     }
 
+    /// The binders of `entry`'s eigenvariables, as a dependency mask.
+    fn eigenDeps(self: *const Prover, entry: *const catalog_mod.Rule) u64 {
+        const args = self.context.env.rules.items[entry.rule_id].args;
+        var deps: u64 = 0;
+        for (entry.cuts) |c| {
+            if (c.kind == .delta) deps |= args[c.arg].deps;
+        }
+        for (entry.witnesses) |w| {
+            if (w.kind == .delta) deps |= args[w.arg].deps;
+        }
+        return deps;
+    }
+
+    /// Fill the shares of `entry` the match left unbound with fresh wvars:
+    /// those that depend on an eigenvariable of the step when `dependent`,
+    /// the others otherwise.
+    fn share(
+        self: *Prover,
+        entry: *const catalog_mod.Rule,
+        eigen_deps: u64,
+        dependent: bool,
+        full: []ExprId,
+        filled: []bool,
+        shares: *std.ArrayListUnmanaged(u32),
+    ) Error!void {
+        const args = self.context.env.rules.items[entry.rule_id].args;
+        for (entry.shares) |arg| {
+            if (filled[arg] or (args[arg].deps & eigen_deps != 0) != dependent) continue;
+            full[arg] = try self.wvars.mint(args[arg].sort_name, &.{}, false);
+            filled[arg] = true;
+            try shares.append(self.arena, self.wvars.of(full[arg]).?);
+        }
+    }
+
+    /// The split wvar `idx` is a share of, if any.
+    fn splitOf(self: *const Prover, idx: u32) ?*const Split {
+        var at = self.splits;
+        while (at) |split| : (at = split.outer) {
+            if (std.mem.indexOfScalar(u32, split.shares, idx) != null) return split;
+        }
+        return null;
+    }
+
+    /// The split of the first unbound share `expr` holds, with the unbound
+    /// shares of that split it holds in `held`; null when it holds none.
+    fn heldShares(self: *Prover, expr: ExprId, held: *std.ArrayListUnmanaged(u32)) Error!?*const Split {
+        if (self.splits == null or !try self.wvars.holdsWVar(expr)) return null;
+        try self.wvars.collectUnbound(self.allocator, expr, held);
+        var found: ?*const Split = null;
+        var kept: usize = 0;
+        for (held.items) |idx| {
+            const split = self.splitOf(idx) orelse continue;
+            if (found == null) found = split;
+            if (split != found.?) continue;
+            held.items[kept] = idx;
+            kept += 1;
+        }
+        held.shrinkRetainingCapacity(kept);
+        return found;
+    }
+
+    /// The members of `split`'s bag that neither the template's own
+    /// members took nor a bound share holds, as one expression; null when
+    /// there are none and the bag has no unit.
+    fn remainder(self: *Prover, split: *const Split) Error!?ExprId {
+        const bag = split.bag;
+        var left: AcuiBag.ExprBag = .{};
+        for (bag.members, 0..) |member, at| {
+            if (bag.taken & (@as(u64, 1) << @intCast(at)) != 0) continue;
+            if (try self.shareHolds(split, member)) continue;
+            _ = left.append(member);
+        }
+        return bag.combiner.build(self.terms.theorem, left.slice());
+    }
+
+    /// Whether a bound share of `split` holds the bag member `member`.
+    fn shareHolds(self: *Prover, split: *const Split, member: ExprId) Error!bool {
+        const want = try self.terms.resolveGoal(member);
+        for (split.shares) |idx| {
+            const value = self.wvars.vars.items[idx].value orelse continue;
+            const members = split.bag.combiner.flatten(self.terms.theorem, try self.terms.resolveGoal(value)) orelse
+                return error.Unsupported;
+            if (std.mem.indexOfScalar(ExprId, members.slice(), want) != null) return true;
+        }
+        return false;
+    }
+
+    /// Whether every bound share holds only members of its bag, as far as
+    /// is known: a member holding an unbound wvar may still become one.
+    fn sharesFit(self: *Prover) Error!bool {
+        var at = self.splits;
+        while (at) |split| : (at = split.outer) {
+            var members: AcuiBag.ExprBag = .{};
+            for (split.bag.members) |member| _ = members.append(try self.terms.resolveGoal(member));
+            for (split.shares) |idx| {
+                const value = self.wvars.vars.items[idx].value orelse continue;
+                const held = split.bag.combiner.flatten(self.terms.theorem, try self.terms.resolveGoal(value)) orelse
+                    return error.Unsupported;
+                for (held.slice()) |member| {
+                    if (std.mem.indexOfScalar(ExprId, members.slice(), member) != null) continue;
+                    if (try self.wvars.holdsWVar(member)) continue;
+                    for (members.slice()) |other| {
+                        if (try self.wvars.holdsWVar(other)) break;
+                    } else return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /// The premises of `split`'s rule are proved: a share still unbound
+    /// (one no premise holds) takes what the others leave, and then the
+    /// shares must hold only members of the bag and every member the
+    /// template's own members did not take.
+    fn settle(self: *Prover, split: *const Split, next: ?*const Agenda) Error!Outcome {
+        const start = self.wvars.mark();
+        defer self.wvars.rollback(start);
+        for (split.shares) |idx| {
+            if (self.wvars.vars.items[idx].value != null) continue;
+            const value = (try self.remainder(split)) orelse return .failed;
+            if (!try self.wvars.bind(idx, value)) return .failed;
+        }
+        const bag = split.bag;
+        var members: AcuiBag.ExprBag = .{};
+        for (bag.members) |member| _ = members.append(try self.terms.resolveGoal(member));
+        for (split.shares) |idx| {
+            const value = try self.terms.resolveGoal(self.wvars.vars.items[idx].expr);
+            const held = bag.combiner.flatten(self.terms.theorem, value) orelse return error.Unsupported;
+            for (held.slice()) |member| {
+                if (std.mem.indexOfScalar(ExprId, members.slice(), member) == null) return .failed;
+            }
+        }
+        for (bag.members, 0..) |member, at| {
+            if (bag.taken & (@as(u64, 1) << @intCast(at)) != 0) continue;
+            if (!try self.shareHolds(split, member)) return .failed;
+        }
+        return self.run(next);
+    }
+
     /// Fill `entry`'s cuts in `full`: a fresh wvar for each γ, an
     /// eigenvariable introduced at `goal` for each δ. A γ cut that depends
     /// on no δ one is minted before them, so it cannot hold one; nor may it
     /// hold the variable of a bound binder of the conclusion it does not
-    /// depend on.
-    fn cut(self: *Prover, entry: *const catalog_mod.Rule, full: []ExprId, goal: ExprId) Error!void {
+    /// depend on. A δ cut may become a variable only the arguments that
+    /// depend on it mention (`ex_elim`'s `x`, which `G` may hold but not
+    /// `H` or `c`).
+    fn cut(self: *Prover, entry: *const catalog_mod.Rule, full: []ExprId, filled: []bool, goal: ExprId) Error!void {
         const args = self.context.env.rules.items[entry.rule_id].args;
         var cut_mask: u64 = 0;
         var delta_deps: u64 = 0;
@@ -893,8 +1216,16 @@ pub const Prover = struct {
                     }
                     break :blk try self.wvars.mint(arg.sort_name, capture.items, true);
                 },
-                .delta => try self.wvars.introduce(arg.sort_name, goal),
+                .delta => blk: {
+                    var fresh_in = std.ArrayListUnmanaged(ExprId).empty;
+                    for (args, full, filled, 0..) |other, value, known, idx| {
+                        if (!known or idx == c.arg or other.deps & arg.deps != 0) continue;
+                        try fresh_in.append(self.arena, value);
+                    }
+                    break :blk try self.wvars.introduce(arg.sort_name, goal, fresh_in.items);
+                },
             };
+            filled[c.arg] = true;
         };
     }
 

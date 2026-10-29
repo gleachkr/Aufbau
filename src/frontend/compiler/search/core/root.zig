@@ -295,6 +295,7 @@ const CloseOut = struct {
             const wvar = wvars.vars.items[idx];
             const goal = try wvars.deref(wvar.introduced_at.?, &self.names);
             const name = for (try self.prover.pool(wvar.sort_name)) |variable| {
+                if (!wvars.isBound(variable)) continue;
                 if (wvars.eigens.contains(variable) and !shared.contains(variable)) continue;
                 if (std.mem.indexOfScalar(ExprId, wvar.capture, variable) != null) continue;
                 if (!wvars.mentions(goal, variable)) break variable;

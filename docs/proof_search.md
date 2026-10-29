@@ -101,18 +101,24 @@ particular term, as tableau provers do. A premise variable a rule's
 conclusion leaves open, such as the middle formula of a transitivity
 rule, is such an unknown too; while a goal holds it unchosen, only a
 hypothesis, an axiom, or a rule whose conclusion fixes it may prove that
-goal. The core unfolds a definition in a goal or hypothesis where a rule
-or another formula needs what it stands for, but not one in a rule's own
-statement. It also tries a goal in its `@rewrite` normal form, so a
-premise a rule states as a redex (an induction rule's `sb_f x 0 p`)
-meets the hypotheses and rules for the form it reduces to; a goal
-holding a witness the core has not chosen waits, since what the witness
-becomes can decide a rewrite. Besides the hypotheses, the core closes
-goals with the facts the `@auto forward` pass derives from them (those
-with no quantifier witness left open), so a rule it cannot apply backward,
-such as one joining two contexts, still reaches the proof through its
-forward instances. A goal the core does not take (one with
-holes or a non-commutative `@acui` combiner) or cannot prove within the
+goal. The core unfolds a definition where a rule or another formula
+needs what it stands for, in a goal, a hypothesis, or a rule's own
+statement (except a definition with dummies there). It also tries a goal
+in its `@rewrite` normal form, so a premise a rule states as a redex (an
+induction rule's `sb_f x 0 p`) meets the hypotheses and rules for the
+form it reduces to; a part of the goal that holds a witness the core has
+not chosen waits, since what the witness becomes can decide a rewrite,
+while a definition's bound variable counts as a fresh one. A rule whose
+conclusion joins several contexts (`or_elim`'s `G , H , K ⊢ r`, over a
+set-like `@acui` context) splits the goal's context between its premises
+without trying the ways to split it: a hypothesis that proves a premise
+fixes that premise's part, and a premise proved by rules gets what the
+other parts leave or the whole context. Besides the hypotheses, the core
+closes goals with the facts the `@auto forward` pass derives from them
+(those with no quantifier witness left open), so a rule it cannot apply
+backward, such as an `@auto bridge`, still reaches the proof through its
+forward instances. A goal the core does not take (one with holes or a
+non-commutative `@acui` combiner) or cannot prove within the
 depth limit goes on to the generation search, in what is left of the
 same work budget.
 Either way the checker validates a proof before it is offered.

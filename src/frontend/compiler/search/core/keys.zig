@@ -73,10 +73,14 @@ pub const Keys = struct {
             list.clearRetainingCapacity();
             if (wvar.introduced_at) |at| {
                 try self.bytes.append(self.allocator, 'e');
-                const mentioned = try self.variables(try self.wvars.deref(at, null));
+                var mentioned = std.ArrayListUnmanaged(ExprId).empty;
+                defer mentioned.deinit(self.allocator);
+                for (wvar.fresh_in orelse &.{at}) |expr| {
+                    try mentioned.appendSlice(self.allocator, try self.variables(try self.wvars.deref(expr, null)));
+                }
                 for ([_][]const ExprId{ goal_vars, self.fact_vars }) |reachable| {
                     for (reachable) |variable| {
-                        if (std.mem.indexOfScalar(ExprId, mentioned, variable) != null or
+                        if (std.mem.indexOfScalar(ExprId, mentioned.items, variable) != null or
                             std.mem.indexOfScalar(ExprId, wvar.capture, variable) != null or
                             self.wvars.eigens.contains(variable))
                         {

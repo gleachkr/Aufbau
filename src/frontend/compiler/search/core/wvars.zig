@@ -44,6 +44,10 @@ pub const WVar = struct {
     capture: []const ExprId,
     /// For an eigenvariable, the goal it was introduced at.
     introduced_at: ?ExprId = null,
+    /// For an eigenvariable a rule introduces, the rule's arguments that
+    /// do not depend on it, which it may not occur in; null when it may
+    /// occur nowhere in its introduction goal.
+    fresh_in: ?[]const ExprId = null,
     cut: bool = false,
     value: ?ExprId = null,
 };
@@ -208,14 +212,16 @@ pub const WVars = struct {
         });
     }
 
-    /// A new eigenvariable introduced at `goal`.
-    pub fn introduce(self: *WVars, sort_name: []const u8, goal: ExprId) Error!ExprId {
+    /// A new eigenvariable introduced at `goal`, kept out of the whole goal,
+    /// or only out of `fresh_in` when that is given.
+    pub fn introduce(self: *WVars, sort_name: []const u8, goal: ExprId, fresh_in: ?[]const ExprId) Error!ExprId {
         const expr = try self.add(.{
             .expr = undefined,
             .sort_name = sort_name,
             .level = self.eigen_count,
             .capture = &.{},
             .introduced_at = goal,
+            .fresh_in = fresh_in,
         });
         self.eigen_count += 1;
         return expr;
@@ -327,15 +333,24 @@ pub const WVars = struct {
         };
     }
 
+    /// Whether `variable` is a bound variable, the only kind an
+    /// eigenvariable may become.
+    pub fn isBound(self: *const WVars, variable: ExprId) bool {
+        const info = (self.theorem.currentLeafInfo(variable) catch null) orelse return false;
+        return info.bound;
+    }
+
     /// Whether wvar `idx` may hold, or as an eigenvariable become, the
     /// variable `variable`. An eigenvariable becomes only a bound variable.
     pub fn admits(self: *WVars, idx: u32, variable: ExprId) bool {
         const wvar = self.vars.items[idx];
         if (std.mem.indexOfScalar(ExprId, wvar.capture, variable) != null) return false;
         if (wvar.introduced_at) |goal| {
-            const info = (self.theorem.currentLeafInfo(variable) catch null) orelse return false;
-            if (!info.bound) return false;
-            return !self.eigens.contains(variable) and !self.mentions(goal, variable);
+            if (!self.isBound(variable) or self.eigens.contains(variable)) return false;
+            for (wvar.fresh_in orelse &.{goal}) |expr| {
+                if (self.mentions(expr, variable)) return false;
+            }
+            return true;
         }
         const level = self.eigens.get(variable) orelse return true;
         return level < wvar.level;

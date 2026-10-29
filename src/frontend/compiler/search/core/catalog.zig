@@ -18,17 +18,18 @@
 //!   holds the instance itself, not a substitution redex;
 //! - in a rule without a view, a **cut** (`imp_trans`'s `q`, `t_app`'s
 //!   `A`): a binder that is not bound becomes a fresh witness variable,
-//!   which only a premise's closure binds. A bound one that is an
-//!   eigenvariable (`subset_intro`'s `x`) is δ, stated by the premises
-//!   directly.
+//!   which only a premise's closure binds. A bound one (`subset_intro`'s
+//!   `x`) is δ, stated by the premises directly.
 //!
 //! A rule whose conclusion is a bare binder (`mp`'s `b`) applies to every
 //! goal of that binder's sort; its other binders are cuts.
 //!
-//! Rules are admitted over commutative `@acui` bags with at most one rest
-//! binder per bag. A definition in a rule is an ordinary term constructor:
-//! the core unfolds definitions in goals and facts (`terms.zig`), never in
-//! a rule's own templates. A relation's transport (`mpbi`) is left out:
+//! Rules are admitted over commutative `@acui` bags. A conclusion bag with
+//! more than one rest binder (`or_elim`'s `G , H , K`) needs an idempotent
+//! law: its rest binders are **shares**, which split the goal's context
+//! between the premises (`Prover.Split`). A definition in a rule is an
+//! ordinary term constructor: the core unfolds definitions in goals and
+//! facts (`terms.zig`), never in a rule's own templates. A relation's transport (`mpbi`) is left out:
 //! the core converts by unification, unfolding and normal forms instead.
 //! Rules mixing cuts with a view and rules with fresh variables wait for
 //! the later stages, as do bridges, which only link facts already in hand.
@@ -56,6 +57,12 @@ pub const Rule = struct {
     witnesses: []const Witness = &.{},
     /// The binders a rule without a view leaves open.
     cuts: []const Cut = &.{},
+    /// The rest binders of a conclusion bag that has more than one.
+    shares: []const usize = &.{},
+    /// The term applications the conclusion fixes outside bags: of two
+    /// unsafe rules, the one whose conclusion says more about the goal is
+    /// tried first.
+    specificity: u8 = 0,
 
     /// Whether the rule has a γ cut, a value only a premise's closure picks.
     pub fn hasGammaCut(self: *const Rule) bool {
@@ -68,6 +75,7 @@ pub const Rule = struct {
     fn deinit(self: Rule, allocator: std.mem.Allocator) void {
         allocator.free(self.witnesses);
         allocator.free(self.cuts);
+        allocator.free(self.shares);
     }
 };
 
@@ -140,6 +148,7 @@ pub fn build(allocator: std.mem.Allocator, context: *const Context) !Catalog {
         var entry = (try admit(allocator, context, rule_id)) orelse continue;
         errdefer entry.deinit(allocator);
         const rule = &context.env.rules.items[rule_id];
+        entry.specificity = @intCast(@min(rigidApps(context, rule.concl), std.math.maxInt(u8)));
         if (rule.hyps.len == 0) {
             entry.role = .closer;
         } else if (context.registry.eagerPriority(rule_id)) |priority| {
@@ -163,7 +172,7 @@ pub fn build(allocator: std.mem.Allocator, context: *const Context) !Catalog {
         errdefer allocator.free(rules);
         std.mem.sort(Rule, rules, {}, ruleLessThan);
         try catalog.by_head.put(allocator, entry.key_ptr.*, rules);
-        // The catalog owns the witness and cut lists now.
+        // The catalog owns the witness, cut and share lists now.
         entry.value_ptr.clearRetainingCapacity();
     }
     return catalog;
@@ -176,7 +185,8 @@ fn ruleLessThan(_: void, lhs: Rule, rhs: Rule) bool {
 }
 
 /// The catalog entry for `rule_id` (role still unset), or null when the
-/// core does not apply it. The caller owns the witness and cut lists.
+/// core does not apply it. The caller owns the witness, cut and share
+/// lists.
 fn admit(allocator: std.mem.Allocator, context: *const Context, rule_id: u32) !?Rule {
     const rule = &context.env.rules.items[rule_id];
     switch (rule.concl) {
@@ -191,33 +201,39 @@ fn admit(allocator: std.mem.Allocator, context: *const Context, rule_id: u32) !?
     if (rule.args.len > 64) return null;
     const concl_mask = Rules.templateBinderMask(rule.concl);
     if (concl_mask.overflow) return null;
-    if (!templateSupported(context, rule.args, rule.concl)) return null;
+    if (!templateSupported(context, rule.args, rule.concl, .conclusion)) return null;
+    var shares = std.ArrayListUnmanaged(usize).empty;
+    errdefer shares.deinit(allocator);
+    try collectShares(allocator, context, rule.args, rule.concl, &shares);
     const all: u64 = if (rule.args.len == 64)
         std.math.maxInt(u64)
     else
         (@as(u64, 1) << @intCast(rule.args.len)) - 1;
-    // A rule the conclusion fixes keeps its own premises even with a view.
-    const view = (if (concl_mask.mask == all) null else context.views.getPtr(rule_id)) orelse {
+    // A rule the conclusion fixes keeps its own premises even with a view,
+    // as does one whose view reads back no binder (`ex_elim`'s, which only
+    // carries `@freshen`).
+    const view = (if (concl_mask.mask == all) null else readsBack(context, rule_id, concl_mask.mask)) orelse {
         for (rule.hyps) |hyp| {
-            if (!templateSupported(context, rule.args, hyp)) return null;
+            if (!templateSupported(context, rule.args, hyp, .premise)) return null;
         }
         var cuts = std.ArrayListUnmanaged(Cut).empty;
         errdefer cuts.deinit(allocator);
         for (rule.args, 0..) |arg, idx| {
             if ((concl_mask.mask >> @intCast(idx)) & 1 != 0) continue;
-            const kind: Kind = if (!arg.bound)
-                .gamma
-            else if (Rules.isEigenvariable(rule.args, idx))
-                .delta
-            else
-                return null;
+            // A bound one is δ even when other binders may depend on it
+            // (`ex_elim`'s `x`, with `G H: ctx x`): a fresh variable is
+            // a value those binders allow too.
+            const kind: Kind = if (arg.bound) .delta else .gamma;
             try cuts.append(allocator, .{ .kind = kind, .arg = idx });
         }
+        const owned_cuts = try cuts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_cuts);
         return .{
             .rule_id = rule_id,
             .role = .unsafe,
             .premises = rule.hyps,
-            .cuts = try cuts.toOwnedSlice(allocator),
+            .cuts = owned_cuts,
+            .shares = try shares.toOwnedSlice(allocator),
         };
     };
     if (view.num_binders > 64) return null;
@@ -261,24 +277,44 @@ fn admit(allocator: std.mem.Allocator, context: *const Context, rule_id: u32) !?
         if (mapped == null and (sources >> @intCast(idx)) & 1 == 0) return null;
     }
     for (view.hyps) |hyp| {
-        if (!templateSupported(context, view.arg_infos, hyp)) return null;
+        if (!templateSupported(context, view.arg_infos, hyp, .premise)) return null;
     }
+    const owned_witnesses = try witnesses.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_witnesses);
     return .{
         .rule_id = rule_id,
         .role = .unsafe,
         .premises = view.hyps,
         .view = view,
-        .witnesses = try witnesses.toOwnedSlice(allocator),
+        .witnesses = owned_witnesses,
+        .shares = try shares.toOwnedSlice(allocator),
     };
 }
 
+/// The view of `rule_id` when it reads back a binder the conclusion
+/// `concl_mask` does not fix.
+fn readsBack(context: *const Context, rule_id: u32, concl_mask: u64) ?*const ViewDecl {
+    const view = context.views.getPtr(rule_id) orelse return null;
+    for (view.derived_bindings) |derived| {
+        const target = switch (derived) {
+            .recover => |recover| recover.target_view_idx,
+            .abstract => return view,
+        };
+        const arg = view.binder_map[target] orelse return view;
+        if ((concl_mask >> @intCast(arg)) & 1 == 0) return view;
+    }
+    return null;
+}
+
 /// A template the core can match and build: applications of at most
-/// `max_args` arguments, only commutative `@acui` combiners, each bag with
-/// at most one rest binder.
+/// `max_args` arguments and only commutative `@acui` combiners. A
+/// conclusion bag with more than one rest binder also needs an idempotent
+/// law, so its shares can overlap.
 fn templateSupported(
     context: *const Context,
     args: []const ArgInfo,
     template: TemplateExpr,
+    side: enum { conclusion, premise },
 ) bool {
     const app = switch (template) {
         .binder => return true,
@@ -289,18 +325,64 @@ fn templateSupported(
     if (AcuiBag.Combiner.of(context.registry, context.env, app.term_id)) |combiner| {
         if (!combiner.law.isCommutative()) return false;
         const members = combiner.flattenTemplate(template) orelse return false;
-        const bag_sort = context.env.terms.items[app.term_id].ret_sort_name;
-        var rest: usize = 0;
+        // Distinct rest binders: `g , g` has one.
+        var rests: u64 = 0;
         for (members.slice()) |member| switch (member) {
             .binder => |idx| {
-                if (std.mem.eql(u8, args[idx].sort_name, bag_sort)) rest += 1;
+                if (isRest(context, args, app.term_id, idx)) rests |= @as(u64, 1) << @intCast(idx);
             },
-            .app => if (!templateSupported(context, args, member)) return false,
+            .app => if (!templateSupported(context, args, member, side)) return false,
         };
-        return rest <= 1;
+        return @popCount(rests) <= 1 or side == .premise or combiner.law.isIdempotent();
     }
     for (app.args) |arg| {
-        if (!templateSupported(context, args, arg)) return false;
+        if (!templateSupported(context, args, arg, side)) return false;
     }
     return true;
+}
+
+/// The applications of `template` outside its bags.
+fn rigidApps(context: *const Context, template: TemplateExpr) usize {
+    const app = switch (template) {
+        .binder => return 0,
+        .app => |app| app,
+    };
+    if (AcuiBag.Combiner.of(context.registry, context.env, app.term_id) != null) return 0;
+    var count: usize = 1;
+    for (app.args) |arg| count += rigidApps(context, arg);
+    return count;
+}
+
+/// Whether binder `idx` is a rest binder of a bag headed by `head`: a
+/// member of the bag's own sort.
+fn isRest(context: *const Context, args: []const ArgInfo, head: u32, idx: usize) bool {
+    return std.mem.eql(u8, args[idx].sort_name, context.env.terms.items[head].ret_sort_name);
+}
+
+/// Append to `out` the rest binders of each bag of the supported
+/// conclusion `template` that has more than one.
+fn collectShares(
+    allocator: std.mem.Allocator,
+    context: *const Context,
+    args: []const ArgInfo,
+    template: TemplateExpr,
+    out: *std.ArrayListUnmanaged(usize),
+) !void {
+    const app = switch (template) {
+        .binder => return,
+        .app => |app| app,
+    };
+    const combiner = AcuiBag.Combiner.of(context.registry, context.env, app.term_id) orelse {
+        for (app.args) |arg| try collectShares(allocator, context, args, arg, out);
+        return;
+    };
+    var rests: AcuiBag.Members(usize) = .{};
+    for (combiner.flattenTemplate(template).?.slice()) |member| switch (member) {
+        .binder => |idx| if (isRest(context, args, app.term_id, idx)) {
+            _ = rests.appendDistinct(idx);
+        },
+        .app => try collectShares(allocator, context, args, member, out),
+    };
+    // A single rest binder takes what is left over itself.
+    if (rests.len > 1) try out.appendSlice(allocator, rests.slice());
 }

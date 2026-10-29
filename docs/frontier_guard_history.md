@@ -108,3 +108,18 @@ disabled the theorem stays FULL 5/5 on both files; the cost rises from
 so the depth run no longer caught the regression. The unit test "ACUI
 member prune counts distinct members without idempotence" (prune_tests.zig)
 fails without the reject and is now its check.
+
+## Search core budget (2026-10-29)
+
+When the search core learned to split a context between premises (task
+#549), three depth guards stopped reaching the end of their proofs and
+were capped at their frontier: `lt_trans_ax` (euclid) at 4/7,
+`range_sub_elim` (zermelo) at 1/2 and `cb_bijection_maps_domain`
+(zermelo) at 5/8. In each the core tries an elimination rule whose minor
+premise `G ⊢ ?p` it closes from every fact in turn, the search fails, and
+the generation search gets too little of the 6.3G budget for the cut it
+used to find (`cb_bijection_maps_domain`'s k=6 cut alone took the whole
+budget in the core). A check that the major premise can still be proved
+before trying the minor recovered the first two but cost the core alone
+59 depth rows net, mostly Hilbert-style modus ponens steps, which need
+the same guess.
