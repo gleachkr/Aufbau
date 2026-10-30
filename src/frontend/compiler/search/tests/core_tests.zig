@@ -1076,3 +1076,146 @@ test "an open context in a sequence takes the run of entries around which the re
     try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
+
+// A substitution `sb x t p` the theory's `@rewrite` rules push inwards.
+const sb_rules =
+    \\--| @vars x y
+    \\sort obj;
+    \\term P (a: obj): wff;
+    \\term sb {x: obj} (t: obj) (p: wff x): wff;
+    \\--| @rewrite
+    \\axiom sb_P {x: obj} (t: obj): $ sb x t (P x) ↔ P t $;
+    \\--| @rewrite
+    \\axiom sb_free {x: obj} (t: obj) (a: wff): $ sb x t a ↔ a $;
+    \\term pick {x: obj} (p: wff x) (t: obj): wff;
+    \\term both (a b: wff): wff;
+    \\--| @congr
+    \\axiom both_congr (a b c d: wff): $ a ↔ b $ > $ c ↔ d $ > $ both a c ↔ both b d $;
+    \\
+;
+
+fn sbSearch(
+    arena: *std.heap.ArenaAllocator,
+    comptime theorem: []const u8,
+    comptime proof: []const u8,
+    counters: *types.SearchCounters,
+) !types.SourceSuggestions {
+    return suggestionsAtNeedle(arena, nd_rules ++ sb_rules ++ theorem, proof, "auto?", .{
+        .counters = counters,
+        .generate = .{ .enabled = true, .ladder = false },
+    });
+}
+
+test "a rule's conclusion holds a substitution the rest of it fixes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `pick x p t` fixes the substitution, whose normal form `P c` meets
+    // the goal's.
+    var suggestions = try sbSearch(&arena,
+        \\axiom pick_both (g: ctx) {x: obj} (p: wff x) (t: obj):
+        \\  $ g ⊢ pick x p t $ > $ g ⊢ both (pick x p t) (sb x t p) $;
+        \\theorem both_c (g: ctx) (c: obj) {x: obj}: $ g ⊢ pick x (P x) c $ >
+        \\  $ g ⊢ both (pick x (P x) c) (P c) ∧ both (pick x (P x) c) (P c) $;
+    ,
+        \\both_c
+        \\------
+        \\l1: $ g ⊢ both (pick x (P x) c) (P c) ∧ both (pick x (P x) c) (P c) $ by auto?
+    , &counters);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"and_intro [pick_both [#1], pick_both [#1]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "a binder a rule's conclusion holds only in a substitution is fixed by a premise" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // Nothing in `P c` fixes `pick_out`'s binders; `#1` fixes all three.
+    var suggestions = try sbSearch(&arena,
+        \\axiom pick_out (g: ctx) {x: obj} (p: wff x) (t: obj):
+        \\  $ g ⊢ pick x p t $ > $ g ⊢ sb x t p $;
+        \\theorem out_c (g: ctx) (c: obj) {x: obj}: $ g ⊢ pick x (P x) c $ > $ g ⊢ P c ∧ P c $;
+    ,
+        \\out_c
+        \\-----
+        \\l1: $ g ⊢ P c ∧ P c $ by auto?
+    , &counters);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"and_intro [pick_out [#1], pick_out [#1]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "two eigenvariables unify as one fresh variable" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `pick_side`'s `x` is a fresh variable; so is the dummy of `#1`'s
+    // `always`, which the premise `pick x p c` meets unfolded.
+    var suggestions = try sbSearch(&arena,
+        \\term Q: wff;
+        \\def always (a: wff) (t: obj) {.y: obj}: wff = $ pick y a t $;
+        \\axiom pick_side (g: ctx) {x: obj} (p: wff x) (t: obj):
+        \\  $ g ⊢ pick x p t $ > $ g ⊢ both (P t) (sb x t p) $;
+        \\theorem side_q (g: ctx) (c: obj): $ g ⊢ always Q c $ > $ g ⊢ both (P c) Q ∧ both (P c) Q $;
+    ,
+        \\side_q
+        \\------
+        \\l1: $ g ⊢ both (P c) Q ∧ both (P c) Q $ by auto?
+    , &counters);
+    defer suggestions.deinit();
+
+    try std.testing.expect(suggestions.items.len > 0);
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "an eigenvariable a rule's bound binder stands for is named clear of its other arguments" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `pick_beta`'s context `P x` may not hold its `x`, so the dummy of
+    // `pick_P` that `x` takes is named `y`, not the pool's first variable.
+    var suggestions = try sbSearch(&arena,
+        \\def pick_P (t: obj) {.y: obj}: wff = $ pick y (P y) t $;
+        \\axiom pick_beta (g: ctx) {x: obj} (p: wff x) (t: obj):
+        \\  $ g ⊢ sb x t p $ > $ g ⊢ pick x p t $;
+        \\theorem beta_c (c: obj) {x: obj}: $ P x ⊢ P c $ > $ P x ⊢ pick_P c ∧ pick_P c $;
+    ,
+        \\beta_c
+        \\------
+        \\l1: $ P x ⊢ pick_P c ∧ pick_P c $ by auto?
+    , &counters);
+    defer suggestions.deinit();
+
+    try std.testing.expect(suggestions.items.len > 0);
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "a rule's bound binder never takes a variable its other arguments hold" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // Only `pick_intro` concludes `pick x (P x) c`, and its context `P x`
+    // holds the `x` it would bind; the checker would reject the step `#1`
+    // closes.
+    var suggestions = try sbSearch(&arena,
+        \\axiom pick_intro (g: ctx) {x: obj} (p: wff x) (t: obj): $ g ⊢ p $ > $ g ⊢ pick x p t $;
+        \\theorem intro_x (c: obj) {x: obj}:
+        \\  $ P x ⊢ P x $ > $ P x ⊢ pick x (P x) c ∧ pick x (P x) c $;
+    ,
+        \\intro_x
+        \\-------
+        \\l1: $ P x ⊢ pick x (P x) c ∧ pick x (P x) c $ by auto?
+    , &counters);
+    defer suggestions.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
+    try std.testing.expect(counters.core_nodes > 0);
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}

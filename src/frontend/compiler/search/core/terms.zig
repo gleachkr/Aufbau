@@ -47,11 +47,20 @@
 //! rewrite's dependency conditions (`sb_t x t a` drops the substitution
 //! only when `a` does not depend on `x`); an eigenvariable normalizes as a
 //! fresh bound variable, which is what it becomes.
+//!
+//! A rule's conclusion may hold such a term too (`nat_ind_elim`'s type
+//! `[k/n] C`). Against a goal node with its head it matches argument by
+//! argument; against any other it is postponed until the rest of the match
+//! has bound its binders, then instantiated and unified with the goal node
+//! in normal form. One whose binders the match leaves unbound (cuts,
+//! `catalog.zig`) is reported (`postponed`) for the prover to check once
+//! the premises bind them.
 
 const std = @import("std");
 const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
-const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
+const Rules = @import("../../../rules.zig");
+const TemplateExpr = Rules.TemplateExpr;
 const RuleDecl = @import("../../../env.zig").RuleDecl;
 const AcuiBag = @import("../../../acui_bag.zig");
 const Context = @import("../types.zig").Context;
@@ -77,6 +86,9 @@ pub const Terms = struct {
     /// The bag the shares of the conclusion match in progress split, while
     /// the sink runs.
     split: ?SplitBag = null,
+    /// The conclusion nodes the match in progress left to check once the
+    /// premises bind their binders, while the sink runs.
+    postponed: ?*const Postponed = null,
     /// The bag combiner each combiner head and each unit term reads as.
     bags: std.AutoHashMapUnmanaged(u32, AcuiBag.Combiner) = .empty,
     canonical_memo: std.AutoHashMapUnmanaged(ExprId, ExprId) = .empty,
@@ -254,7 +266,7 @@ pub const Terms = struct {
         return self.context.env.openableDef(term_id) != null;
     }
 
-    fn isRewritten(self: *const Terms, term_id: u32) bool {
+    pub fn isRewritten(self: *const Terms, term_id: u32) bool {
         return self.context.registry.getRewriteRules(term_id).len != 0;
     }
 
@@ -631,6 +643,14 @@ pub const SplitBag = struct {
     taken: u64,
 };
 
+/// A conclusion node under a head some `@rewrite` rule rewrites, matched
+/// against the goal node `goal` once its binders are known.
+pub const Postponed = struct {
+    template: TemplateExpr,
+    goal: ExprId,
+    next: ?*const Postponed,
+};
+
 /// What is left to match after the current step, as a stack-allocated
 /// list: the arguments of an application from position `at` on (template
 /// against goal, or two terms unified), and the next member of a bag in
@@ -644,6 +664,9 @@ const Pending = struct {
         bag: *const BagState,
         pairing: *const BagPairing,
         seq: *const SeqState,
+        /// The postponed nodes in `list` to check, those already left for
+        /// the prover in `left`.
+        check: struct { list: ?*const Postponed, left: ?*const Postponed },
     },
     next: ?*const Pending,
 };
@@ -705,14 +728,18 @@ fn Matcher(comptime Sink: type) type {
         bindings: []?ExprId,
         sink: *Sink,
         stop: bool = false,
+        /// The conclusion nodes postponed so far (`postpone`).
+        postponed: ?*const Postponed = null,
 
         const Self = @This();
         const MatchError = Error || Sink.Error;
 
         fn run(self: *Self, pending: ?*const Pending) MatchError!void {
             const node = pending orelse {
-                if (try self.sink.match(self.bindings)) self.stop = true;
-                return;
+                const list = self.postponed orelse return self.report(null);
+                self.postponed = null;
+                defer self.postponed = list;
+                return self.check(list, null);
             };
             switch (node.step) {
                 .args => |args| {
@@ -736,7 +763,51 @@ fn Matcher(comptime Sink: type) type {
                 .bag => |state| try self.bag(state.*, node.next),
                 .pairing => |state| try self.pairBags(state.*, node.next),
                 .seq => |state| try self.seq(state.*, node.next),
+                .check => |state| try self.check(state.list, state.left),
             }
+        }
+
+        /// The match is complete: hand it to the sink, with the postponed
+        /// nodes `left` for the prover.
+        fn report(self: *Self, left: ?*const Postponed) MatchError!void {
+            const outer = self.terms.postponed;
+            self.terms.postponed = left;
+            defer self.terms.postponed = outer;
+            if (try self.sink.match(self.bindings)) self.stop = true;
+        }
+
+        /// Defer the conclusion node `template` against `expr` to the end
+        /// of the match.
+        fn postpone(self: *Self, template: TemplateExpr, expr: ExprId, next: ?*const Pending) MatchError!void {
+            const outer = self.postponed;
+            const cell = Postponed{ .template = template, .goal = expr, .next = outer };
+            self.postponed = &cell;
+            defer self.postponed = outer;
+            try self.run(next);
+        }
+
+        /// Unify each postponed node of `list` whose binders the match
+        /// bound with its goal node, instantiated and in normal form; the
+        /// others join `left` for `report`.
+        fn check(self: *Self, list: ?*const Postponed, left: ?*const Postponed) MatchError!void {
+            const node = list orelse return self.report(left);
+            const instance = (try @call(.never_inline, instantiateBound, .{ self, node.template })) orelse {
+                const kept = Postponed{ .template = node.template, .goal = node.goal, .next = left };
+                return self.check(node.next, &kept);
+            };
+            const cell = Pending{ .step = .{ .check = .{ .list = node.next, .left = left } }, .next = null };
+            try self.unify(instance, node.goal, &cell);
+        }
+
+        /// `template` instantiated with the match's bindings, resolved and
+        /// in normal form; null when it holds an unbound binder.
+        fn instantiateBound(self: *Self, template: TemplateExpr) Error!?ExprId {
+            if (Rules.templateHasUnboundBinder(template, self.bindings)) return null;
+            const values = try self.terms.allocator.alloc(ExprId, self.bindings.len);
+            defer self.terms.allocator.free(values);
+            for (values, self.bindings) |*value, binding| value.* = binding orelse undefined;
+            const instance = try self.terms.resolveGoal(try self.terms.instantiate(template, values));
+            return (try self.terms.normalForm(instance)) orelse instance;
         }
 
         fn term(self: *Self, template: TemplateExpr, expr: ExprId, next: ?*const Pending) MatchError!void {
@@ -744,6 +815,9 @@ fn Matcher(comptime Sink: type) type {
                 .binder => |idx| try self.bind(idx, expr, next),
                 .app => |app| {
                     const target = self.terms.wvars.resolve(expr);
+                    if (self.terms.isRewritten(app.term_id) and self.terms.headOf(target) != app.term_id) {
+                        return self.postpone(template, target, next);
+                    }
                     if (try self.unfoldToward(app.term_id, target)) |unfolded| {
                         return self.term(template, unfolded, next);
                     }

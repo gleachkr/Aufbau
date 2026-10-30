@@ -109,6 +109,11 @@ induction rule's `sb_f x 0 p`) meets the hypotheses and rules for the
 form it reduces to; a part of the goal that holds a witness the core has
 not chosen waits, since what the witness becomes can decide a rewrite,
 while a definition's bound variable counts as a fresh one. A rule whose
+conclusion states such a redex itself (an eliminator's type `[k/n] C`)
+meets the goal's normal form once the rest of the conclusion has fixed
+the redex; a variable that occurs only inside the redex is chosen like
+the middle formula of a transitivity rule, by a hypothesis or a premise's
+proof, and the redex is checked once the premises are proved. A rule whose
 conclusion joins several contexts (`or_elim`'s `G , H , K ⊢ r`, over a
 set-like `@acui` context) splits the goal's context between its premises
 without trying the ways to split it: a hypothesis that proves a premise

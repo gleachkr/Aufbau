@@ -19,7 +19,11 @@
 //! - in a rule without a view, a **cut** (`imp_trans`'s `q`, `t_app`'s
 //!   `A`): a binder that is not bound becomes a fresh witness variable,
 //!   which only a premise's closure binds. A bound one (`subset_intro`'s
-//!   `x`) is δ, stated by the premises directly.
+//!   `x`) is δ, stated by the premises directly. A binder the conclusion
+//!   holds only under a term some `@rewrite` rule rewrites (`sb_tm_eq`'s
+//!   `u1` in `⟦ x / u1 ⟧ t`) is a cut too, unless the match binds it: such
+//!   a node meets a goal with another head only once its binders are
+//!   known, by its normal form (`terms.zig`).
 //!
 //! A rule whose conclusion is a bare binder (`mp`'s `b`) applies to every
 //! goal of that binder's sort; its other binders are cuts.
@@ -226,8 +230,9 @@ fn admit(allocator: std.mem.Allocator, context: *const Context, rule_id: u32) !?
         }
         var cuts = std.ArrayListUnmanaged(Cut).empty;
         errdefer cuts.deinit(allocator);
+        const rigid = rigidBinders(context, rule.concl);
         for (rule.args, 0..) |arg, idx| {
-            if ((concl_mask.mask >> @intCast(idx)) & 1 != 0) continue;
+            if ((rigid >> @intCast(idx)) & 1 != 0) continue;
             // A bound one is δ even when other binders may depend on it
             // (`ex_elim`'s `x`, with `G H: ctx x`): a fresh variable is
             // a value those binders allow too.
@@ -347,6 +352,20 @@ fn templateSupported(
         if (!templateSupported(context, args, arg, side)) return false;
     }
     return true;
+}
+
+/// The binders `template` holds outside the applications of terms some
+/// `@rewrite` rule rewrites.
+fn rigidBinders(context: *const Context, template: TemplateExpr) u64 {
+    return switch (template) {
+        .binder => |idx| @as(u64, 1) << @intCast(idx),
+        .app => |app| blk: {
+            if (context.registry.getRewriteRules(app.term_id).len != 0) break :blk 0;
+            var mask: u64 = 0;
+            for (app.args) |arg| mask |= rigidBinders(context, arg);
+            break :blk mask;
+        },
+    };
 }
 
 /// The applications of `template` outside its bags.

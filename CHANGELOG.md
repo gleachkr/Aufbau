@@ -18,11 +18,15 @@ This file records notable user-facing changes to Aufbau. The project follows
   for, with the definition's hidden bound variables named once the proof
   needs them, and tries a goal in its `@rewrite` normal form too, so an
   induction rule's premise stated as a substitution meets the facts for
-  what it reduces to. A rule joining several contexts (`or_elim`'s
-  `G , H , K ⊢ r`) splits the goal's context between its premises
-  without enumerating splits: a hypothesis fixes the part of the premise
-  it proves, and a premise proved by rules gets what the other parts
-  leave or the whole context. A context that is a sequence
+  what it reduces to. A rule whose conclusion states a substitution (an
+  eliminator's type `[k/n] C`) meets the goal's normal form once the
+  rest of the conclusion has fixed it, and a variable that occurs only
+  inside the substitution is chosen by a hypothesis or a premise's
+  proof, as for modus ponens. A rule joining several contexts
+  (`or_elim`'s `G , H , K ⊢ r`) splits the goal's context between its
+  premises without enumerating splits: a hypothesis fixes the part of
+  the premise it proves, and a premise proved by rules gets what the
+  other parts leave or the whole context. A context that is a sequence
   (`martin_lof`'s, an `@acui` combiner with neither commutativity nor
   idempotence) is matched in order, so `g , x : A` takes the last entry
   as `x : A`. Besides the hypotheses, the core closes goals with the
@@ -31,15 +35,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   goal the core does not take (holes, idempotent non-commutative `@acui`
   combiners) or cannot prove goes on to the existing generation search
   in what is left of the same budget, and the checker validates every
-  proof either way. On the bench corpus the core alone finds 93% of the
-  depth rows the generation search alone finds and 406 of its 474 whole
-  proofs; a third of the rows it misses are `martin_lof` theorems whose
-  rules state a substitution in their conclusion. With both, 169 rows
-  are new and 121 are lost, where a failed core search uses up the
-  budget the generation search needed. The `nd_fol` rows cost 97% fewer
-  ticks and the `additive_fol` rows 29% fewer, and the Pelletier battery
-  goes from 36 to 47 of 48 problems found. The per-call `nodes` and
-  `fuel` parameters bound only the generation search.
+  proof either way. On the bench corpus the core alone finds 98% of the
+  depth rows the generation search alone finds and 431 of its 474 whole
+  proofs. With both, 191 rows are new and 119 are lost, where a failed
+  core search uses up the budget the generation search needed. The
+  `nd_fol` rows cost 97% fewer ticks and the `additive_fol` rows 29%
+  fewer, and the Pelletier battery goes from 36 to 47 of 48 problems
+  found. The per-call `nodes` and `fuel` parameters bound only the
+  generation search.
 - `@auto focus $ PRINCIPAL $ : CONTINUATION...`: focused proof search. The
   annotation names the formula a rule decomposes and, per hypothesis, the
   formula that stays in focus there (`_` releases it). Applying a focus rule

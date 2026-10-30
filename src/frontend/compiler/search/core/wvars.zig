@@ -17,7 +17,9 @@
 //! the variable one became, only of a lower level (W6), which keeps every
 //! eigenvariable out of the instances that existed before it. A
 //! definition's dummy is an eigenvariable introduced at the unfolding that
-//! holds it (`Terms.unfold`).
+//! holds it (`Terms.unfold`). Two eigenvariables unify as one fresh
+//! variable: the younger is bound to the older, and close-out names the
+//! older clear of what either must not occur in.
 //!
 //! A wvar also carries the variables bound inside the formula it was swapped
 //! into: holding one of those would capture it.
@@ -359,9 +361,9 @@ pub const WVars = struct {
     /// Bind unbound wvar `idx` to `value`, unless that breaks its sort,
     /// occurs, capture or level constraint. Wvars inside `value` take on
     /// `idx`'s constraints, so binding them later cannot break them either.
-    /// An eigenvariable binds only to a variable it admits; facing a γ wvar
-    /// it binds that one instead. Returns false, logging nothing, when the
-    /// binding is refused.
+    /// An eigenvariable binds only to a variable it admits or another
+    /// eigenvariable (`merge`); facing a γ wvar it binds that one instead.
+    /// Returns false, logging nothing, when the binding is refused.
     pub fn bind(self: *WVars, idx: u32, value: ExprId) Error!bool {
         std.debug.assert(self.vars.items[idx].value == null);
         const wvar = self.vars.items[idx];
@@ -383,7 +385,7 @@ pub const WVars = struct {
             .variable => {},
             .placeholder => {
                 const other = self.of(value) orelse return false;
-                if (self.vars.items[other].introduced_at != null) return false;
+                if (self.vars.items[other].introduced_at != null) return self.merge(idx, other);
                 return self.bind(other, self.vars.items[idx].expr);
             },
             .app => return false,
@@ -395,6 +397,24 @@ pub const WVars = struct {
         self.eigens.putAssumeCapacity(value, self.vars.items[idx].level);
         self.log.appendAssumeCapacity(.{ .bound = idx });
         self.vars.items[idx].value = value;
+        return true;
+    }
+
+    /// Unify the unbound eigenvariables `idx` and `other` as one fresh
+    /// variable: the younger is bound to the older, which then stands for
+    /// both, so a goal that existed before the younger one constrains
+    /// nothing older. Refused when one occurs where the other may not.
+    fn merge(self: *WVars, idx: u32, other: u32) Error!bool {
+        if (idx == other) return false;
+        const younger, const older = if (idx > other) .{ idx, other } else .{ other, idx };
+        for ([2][2]u32{ .{ younger, older }, .{ older, younger } }) |pair| {
+            const wvar = self.vars.items[pair[0]];
+            for (wvar.fresh_in orelse &.{wvar.introduced_at.?}) |expr| {
+                if (self.mentions(expr, self.vars.items[pair[1]].expr)) return false;
+            }
+        }
+        try self.log.append(self.allocator, .{ .bound = younger });
+        self.vars.items[younger].value = self.vars.items[older].expr;
         return true;
     }
 

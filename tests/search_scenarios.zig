@@ -557,13 +557,15 @@ pub const scenarios = [_]Scenario{
         // martin_lof add_comm capstone: `nat_ind_elim` whose induction motive
         // is not pinned by the conclusion (higher-order). Besides citing the
         // motive `l5`, the search also generates it (`Id_form [l3, l4]`),
-        // opening the def's hidden `k` at that premise.
+        // opening the def's hidden `k` at that premise. The search core
+        // proves it, as `nat_ind_elim [l5, l10, l20, #1]`: the term
+        // `add_comm_p m n` states the motive.
         .name = "auto martin_lof add_comm capstone auto? (no result)",
         .mm0_path = "tests/search_bench_cases/martin_lof_regular.mm0",
         .proof_path = "tests/search_bench_cases/ml_add_comm_capstone_auto.auf",
         .marker = "auto?",
         .expected_replacement = "",
-        .generate = .{ .enabled = true, .max_depth = 6 },
+        .generate = .{ .enabled = true, .max_depth = 6, .core = false },
         .expect_result = false,
         .expected_suggestion_count = 4,
     },
@@ -575,6 +577,7 @@ pub const scenarios = [_]Scenario{
         // (the fully-solved check in `open_slot.emitOpenTarget`). A child
         // search there first,
         // which never names it, spends the budget the step case needs.
+        // The search core proves it another way (`Id_form` for the motive).
         .name = "auto martin_lof add_comm base case auto?",
         .mm0_path = "tests/search_bench_cases/martin_lof_frontier.mm0",
         .proof_path = "tests/search_bench_cases/ml_add_comm_base_case_auto.auf",
@@ -585,7 +588,7 @@ pub const scenarios = [_]Scenario{
             "ap_suc_ty [l15, l23, add_ty [l15, l17, l16], l22], id_sym_ty [l18, " ++
             "add_ty [l15, l17, l19], weaken [l7, suc_intro [l6]], " ++
             "add_suc_right [l15, l17, l16]]]], #2]",
-        .generate = .{ .enabled = true, .max_depth = 6 },
+        .generate = .{ .enabled = true, .max_depth = 6, .core = false },
     },
     .{
         // add_comm with only the `g , k : Nat ⊢ …` lines left. The step

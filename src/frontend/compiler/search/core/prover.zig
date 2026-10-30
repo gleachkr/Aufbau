@@ -22,6 +22,11 @@
 //! premises are proved the shares must make up the context again. A share
 //! a step binds must hold only members of its context from then on.
 //!
+//! A conclusion node the match postponed with binders it left unbound
+//! (`Terms.postponed`) is checked once the premises are proved and have
+//! bound those cuts: instantiated, in normal form, it must unify with the
+//! goal node it stood against.
+//!
 //! A cut wvar is chosen by the proof, never invented: a goal that holds
 //! one unbound is closed by a fact or a closer, or by a rule whose
 //! conclusion match binds one of its cut wvars, and no other rule works on
@@ -47,7 +52,8 @@
 const std = @import("std");
 const ExprId = @import("../../../expr.zig").ExprId;
 const ProofScript = @import("../../../proof_script.zig");
-const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
+const Rules = @import("../../../rules.zig");
+const TemplateExpr = Rules.TemplateExpr;
 const ViewDecl = @import("../../../views.zig").ViewDecl;
 const PoolVars = @import("../../vars.zig").PoolVars;
 const types = @import("../types.zig");
@@ -146,6 +152,7 @@ const Agenda = struct {
         goal: Goal,
         /// The premises of the rule that made `split` are proved.
         settle: *const Split,
+        check: *const Check,
         close: *Frame,
     },
     next: ?*const Agenda,
@@ -160,6 +167,15 @@ const Split = struct {
     bag: terms_mod.SplitBag,
     /// The split whose premises were being proved when this one was made.
     outer: ?*const Split,
+};
+
+/// A postponed conclusion node (`terms_mod.Postponed`) to check once a
+/// step's premises are proved: `template` with the step's binder values
+/// against the goal node `goal`.
+const Check = struct {
+    template: TemplateExpr,
+    values: []const ExprId,
+    goal: ExprId,
 };
 
 /// How a run ended: the whole proof was accepted, this branch failed, or
@@ -259,6 +275,7 @@ pub const Prover = struct {
         switch (cell.item) {
             .goal => |goal| return self.prove(goal, cell.next),
             .settle => |split| return self.settle(split, cell.next),
+            .check => |check_cell| return self.check(check_cell, cell.next),
             .close => |frame| {
                 frame.reached = true;
                 const constrained = self.wvars.constrainedOlderSince(frame.mark, frame.wvars);
@@ -660,6 +677,11 @@ pub const Prover = struct {
         std.mem.sort(Alt, alts.items, {}, Alt.lessThan);
         for (alts.items) |alt| {
             if (alt.bindings) |bindings| {
+                // A kept match postponed nothing; the list in force is
+                // the enclosing match's.
+                const outer = self.terms.postponed;
+                self.terms.postponed = null;
+                defer self.terms.postponed = outer;
                 var applier = Applier{
                     .prover = self,
                     .frame = frame,
@@ -740,7 +762,9 @@ pub const Prover = struct {
             }
             // A rule with shares is matched again: the match reports its
             // split only while it runs.
-            const kept = if (prover.wvars.mark() == self.mark and self.entry.shares.len == 0)
+            // So is one with postponed nodes, which it reports only then too.
+            const kept = if (prover.wvars.mark() == self.mark and self.entry.shares.len == 0 and
+                prover.terms.postponed == null)
                 try prover.allocator.dupe(?ExprId, bindings)
             else
                 null;
@@ -807,6 +831,7 @@ pub const Prover = struct {
         var premises: []const TemplateExpr = &.{};
         var values: []const ExprId = &.{};
         var split: ?Split = null;
+        var checks: []const Check = &.{};
         if (!try self.sharesFit()) return .failed;
         switch (applier.how) {
             .ref => |ref| step = .{ .ref = ref },
@@ -828,6 +853,8 @@ pub const Prover = struct {
                 if (entry.cuts.len != 0) try self.cut(entry, full, filled, applier.target);
                 try self.share(entry, eigen_deps, true, full, filled, &shares);
                 if (shares.items.len != 0) split = .{ .shares = shares.items, .bag = self.terms.split.?, .outer = self.splits };
+                if (self.terms.postponed) |list| checks = (try self.postponedChecks(list, full, filled)) orelse return .failed;
+                if (!self.freshBound(entry, bindings, full)) return .failed;
                 step = .{ .rule = .{ .rule_id = entry.rule_id, .bindings = full } };
             },
         }
@@ -855,6 +882,12 @@ pub const Prover = struct {
         defer firsts.deinit(self.allocator);
         try self.orderPremises(exprs, order, &firsts);
         var head: *const Agenda = applier.close;
+        const check_cells = try self.allocator.alloc(Agenda, checks.len);
+        defer self.allocator.free(check_cells);
+        for (check_cells, checks) |*check_cell, *made| {
+            check_cell.* = .{ .item = .{ .check = made }, .next = head };
+            head = check_cell;
+        }
         var settle_cell: Agenda = undefined;
         if (split) |*made| {
             settle_cell = .{ .item = .{ .settle = made }, .next = head };
@@ -885,6 +918,72 @@ pub const Prover = struct {
         }
         return .failed;
     }
+
+    /// Whether each bound binder of `entry` the match fixed to a variable
+    /// keeps it out of the other arguments that do not depend on the
+    /// binder, as MM0 requires. A binder fixed to an eigenvariable is held
+    /// to the same when close-out names it. The match's `bindings` say
+    /// which binders it fixed; `full` holds every binder's value.
+    fn freshBound(self: *Prover, entry: *const catalog_mod.Rule, bindings: []const ?ExprId, full: []const ExprId) bool {
+        const args = self.context.env.rules.items[entry.rule_id].args;
+        for (args, bindings, 0..) |arg, binding, idx| {
+            if (!arg.bound or binding == null) continue;
+            const value = self.wvars.resolve(full[idx]);
+            if (self.terms.theorem.interner.node(value).* != .variable) continue;
+            for (args, full, 0..) |other, other_value, other_idx| {
+                if (other_idx == idx or other.deps & arg.deps != 0) continue;
+                if (self.wvars.mentions(other_value, value)) return false;
+            }
+        }
+        return true;
+    }
+
+    /// The checks of the postponed conclusion nodes `list` with the step's
+    /// binder values `full`; null when one holds a binder the step leaves
+    /// unfilled (`filled`).
+    fn postponedChecks(self: *Prover, list: *const terms_mod.Postponed, full: []const ExprId, filled: []const bool) Error!?[]const Check {
+        var count: usize = 0;
+        var at: ?*const terms_mod.Postponed = list;
+        while (at) |node| : (at = node.next) count += 1;
+        const checks = try self.arena.alloc(Check, count);
+        at = list;
+        for (checks) |*made| {
+            const node = at.?;
+            at = node.next;
+            for (filled, 0..) |known, idx| {
+                if (!known and Rules.templateMentionsBinder(node.template, idx)) return null;
+            }
+            made.* = .{ .template = node.template, .values = full, .goal = node.goal };
+        }
+        return checks;
+    }
+
+    /// The premises of a step are proved: its postponed node `made`,
+    /// instantiated and in normal form, must unify with its goal node.
+    fn check(self: *Prover, made: *const Check, next: ?*const Agenda) Error!Outcome {
+        const instance = self.terms.instantiate(made.template, made.values) catch |err| switch (err) {
+            error.Unsupported => return .failed,
+            else => |e| return e,
+        };
+        const resolved = try self.terms.resolveGoal(instance);
+        var continuer = Continuer{ .prover = self, .next = next };
+        _ = try self.terms.unify((try self.terms.normalForm(resolved)) orelse resolved, made.goal, Continuer, &continuer);
+        return continuer.outcome;
+    }
+
+    /// The unifier's sink that runs the rest of the agenda.
+    const Continuer = struct {
+        prover: *Prover,
+        next: ?*const Agenda,
+        outcome: Outcome = .failed,
+
+        pub const Error = ProveError;
+
+        pub fn match(self: *Continuer, _: []const ?ExprId) ProveError!bool {
+            self.outcome = try self.prover.run(self.next);
+            return self.outcome != .failed;
+        }
+    };
 
     /// Run the premises `exprs` in `order`, then `next`.
     fn runPremises(
@@ -1194,6 +1293,7 @@ pub const Prover = struct {
         var cut_mask: u64 = 0;
         var delta_deps: u64 = 0;
         for (entry.cuts) |c| {
+            if (filled[c.arg]) continue;
             cut_mask |= @as(u64, 1) << @intCast(c.arg);
             if (c.kind == .delta) delta_deps |= args[c.arg].deps;
         }
@@ -1203,7 +1303,9 @@ pub const Prover = struct {
                 .gamma => if (arg.deps & delta_deps == 0) 0 else 2,
                 .delta => 1,
             };
-            if (stage != pass) continue;
+            // The match binds a cut it holds under a rewritten head when
+            // the goal has that head too.
+            if (stage != pass or filled[c.arg]) continue;
             full[c.arg] = switch (c.kind) {
                 .gamma => blk: {
                     var capture = std.ArrayListUnmanaged(ExprId).empty;

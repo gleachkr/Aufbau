@@ -273,8 +273,10 @@ const CloseOut = struct {
     }
 
     /// Name every eigenvariable the proof leaves unbound, oldest first, with
-    /// the first variable of its sort's `@vars` pool that its introduction
-    /// goal, as named so far, does not mention. Two eigenvariables may
+    /// the first variable of its sort's `@vars` pool that, as named so far,
+    /// none of its introduction goal, those of the eigenvariables bound to
+    /// it, and the other arguments not depending on it of each step whose
+    /// bound binder it is (MM0's condition) mention. Two eigenvariables may
     /// share a name when neither goal mentions the other. False when one
     /// has no name.
     fn nameEigens(self: *CloseOut, root: *const Node) prover_mod.Error!bool {
@@ -290,22 +292,64 @@ const CloseOut = struct {
         }
         // Indices grow with levels.
         std.mem.sort(u32, eigens.items, {}, std.sort.asc(u32));
+        // What each must stay out of, in naming order.
+        var avoid = std.AutoArrayHashMapUnmanaged(u32, std.ArrayListUnmanaged(ExprId)).empty;
+        defer {
+            for (avoid.values()) |*list| list.deinit(scratch);
+            avoid.deinit(scratch);
+        }
+        for (eigens.items) |idx| try avoid.put(scratch, idx, .empty);
+        for (wvars.vars.items) |wvar| {
+            const goal = wvar.introduced_at orelse continue;
+            const list = avoid.getPtr(wvars.of(wvars.resolve(wvar.expr)) orelse continue) orelse continue;
+            try list.append(scratch, goal);
+            try list.appendSlice(scratch, wvar.capture);
+        }
+        try self.collectBoundArgs(root, &avoid);
         var shared = std.AutoHashMapUnmanaged(ExprId, void).empty;
         defer shared.deinit(scratch);
-        for (eigens.items) |idx| {
+        for (avoid.keys(), avoid.values()) |idx, list| {
             const wvar = wvars.vars.items[idx];
-            const goal = try wvars.deref(wvar.introduced_at.?, &self.names);
-            const name = for (try self.prover.pool(wvar.sort_name)) |variable| {
+            for (list.items) |*expr| expr.* = try wvars.deref(expr.*, &self.names);
+            const name = outer: for (try self.prover.pool(wvar.sort_name)) |variable| {
                 if (!wvars.isBound(variable)) continue;
                 if (wvars.eigens.contains(variable) and !shared.contains(variable)) continue;
-                if (std.mem.indexOfScalar(ExprId, wvar.capture, variable) != null) continue;
-                if (!wvars.mentions(goal, variable)) break variable;
+                for (list.items) |expr| {
+                    if (wvars.mentions(expr, variable)) continue :outer;
+                }
+                break variable;
             } else return false;
             try self.names.put(scratch, idx, name);
             try shared.put(scratch, name, {});
             try wvars.nameEigen(idx, name);
         }
         return true;
+    }
+
+    /// Add to `avoid` the arguments of each step of `node`'s proof that do
+    /// not depend on a bound binder the step fixes to one of its
+    /// eigenvariables.
+    fn collectBoundArgs(
+        self: *CloseOut,
+        node: *const Node,
+        avoid: *std.AutoArrayHashMapUnmanaged(u32, std.ArrayListUnmanaged(ExprId)),
+    ) prover_mod.Error!void {
+        switch (node.step) {
+            .ref => {},
+            .rule => |step| {
+                const args = self.request.context.env.rules.items[step.rule_id].args;
+                for (args, step.bindings, 0..) |arg, value, idx| {
+                    if (!arg.bound) continue;
+                    const eigen = self.wvars.of(self.wvars.resolve(value)) orelse continue;
+                    const list = avoid.getPtr(eigen) orelse continue;
+                    for (args, step.bindings, 0..) |other, other_value, other_idx| {
+                        if (other_idx == idx or other.deps & arg.deps != 0) continue;
+                        try list.append(self.request.scratch, other_value);
+                    }
+                }
+            },
+        }
+        for (node.children) |child| try self.collectBoundArgs(child.?, avoid);
     }
 
     fn collectLeftovers(self: *CloseOut, node: *const Node, out: *std.ArrayListUnmanaged(u32)) prover_mod.Error!void {
