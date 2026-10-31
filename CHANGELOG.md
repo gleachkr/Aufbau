@@ -44,9 +44,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   proof either way. The core keeps MM0's dependency conditions on the
   proofs it builds, including for theorem variables declared to depend
   on a bound variable, so the checker rejects few of them. On the bench
-  corpus the core alone finds 2% more depth rows than the generation
-  search alone, and 487 whole proofs to its 474. With both, 225 rows
-  are new and 105 are lost, where a failed core search uses up the
+  corpus the core alone finds 4% more depth rows than the generation
+  search alone, and 489 whole proofs to its 474. With both, 250 rows
+  are new and 91 are lost, where a failed core search uses up the
   budget the generation search needed. The
   `nd_fol` rows cost 97% fewer ticks and the `additive_fol` rows 29%
   fewer, and the Pelletier battery goes from 36 to 47 of 48 problems

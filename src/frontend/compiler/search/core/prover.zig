@@ -37,7 +37,10 @@
 //! conclusion match binds one of its cut wvars or leaves a postponed node
 //! over a part of the goal holding one, which the node's check binds, and
 //! no other rule works on it. So a rule's premises that a fact might close come first, and
-//! an unbound wvar premise waits for a sibling that fixes it.
+//! an unbound wvar premise waits for a sibling that fixes it. When no fact
+//! closes that sibling, a lone such premise is still closed by a fact
+//! first, which guesses the wvar from the facts; two or more wait, since
+//! their guesses would multiply (`mp2`'s `a`, `b` behind `a → b → c`).
 //!
 //! When the continuation of a proved goal fails, and proving the goal bound
 //! or narrowed no witness variable that existed when it was entered, the
@@ -1132,13 +1135,17 @@ pub const Prover = struct {
     /// definition unfolds (`cb_branch` for `p ∨ q`) breaks no tie. A
     /// premise that is an unbound wvar goes last when such a sibling holds
     /// it, since any fact fits the wvar: closing it first only guesses what
-    /// the sibling fixes. The other premises a fact might close that hold
+    /// the sibling fixes. Behind a sibling no fact closes, which may need a
+    /// rule that leaves the wvar open, only a lone such premise goes first:
+    /// with several, each fact one guesses meets every fact the others do
+    /// before the sibling is tried. The other premises a fact might close that hold
     /// an unbound cut wvar of the first go to `firsts`, to go first in its
     /// stead if it fails.
     fn orderPremises(self: *Prover, exprs: []const ExprId, order: []usize, firsts: *std.ArrayListUnmanaged(usize)) Error!void {
         const Rank = struct {
             /// 0: a fact might close the premise; 1: none might; 2: an
-            /// unbound wvar such a sibling holds.
+            /// unbound wvar such a sibling holds, or one of several a
+            /// sibling holds that none might close.
             class: u2,
             cuts: usize,
             /// A fact might close it without unfolding.
@@ -1176,14 +1183,19 @@ pub const Prover = struct {
         for (ranks, exprs, 0..) |*rank, expr, idx| {
             const wvar = self.wvars.of(self.wvars.resolve(expr)) orelse continue;
             for (exprs, ranks, 0..) |sibling, sibling_rank, sibling_idx| {
-                if (sibling_idx == idx or sibling_rank.class != 0) continue;
+                if (sibling_idx == idx) continue;
                 if (self.wvars.of(self.wvars.resolve(sibling)) != null) continue;
                 held.clearRetainingCapacity();
                 try self.wvars.collectUnbound(self.allocator, sibling, &held);
-                if (std.mem.indexOfScalar(u32, held.items, wvar) != null) {
-                    rank.class = 2;
-                    break;
-                }
+                if (std.mem.indexOfScalar(u32, held.items, wvar) == null) continue;
+                const waits = sibling_rank.class == 0 or for (exprs, 0..) |other, other_idx| {
+                    if (other_idx == idx or other_idx == sibling_idx) continue;
+                    const other_wvar = self.wvars.of(self.wvars.resolve(other)) orelse continue;
+                    if (std.mem.indexOfScalar(u32, held.items, other_wvar) != null) break true;
+                } else false;
+                if (!waits) continue;
+                rank.class = 2;
+                break;
             }
         }
         for (order, 0..) |*slot, idx| slot.* = idx;

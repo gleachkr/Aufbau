@@ -590,6 +590,30 @@ test "the search core fixes a cut from a hypothesis before the premise only a cl
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
+test "two bare premises wait for the sibling that fixes them" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // No fact fits `?a → ?b → p ∧ q`, but the closer `and_i` does and fixes
+    // both; closing `?a` and `?b` from the six hypotheses first tries the
+    // pairs against it (37 goals instead of 4).
+    var suggestions = try search(&arena,
+        \\axiom mp2 (a b c: wff): $ a $ > $ b $ > $ a → b → c $ > $ c $;
+        \\axiom and_i (a b: wff): $ a → b → a ∧ b $;
+        \\term r (n: wff): wff;
+        \\theorem pair (p q s: wff): $ r s $ > $ r p $ > $ r q $ > $ r (r s) $ > $ p $ > $ q $ > $ p ∧ q $;
+    ,
+        \\pair
+        \\----
+        \\l1: $ p ∧ q $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"mp2 [#5, #6, and_i []]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expect(counters.core_nodes <= 8);
+}
+
 // A forward rule joining two contexts that the core leaves out: as a
 // bridge it only links facts in hand.
 const join_rules =
