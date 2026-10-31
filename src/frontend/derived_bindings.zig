@@ -1293,6 +1293,27 @@ fn applyAbstractBinding(
     return try walk.commit(view_bindings, candidate);
 }
 
+/// The context `abstract`'s walk reads off `view_bindings` as they stand,
+/// without the retry on preprocessed sides; null when the walk finds no
+/// site or the sides differ elsewhere.
+pub fn abstractAsIs(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    abstract: AbstractDecl,
+    view_bindings: []const ?ExprId,
+) !?ExprId {
+    const left_expr = view_bindings[abstract.left_view_idx] orelse return null;
+    const right_expr = view_bindings[abstract.right_view_idx] orelse return null;
+    const hole_expr = view_bindings[abstract.hole_view_idx] orelse return null;
+    var walk = (try PlugWalk.init(theorem, env, abstract, view_bindings, hole_expr)) orelse return null;
+    defer walk.deinit();
+    const candidate = abstractContextExpr(&walk, left_expr, right_expr) catch |err| switch (err) {
+        error.AbstractStructureMismatch => return null,
+        else => return err,
+    };
+    return if (walk.found_plug) candidate else null;
+}
+
 fn preprocessPlugBindings(
     theorem: *TheoremContext,
     env: *const GlobalEnv,

@@ -28,6 +28,13 @@
 //! A rule whose conclusion is a bare binder (`mp`'s `b`) applies to every
 //! goal of that binder's sort; its other binders are cuts.
 //!
+//! A rule whose view abstracts a binder (`@abstract`, `eq_replace`'s `p`
+//! read off `q` and `r`) is searched as its view: the core matches the
+//! view's conclusion and proves its premises, whose binders the conclusion
+//! does not fix are cuts. Once they are proved, the checker's walk reads
+//! the target off the two sides, with a fresh eigenvariable for the hole
+//! (`Abstraction`).
+//!
 //! Rules are admitted over `@acui` bags, commutative ones and sequences
 //! (`martin_lof`'s ordered contexts `g , x : A`). A conclusion bag with
 //! more than one rest binder (`or_elim`'s `G , H , K`) needs an idempotent
@@ -36,8 +43,9 @@
 //! ordinary term constructor: the core unfolds definitions in goals and
 //! facts (`terms.zig`), never in a rule's own templates. A relation's transport (`mpbi`) is left out:
 //! the core converts by unification, unfolding and normal forms instead.
-//! Rules mixing cuts with a view and rules with fresh variables wait for
-//! the later stages, as do bridges, which only link facts already in hand.
+//! Rules mixing cuts with a view and other rules with fresh variables wait
+//! for the later stages, as do bridges, which only link facts already in
+//! hand.
 
 const std = @import("std");
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
@@ -45,6 +53,8 @@ const Rules = @import("../../../rules.zig");
 const AcuiBag = @import("../../../acui_bag.zig");
 const ArgInfo = @import("../../../parse_recovery.zig").ArgInfo;
 const ViewDecl = @import("../../../views.zig").ViewDecl;
+const AbstractDecl = @import("../../../derived_bindings.zig").AbstractDecl;
+const RuleDecl = @import("../../../env.zig").RuleDecl;
 const Context = @import("../types.zig").Context;
 
 pub const Role = enum { closer, safe, unsafe };
@@ -60,14 +70,25 @@ pub const Rule = struct {
     /// The view the premises are stated in, when the rule has witnesses.
     view: ?*const ViewDecl = null,
     witnesses: []const Witness = &.{},
-    /// The binders a rule without a view leaves open.
+    /// The binders a rule without a view leaves open, or an abstraction's
+    /// view binders.
     cuts: []const Cut = &.{},
+    /// For a rule whose view abstracts a binder, the view; the premises,
+    /// cuts and shares are over its binders.
+    abstraction: ?Abstraction = null,
     /// The rest binders of a conclusion bag that has more than one.
     shares: []const usize = &.{},
     /// The term applications the conclusion fixes outside bags: of two
     /// unsafe rules, the one whose conclusion says more about the goal is
     /// tried first.
     specificity: u8 = 0,
+
+    /// The statement the core matches and proves: an abstraction's view,
+    /// else the rule itself.
+    pub fn statement(self: *const Rule, context: *const Context) *const RuleDecl {
+        if (self.abstraction) |*abstraction| return &abstraction.statement;
+        return &context.env.rules.items[self.rule_id];
+    }
 
     /// Whether the rule has a γ cut, a value only a premise's closure picks.
     pub fn hasGammaCut(self: *const Rule) bool {
@@ -106,6 +127,18 @@ pub const Cut = struct {
 };
 
 pub const Kind = enum { gamma, delta };
+
+/// A rule whose view abstracts one of its binders with bare plugs: its
+/// target and hole stay out of the view's statements, and every rule
+/// binder is a view binder.
+pub const Abstraction = struct {
+    view: *const ViewDecl,
+    decl: AbstractDecl,
+    /// The view as a statement over its own binders.
+    statement: RuleDecl,
+    /// The view binders its premises hold.
+    premise_binders: u64,
+};
 
 /// The most arguments one application may have: terms are rebuilt in
 /// fixed-size buffers. A rule with a wider application is left out.
@@ -160,14 +193,15 @@ pub fn build(allocator: std.mem.Allocator, context: *const Context) !Catalog {
         var entry = (try admit(allocator, context, rule_id)) orelse continue;
         errdefer entry.deinit(allocator);
         const rule = &context.env.rules.items[rule_id];
-        entry.specificity = @intCast(@min(rigidApps(context, rule.concl), std.math.maxInt(u8)));
+        const concl = entry.statement(context).concl;
+        entry.specificity = @intCast(@min(rigidApps(context, concl), std.math.maxInt(u8)));
         if (rule.hyps.len == 0) {
             entry.role = .closer;
         } else if (context.registry.eagerPriority(rule_id)) |priority| {
             entry.role = .safe;
             entry.priority = priority;
         }
-        const head = switch (rule.concl) {
+        const head = switch (concl) {
             .app => |app| app.term_id,
             .binder => bare_head,
         };
@@ -209,6 +243,9 @@ fn admit(allocator: std.mem.Allocator, context: *const Context, rule_id: u32) !?
     }
     if (context.registry.isRelationTransport(context.env, rule_id)) return null;
     if (context.registry.isAutoBridgeRule(rule_id)) return null;
+    if (context.views.getPtr(rule_id)) |view| for (view.derived_bindings) |derived| {
+        if (derived == .abstract) return admitAbstraction(allocator, context, rule_id, view);
+    };
     if (context.fresh_bindings.contains(rule_id)) return null;
     if (rule.args.len > 64) return null;
     const concl_mask = Rules.templateBinderMask(rule.concl);
@@ -301,6 +338,66 @@ fn admit(allocator: std.mem.Allocator, context: *const Context, rule_id: u32) !?
         .view = view,
         .witnesses = owned_witnesses,
         .shares = try shares.toOwnedSlice(allocator),
+    };
+}
+
+/// The entry for `rule_id`, whose view `view` abstracts a binder, or null
+/// when the core does not apply it: the abstraction has a pattern plug, a
+/// rule binder is no view binder, the target or hole occurs in the view's
+/// statements, or a view binder its conclusion leaves open is bound.
+fn admitAbstraction(allocator: std.mem.Allocator, context: *const Context, rule_id: u32, view: *const ViewDecl) !?Rule {
+    if (view.derived_bindings.len != 1) return null;
+    const decl = view.derived_bindings[0].abstract;
+    if (decl.hasPattern()) return null;
+    const rule = &context.env.rules.items[rule_id];
+    if (rule.args.len > 64 or view.num_binders > 64) return null;
+    var mapped: u64 = 0;
+    for (view.binder_map) |arg| {
+        if (arg) |idx| mapped |= @as(u64, 1) << @intCast(idx);
+    }
+    if (@popCount(mapped) != rule.args.len) return null;
+    if (view.binder_map[decl.target_view_idx] == null) return null;
+    if (view.binder_map[decl.hole_view_idx] == null or !view.arg_infos[decl.hole_view_idx].bound) return null;
+    const statement = RuleDecl{
+        .name = rule.name,
+        .args = view.arg_infos,
+        .arg_names = view.arg_names,
+        .hyps = view.hyps,
+        .concl = view.concl,
+        .kind = rule.kind,
+        .is_local = rule.is_local,
+    };
+    const derived = (@as(u64, 1) << @intCast(decl.target_view_idx)) | (@as(u64, 1) << @intCast(decl.hole_view_idx));
+    const concl_mask = Rules.templateBinderMask(view.concl);
+    if (concl_mask.overflow or concl_mask.mask & derived != 0) return null;
+    if (!templateSupported(context, view.arg_infos, view.concl, .conclusion)) return null;
+    var premise_binders: u64 = 0;
+    for (view.hyps) |hyp| {
+        const mask = Rules.templateBinderMask(hyp);
+        if (mask.overflow or mask.mask & derived != 0) return null;
+        premise_binders |= mask.mask;
+        if (!templateSupported(context, view.arg_infos, hyp, .premise)) return null;
+    }
+    var shares = std.ArrayListUnmanaged(usize).empty;
+    errdefer shares.deinit(allocator);
+    try collectShares(allocator, context, view.arg_infos, view.concl, &shares);
+    var cuts = std.ArrayListUnmanaged(Cut).empty;
+    errdefer cuts.deinit(allocator);
+    const rigid = rigidBinders(context, view.concl) | derived;
+    for (view.arg_infos, 0..) |arg, idx| {
+        if ((rigid >> @intCast(idx)) & 1 != 0) continue;
+        if (arg.bound) return null;
+        try cuts.append(allocator, .{ .kind = .gamma, .arg = idx });
+    }
+    const owned_cuts = try cuts.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_cuts);
+    return .{
+        .rule_id = rule_id,
+        .role = .unsafe,
+        .premises = view.hyps,
+        .cuts = owned_cuts,
+        .shares = try shares.toOwnedSlice(allocator),
+        .abstraction = .{ .view = view, .decl = decl, .statement = statement, .premise_binders = premise_binders },
     };
 }
 

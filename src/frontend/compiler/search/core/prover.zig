@@ -42,6 +42,12 @@
 //! first, which guesses the wvar from the facts; two or more wait, since
 //! their guesses would multiply (`mp2`'s `a`, `b` behind `a → b → c`).
 //!
+//! A step by a rule whose view abstracts a binder (`catalog.Abstraction`)
+//! reads that binder off the view's two sides once its premises are
+//! proved, before the goal's close marker. The walk's sides and plugs
+//! must be fixed by then, so the step fails as soon as one holds a wvar
+//! that none of its premises still to come holds.
+//!
 //! When the continuation of a proved goal fails, and proving the goal bound
 //! or narrowed no witness variable that existed when it was entered, the
 //! goal's other alternatives are cut (the W5 prune): they could only bind
@@ -88,6 +94,8 @@ const Terms = terms_mod.Terms;
 const WVars = @import("./wvars.zig").WVars;
 const Keys = @import("./keys.zig").Keys;
 const AcuiBag = @import("../../../acui_bag.zig");
+const DerivedBindings = @import("../../../derived_bindings.zig");
+const AbstractDecl = DerivedBindings.AbstractDecl;
 
 pub const Error = terms_mod.Error || error{
     SearchBudgetExhausted,
@@ -174,6 +182,9 @@ const Agenda = struct {
         /// The premises of the rule that made `split` are proved.
         settle: *const Split,
         check: *const Check,
+        abstract: *const Abstract,
+        /// Some of an abstraction's premises are proved.
+        ready: *const Ready,
         close: *Frame,
     },
     next: ?*const Agenda,
@@ -197,6 +208,26 @@ const Check = struct {
     template: TemplateExpr,
     values: []const ExprId,
     goal: ExprId,
+};
+
+/// A step by an abstraction (`catalog.Abstraction`), whose target is read
+/// off once its premises are proved: the view's binder values, the hole an
+/// eigenvariable and the target a wvar.
+const Abstract = struct {
+    abstraction: *const catalog_mod.Abstraction,
+    values: []const ExprId,
+};
+
+/// The view binders an abstraction's walk reads: its two sides, then its
+/// two plugs.
+fn abstractInputs(decl: AbstractDecl) [4]usize {
+    return .{ decl.left_view_idx, decl.right_view_idx, decl.left_plug.template.binder, decl.right_plug.template.binder };
+}
+
+/// An abstraction step whose premises `rest` are still to be proved.
+const Ready = struct {
+    abstract: *const Abstract,
+    rest: []const ExprId,
 };
 
 /// How a run ended: the whole proof was accepted, this branch failed, or
@@ -297,6 +328,12 @@ pub const Prover = struct {
             .goal => |goal| return self.prove(goal, cell.next),
             .settle => |split| return self.settle(split, cell.next),
             .check => |check_cell| return self.check(check_cell, cell.next),
+            .abstract => |made| return self.abstractTarget(made, cell.next),
+            .ready => |ready| {
+                const made = ready.abstract;
+                if (!try self.inputsFixed(made.abstraction.decl, made.values, ready.rest)) return .failed;
+                return self.run(cell.next);
+            },
             .close => |frame| {
                 frame.reached = true;
                 // Bars do not count: a proof that only barred older
@@ -691,7 +728,7 @@ pub const Prover = struct {
                         .safe => {},
                         .unsafe => if (goal.depth == 0 or any_safe) break,
                     }
-                    const rule = &self.context.env.rules.items[entry.rule_id];
+                    const rule = entry.statement(self.context);
                     // A bare-binder conclusion matches only goals of its sort.
                     switch (rule.concl) {
                         .app => {},
@@ -756,7 +793,7 @@ pub const Prover = struct {
                     .path = path,
                 },
             };
-            const rule = &self.context.env.rules.items[alt.entry.rule_id];
+            const rule = alt.entry.statement(self.context);
             if (try self.terms.matchConclusion(rule, alt.target, Picker, &picker)) return picker.applier.outcome;
         }
         return .failed;
@@ -798,7 +835,7 @@ pub const Prover = struct {
 
         pub fn match(self: *Scorer, bindings: []const ?ExprId) ProveError!bool {
             const prover = self.prover;
-            const rule = &prover.context.env.rules.items[self.entry.rule_id];
+            const rule = self.entry.statement(prover.context);
             var open: usize = 0;
             for (rule.hyps) |hyp| {
                 // A premise the match leaves unfixed takes any fact: a guess.
@@ -882,6 +919,7 @@ pub const Prover = struct {
         var values: []const ExprId = &.{};
         var split: ?Split = null;
         var checks: []const Check = &.{};
+        var abstract: ?Abstract = null;
         if (!try self.sharesFit()) return .failed;
         switch (applier.how) {
             .ref => |ref| step = .{ .ref = ref },
@@ -902,10 +940,31 @@ pub const Prover = struct {
                 if (entry.view) |view| values = try self.witness(entry, view, full, filled, applier.target);
                 if (entry.cuts.len != 0) try self.cut(entry, full, filled, applier.target);
                 try self.share(entry, eigen_deps, true, full, filled, &shares);
+                // An abstraction's hole and target are made once its
+                // premises can fix the walk's inputs: the hole after the
+                // cuts, so none can hold it, and the target after the hole,
+                // which it holds.
+                if (entry.abstraction) |*abstraction| {
+                    var held = std.ArrayListUnmanaged(ExprId).empty;
+                    defer held.deinit(self.allocator);
+                    for (full, 0..) |value, idx| {
+                        if ((abstraction.premise_binders >> @intCast(idx)) & 1 != 0) try held.append(self.allocator, value);
+                    }
+                    if (!try self.inputsFixed(abstraction.decl, full, held.items)) return .failed;
+                    const args = entry.statement(self.context).args;
+                    const hole = abstraction.decl.hole_view_idx;
+                    full[hole] = try self.wvars.introduce(args[hole].sort_name, applier.target, null);
+                    filled[hole] = true;
+                    const target = abstraction.decl.target_view_idx;
+                    full[target] = try self.wvars.mint(args[target].sort_name, &.{}, false);
+                    filled[target] = true;
+                    abstract = .{ .abstraction = abstraction, .values = full };
+                }
                 if (shares.items.len != 0) split = .{ .shares = shares.items, .bag = self.terms.split.?, .outer = self.splits };
                 if (self.terms.postponed) |list| checks = (try self.postponedChecks(list, full, filled)) orelse return .failed;
                 if (!try self.freshBound(entry, bindings, full)) return .failed;
-                step = .{ .rule = .{ .rule_id = entry.rule_id, .bindings = full } };
+                const rule_bindings = if (entry.abstraction != null) try self.ruleBindings(entry, full) else full;
+                step = .{ .rule = .{ .rule_id = entry.rule_id, .bindings = rule_bindings } };
             },
         }
         applier.matched = true;
@@ -938,6 +997,11 @@ pub const Prover = struct {
             check_cell.* = .{ .item = .{ .check = made }, .next = head };
             head = check_cell;
         }
+        var abstract_cell: Agenda = undefined;
+        if (abstract) |*made| {
+            abstract_cell = .{ .item = .{ .abstract = made }, .next = head };
+            head = &abstract_cell;
+        }
         var settle_cell: Agenda = undefined;
         if (split) |*made| {
             settle_cell = .{ .item = .{ .settle = made }, .next = head };
@@ -947,7 +1011,8 @@ pub const Prover = struct {
         defer if (split) |made| {
             self.splits = made.outer;
         };
-        const outcome = try self.runPremises(applier, exprs, order, children, head);
+        const made_abstract: ?*const Abstract = if (abstract) |*made| made else null;
+        const outcome = try self.runPremises(applier, exprs, order, children, head, made_abstract);
         if (outcome != .failed) return outcome;
         // Another premise holding a cut of the first may be the one whose
         // fact fixes it: `le_trans_ax`'s `y` in `suc a ≤ y` and `y ≤ c` is
@@ -963,7 +1028,7 @@ pub const Prover = struct {
                 reordered[at] = idx;
                 at += 1;
             }
-            const retried = try self.runPremises(applier, exprs, reordered, children, head);
+            const retried = try self.runPremises(applier, exprs, reordered, children, head, made_abstract);
             if (retried != .failed) return retried;
         }
         return .failed;
@@ -977,7 +1042,7 @@ pub const Prover = struct {
     /// condition either. The match's `bindings` say which binders it
     /// fixed; `full` holds every binder's value.
     fn freshBound(self: *Prover, entry: *const catalog_mod.Rule, bindings: []const ?ExprId, full: []const ExprId) Error!bool {
-        const args = self.context.env.rules.items[entry.rule_id].args;
+        const args = entry.statement(self.context).args;
         for (args, bindings, 0..) |arg, binding, idx| {
             if (!arg.bound or binding == null) continue;
             const value = self.wvars.resolve(full[idx]);
@@ -1051,6 +1116,60 @@ pub const Prover = struct {
         return continuer.outcome;
     }
 
+    /// The premises of an abstraction's step are proved: the checker's
+    /// walk reads the target off the view's two sides as they stand, the
+    /// hole's eigenvariable at each site of the plugs. A side or plug
+    /// still holding a wvar would make the walk guess, so the step fails
+    /// then.
+    fn abstractTarget(self: *Prover, made: *const Abstract, next: ?*const Agenda) Error!Outcome {
+        const decl = made.abstraction.decl;
+        if (!try self.inputsFixed(decl, made.values, &.{})) return .failed;
+        const bindings = try self.allocator.alloc(?ExprId, made.abstraction.view.num_binders);
+        defer self.allocator.free(bindings);
+        @memset(bindings, null);
+        for (abstractInputs(decl)) |idx| bindings[idx] = try self.terms.resolveGoal(made.values[idx]);
+        bindings[decl.hole_view_idx] = made.values[decl.hole_view_idx];
+        const value = (DerivedBindings.abstractAsIs(self.terms.theorem, self.context.env, decl, bindings) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return .failed,
+        }) orelse return .failed;
+        const start = self.wvars.mark();
+        defer self.wvars.rollback(start);
+        if (!try self.wvars.bind(self.wvars.of(made.values[decl.target_view_idx]).?, value)) return .failed;
+        return self.run(next);
+    }
+
+    /// Whether every wvar the inputs of `decl`'s walk hold unbound in the
+    /// view binder values `values`, other than an eigenvariable, is one
+    /// `rest` holds: the premises still to come, as no other goal is
+    /// proved before the walk.
+    fn inputsFixed(self: *Prover, decl: AbstractDecl, values: []const ExprId, rest: []const ExprId) Error!bool {
+        var pending = std.ArrayListUnmanaged(u32).empty;
+        defer pending.deinit(self.allocator);
+        for (rest) |expr| try self.wvars.collectUnbound(self.allocator, expr, &pending);
+        var held = std.ArrayListUnmanaged(u32).empty;
+        defer held.deinit(self.allocator);
+        for (abstractInputs(decl)) |idx| {
+            held.clearRetainingCapacity();
+            try self.wvars.collectUnbound(self.allocator, values[idx], &held);
+            for (held.items) |wvar| {
+                if (self.wvars.isEigen(wvar)) continue;
+                if (std.mem.indexOfScalar(u32, pending.items, wvar) == null) return false;
+            }
+        }
+        return true;
+    }
+
+    /// The binder values `full` of a step by `entry`, an abstraction, over
+    /// the view's binders, as the rule's.
+    fn ruleBindings(self: *Prover, entry: *const catalog_mod.Rule, full: []const ExprId) Error![]const ExprId {
+        const out = try self.arena.alloc(ExprId, self.context.env.rules.items[entry.rule_id].args.len);
+        for (entry.abstraction.?.view.binder_map, full) |arg, value| {
+            if (arg) |idx| out[idx] = value;
+        }
+        return out;
+    }
+
     /// The unifier's sink for a check taken over stand-ins: with the wvars
     /// the goal bound, the instance's normal form must meet the goal. Where
     /// a wvar is left open, it keeps out of the instance's bound variables,
@@ -1105,14 +1224,30 @@ pub const Prover = struct {
         order: []const usize,
         children: []?*const Node,
         next: *const Agenda,
+        abstract: ?*const Abstract,
     ) Error!Outcome {
         const cells = try self.allocator.alloc(Agenda, exprs.len);
         defer self.allocator.free(cells);
+        // An abstraction's inputs are checked after each premise against
+        // those still to come.
+        const ready_cells = try self.allocator.alloc(Agenda, if (abstract != null) exprs.len else 0);
+        defer self.allocator.free(ready_cells);
+        const ordered = try self.allocator.alloc(ExprId, ready_cells.len);
+        defer self.allocator.free(ordered);
+        for (ordered, 0..) |*expr, at| expr.* = exprs[order[at]];
+        const readies = try self.allocator.alloc(Ready, ready_cells.len);
+        defer self.allocator.free(readies);
         var head = next;
         var at = exprs.len;
         while (at > 0) {
             at -= 1;
             const idx = order[at];
+            // After the last premise, the abstraction itself checks them.
+            if (abstract) |made| if (at + 1 < exprs.len) {
+                readies[at] = .{ .abstract = made, .rest = ordered[at + 1 ..] };
+                ready_cells[at] = .{ .item = .{ .ready = &readies[at] }, .next = head };
+                head = &ready_cells[at];
+            };
             cells[at] = .{
                 .item = .{ .goal = .{
                     .expr = exprs[idx],
@@ -1277,7 +1412,7 @@ pub const Prover = struct {
 
     /// The binders of `entry`'s eigenvariables, as a dependency mask.
     fn eigenDeps(self: *const Prover, entry: *const catalog_mod.Rule) u64 {
-        const args = self.context.env.rules.items[entry.rule_id].args;
+        const args = entry.statement(self.context).args;
         var deps: u64 = 0;
         for (entry.cuts) |c| {
             if (c.kind == .delta) deps |= args[c.arg].deps;
@@ -1300,7 +1435,7 @@ pub const Prover = struct {
         filled: []bool,
         shares: *std.ArrayListUnmanaged(u32),
     ) Error!void {
-        const args = self.context.env.rules.items[entry.rule_id].args;
+        const args = entry.statement(self.context).args;
         for (entry.shares) |arg| {
             if (filled[arg] or (args[arg].deps & eigen_deps != 0) != dependent) continue;
             full[arg] = try self.wvars.mint(args[arg].sort_name, &.{}, false);
@@ -1422,7 +1557,7 @@ pub const Prover = struct {
     /// depend on it mention (`ex_elim`'s `x`, which `G` may hold but not
     /// `H` or `c`).
     fn cut(self: *Prover, entry: *const catalog_mod.Rule, full: []ExprId, filled: []bool, goal: ExprId) Error!void {
-        const args = self.context.env.rules.items[entry.rule_id].args;
+        const args = entry.statement(self.context).args;
         var cut_mask: u64 = 0;
         var delta_deps: u64 = 0;
         for (entry.cuts) |c| {
@@ -1442,8 +1577,8 @@ pub const Prover = struct {
             full[c.arg] = switch (c.kind) {
                 .gamma => blk: {
                     var capture = std.ArrayListUnmanaged(ExprId).empty;
-                    for (args, full, 0..) |other, value, idx| {
-                        if (!other.bound or (cut_mask >> @intCast(idx)) & 1 != 0) continue;
+                    for (args, full, filled, 0..) |other, value, known, idx| {
+                        if (!other.bound or !known or (cut_mask >> @intCast(idx)) & 1 != 0) continue;
                         if (arg.deps & other.deps != 0) continue;
                         const variable = try self.wvars.deref(value, null);
                         if (self.terms.theorem.interner.node(variable).* != .variable) continue;

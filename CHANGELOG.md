@@ -38,6 +38,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   as `x : A`. Besides the hypotheses, the core closes goals with the
   facts the `@auto forward` pass derives from them, so it reaches proofs
   through rules it cannot apply backward, such as an `@auto bridge`. A
+  rule whose `@view` works a binder out with `@abstract` (Leibniz
+  replacement, `eq_replace`) is searched as its view: once the premises'
+  proofs fix the equation and the formula to rewrite, the core works the
+  context out from both sides, with a fresh variable for the hole. A
   goal the core does not take (holes, idempotent non-commutative `@acui`
   combiners) or cannot prove goes on to the existing generation search
   in what is left of the same budget, and the checker validates every
@@ -45,8 +49,8 @@ This file records notable user-facing changes to Aufbau. The project follows
   proofs it builds, including for theorem variables declared to depend
   on a bound variable, so the checker rejects few of them. On the bench
   corpus the core alone finds 4% more depth rows than the generation
-  search alone, and 489 whole proofs to its 474. With both, 250 rows
-  are new and 91 are lost, where a failed core search uses up the
+  search alone, and 491 whole proofs to its 474. With both, 254 rows
+  are new and 84 are lost, where a failed core search uses up the
   budget the generation search needed. The
   `nd_fol` rows cost 97% fewer ticks and the `additive_fol` rows 29%
   fewer, and the Pelletier battery goes from 36 to 47 of 48 problems

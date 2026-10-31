@@ -1175,6 +1175,61 @@ test "a binder a rule's conclusion holds only in a substitution is fixed by a pr
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
+// Leibniz replacement, whose view reads the context `p` off the two sides.
+const replace_rules =
+    \\term eq (a b: obj): wff;
+    \\--| @congr
+    \\axiom im_congr (a b c d: wff): $ a ↔ b $ > $ c ↔ d $ > $ (a → c) ↔ (b → d) $;
+    \\--| @view (g h: ctx) {z: obj} (a b: obj) (p: wff z) (q r: wff): $ g ⊢ eq a b $ > $ h ⊢ q $ > $ g , h ⊢ r $
+    \\--| @abstract p q r z a b
+    \\--| @fresh z
+    \\axiom eq_replace (g h: ctx) {z: obj} (a b: obj) (p: wff z):
+    \\  $ g ⊢ eq a b $ > $ h ⊢ sb z a p $ > $ g , h ⊢ sb z b p $;
+    \\--| @view {z: obj} (a b: obj) (p: wff z) (q r: wff): $ eq a b → (q → r) $
+    \\--| @abstract p q r z a b
+    \\--| @fresh z
+    \\axiom eq_replace_imp {z: obj} (a b: obj) (p: wff z): $ eq a b → (sb z a p → sb z b p) $;
+    \\
+;
+
+test "the search core replaces equals by an abstraction its premises fix" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // The hypotheses close `g ⊢ eq ?a ?b` and `g ⊢ ?q`; the walk over `P c`
+    // and `P d` then reads `p` off as `P z`, `z` a fresh variable.
+    var suggestions = try sbSearch(&arena, replace_rules ++
+        \\theorem repl (g: ctx) (c d: obj): $ g ⊢ eq c d $ > $ g ⊢ P c $ > $ g ⊢ P d ∧ P d $;
+    ,
+        \\repl
+        \\----
+        \\l1: $ g ⊢ P d ∧ P d $ by auto?
+    , &counters);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"and_intro [eq_replace [#1, #2], eq_replace [#1, #2]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "an abstraction with no premises reads its target off the goal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try sbSearch(&arena, replace_rules ++
+        \\theorem repl_imp (c d: obj): $ eq c d → (P c → P d) $;
+    ,
+        \\repl_imp
+        \\--------
+        \\l1: $ eq c d → (P c → P d) $ by auto?
+    , &counters);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"eq_replace_imp"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
 test "two eigenvariables unify as one fresh variable" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

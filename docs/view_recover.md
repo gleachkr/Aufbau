@@ -551,13 +551,18 @@ The preprocess retry described below matches the patterns against the
 preprocessed sides; the patterns themselves are not preprocessed, only the
 solved binders they mention.
 
-Search uses an `@abstract` rule only when its premises are already
-available: `exact?` tries it with premises taken from earlier lines, and
-`auto?` does the same when it closes a goal directly. `apply?` does not
-offer it. `auto?` never builds subgoals for its premises: the context can
-only be worked out once both sides are known, so the premise to prove
-would be unknown. A DeM-style step whose premise must itself be proved has
-to be cited.
+`auto?`'s search core applies a rule whose plugs are bare names through
+its view: it proves the view's premises, then works the context out from
+both sides, with a fresh variable for the hole. The premises' proofs must
+fix both sides and both plugs, which the core never invents, so
+`eq_replace` is used where hypotheses or earlier steps state the equation
+and the formula to rewrite. Otherwise search uses an `@abstract` rule only when
+its premises are already available: `exact?` tries it with premises taken
+from earlier lines, and `auto?` does the same when it closes a goal
+directly. `apply?` does not offer it. A rule with a pattern plug never
+gets subgoals for its premises: the context can only be worked out once
+both sides are known, so the premise to prove would be unknown. A
+DeM-style step whose premise must itself be proved has to be cited.
 
 ### What `@abstract` can and cannot do
 
