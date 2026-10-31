@@ -37,7 +37,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   idempotence) is matched in order, so `g , x : A` takes the last entry
   as `x : A`. Besides the hypotheses, the core closes goals with the
   facts the `@auto forward` pass derives from them, so it reaches proofs
-  through rules it cannot apply backward, such as an `@auto bridge`. A
+  through rules it cannot apply backward. An `@auto bridge` rule
+  (weakening) carries a fact stated in a smaller context to the goal: its
+  premises are closed by facts only, never by a sub-search. A
   rule whose `@view` works a binder out with `@abstract` (Leibniz
   replacement, `eq_replace`) is searched as its view: once the premises'
   proofs fix the equation and the formula to rewrite, the core works the
@@ -48,9 +50,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   proof either way. The core keeps MM0's dependency conditions on the
   proofs it builds, including for theorem variables declared to depend
   on a bound variable, so the checker rejects few of them. On the bench
-  corpus the core alone finds 4% more depth rows than the generation
-  search alone, and 491 whole proofs to its 474. With both, 254 rows
-  are new and 84 are lost, where a failed core search uses up the
+  corpus the core alone finds 6% more depth rows than the generation
+  search alone, and 493 whole proofs to its 474. With both, 274 rows
+  are new and 79 are lost, where a failed core search uses up the
   budget the generation search needed. The
   `nd_fol` rows cost 97% fewer ticks and the `additive_fol` rows 29%
   fewer, and the Pelletier battery goes from 36 to 47 of 48 problems

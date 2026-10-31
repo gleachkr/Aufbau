@@ -1230,6 +1230,61 @@ test "an abstraction with no premises reads its target off the goal" {
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
+fn bridgeSearch(
+    arena: *std.heap.ArenaAllocator,
+    comptime theorem: []const u8,
+    comptime proof: []const u8,
+    counters: *types.SearchCounters,
+) !types.SourceSuggestions {
+    return suggestionsAtNeedle(arena, nd_rules ++ theorem, proof, "auto?", .{
+        .counters = counters,
+        .generate = .{ .enabled = true, .ladder = false },
+    });
+}
+
+test "a bridge carries a fact into a larger context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try bridgeSearch(&arena,
+        \\--| @auto bridge
+        \\axiom weak (g h: ctx) (a: wff): $ g ⊢ a $ > $ g , h ⊢ a $;
+        \\theorem lift (g: ctx) (a b c: wff): $ g ⊢ a $ > $ g ⊢ b $ > $ g , c ⊢ a ∧ b $;
+    ,
+        \\lift
+        \\----
+        \\l1: $ g , c ⊢ a ∧ b $ by auto?
+    , &counters);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"and_intro [weak [#1], weak [#2]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "a bridge's premise is never proved by a rule" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `wk1 [top_intro]` proves it, but only a fact may close a bridge's
+    // premise.
+    var suggestions = try bridgeSearch(&arena,
+        \\--| @auto bridge
+        \\axiom wk1 (g: ctx) (a b: wff): $ g ⊢ a $ > $ g , b ⊢ a $;
+        \\term top: wff;
+        \\axiom top_intro: $ ∅ ⊢ top $;
+        \\theorem top_any (c: wff): $ ∅ , c ⊢ top $;
+    ,
+        \\top_any
+        \\-------
+        \\l1: $ ∅ , c ⊢ top $ by auto?
+    , &counters);
+    defer suggestions.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
+    try std.testing.expect(counters.core_nodes > 0);
+}
+
 test "two eigenvariables unify as one fresh variable" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

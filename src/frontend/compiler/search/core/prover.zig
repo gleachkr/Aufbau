@@ -42,6 +42,15 @@
 //! first, which guesses the wvar from the facts; two or more wait, since
 //! their guesses would multiply (`mp2`'s `a`, `b` behind `a → b → c`).
 //!
+//! A bridge's premises are closed by facts only, never by a rule: the
+//! step costs no depth, and `weak`'s premise, with a fresh share for the
+//! part of the context it keeps, is a new goal each time, so a premise
+//! open to rules could take the bridge again without end. A fact that
+//! states the bridge's goal itself is skipped, since it closes that goal
+//! directly, and a step whose premise no fact might close is not taken.
+//! A premise that no fact closes has failed only as a bridge's, so it is
+//! not memoized.
+//!
 //! A step by a rule whose view abstracts a binder (`catalog.Abstraction`)
 //! reads that binder off the view's two sides once its premises are
 //! proved, before the goal's close marker. The walk's sides and plugs
@@ -144,6 +153,9 @@ const Goal = struct {
     slot: *?*const Node,
     /// The goals this one was reached through.
     path: ?*const PathCell,
+    /// For a bridge's premise, the bridge's goal: only a fact closes the
+    /// premise, and not one that states that goal, which closes it directly.
+    bridged: ?ExprId = null,
 };
 
 const PathCell = struct {
@@ -458,7 +470,7 @@ pub const Prover = struct {
             .failed => {},
             .cut => |id| if (id != frame.id) return .{ .cut = id },
         }
-        if (!frame.reached and !shared and self.prune_floor >= level) {
+        if (!frame.reached and !shared and goal.bridged == null and self.prune_floor >= level) {
             // Every binding made below is undone, so the key is the
             // entry's again.
             const failed_at = if (ground) blk: {
@@ -665,6 +677,7 @@ pub const Prover = struct {
         if (try self.terms.normalForm(goal.expr)) |normal| try targets.append(self.allocator, normal);
         for (targets.items) |target| {
             for (self.facts) |fact| {
+                if (goal.bridged) |bridged| if (try self.states(fact.expr, bridged)) continue;
                 var applier = Applier{
                     .prover = self,
                     .frame = frame,
@@ -676,6 +689,7 @@ pub const Prover = struct {
                 if (try self.terms.unify(fact.expr, target, Applier, &applier)) return applier.outcome;
             }
         }
+        if (goal.bridged != null) return .failed;
         var held = std.ArrayListUnmanaged(u32).empty;
         defer held.deinit(self.allocator);
         const split = try self.heldShares(goal.expr, &held) orelse return self.expandRules(frame, goal.expr, close, path);
@@ -696,6 +710,22 @@ pub const Prover = struct {
         }
         return .failed;
     }
+
+    /// Whether `fact` unifies with `goal`; the bindings are undone.
+    fn states(self: *Prover, fact: ExprId, goal: ExprId) Error!bool {
+        const mark = self.wvars.mark();
+        defer self.wvars.rollback(mark);
+        var probe = Probe{};
+        return self.terms.unify(fact, goal, Probe, &probe);
+    }
+
+    const Probe = struct {
+        pub const Error = ProveError;
+
+        pub fn match(_: *Probe, _: []const ?ExprId) ProveError!bool {
+            return true;
+        }
+    };
 
     /// Try the rules for `expr`, `frame`'s goal or the goal with its shares
     /// bound, until one leads to a proof or a cut. The goal, its normal
@@ -724,7 +754,7 @@ pub const Prover = struct {
             for ([_][]const catalog_mod.Rule{ by_head, bare }) |rules| {
                 for (rules) |*entry| {
                     switch (entry.role) {
-                        .closer => {},
+                        .closer, .bridge => {},
                         .safe => {},
                         .unsafe => if (goal.depth == 0 or any_safe) break,
                     }
@@ -924,7 +954,7 @@ pub const Prover = struct {
         switch (applier.how) {
             .ref => |ref| step = .{ .ref = ref },
             .rule => |entry| {
-                if (entry.role != .closer and !try self.bindsCut(applier.frame.cuts)) return .failed;
+                if (entry.role != .closer and entry.role != .bridge and !try self.bindsCut(applier.frame.cuts)) return .failed;
                 const full = try self.arena.alloc(ExprId, bindings.len);
                 for (full, bindings) |*value, binding| value.* = binding orelse undefined;
                 premises = entry.premises;
@@ -985,6 +1015,12 @@ pub const Prover = struct {
                 else => |e| return e,
             };
         }
+        // Only a fact closes a bridge's premise.
+        if (applier.how == .rule and applier.how.rule.role == .bridge) for (exprs) |expr| {
+            for (self.facts) |fact| {
+                if (try self.terms.mightEqual(fact.expr, expr, .unfolding)) break;
+            } else return .failed;
+        };
         const order = try self.allocator.alloc(usize, premises.len);
         defer self.allocator.free(order);
         var firsts = std.ArrayListUnmanaged(usize).empty;
@@ -1254,6 +1290,7 @@ pub const Prover = struct {
                     .depth = applier.premise_depth,
                     .slot = &children[idx],
                     .path = applier.path,
+                    .bridged = if (applier.how == .rule and applier.how.rule.role == .bridge) applier.target else null,
                 } },
                 .next = head,
             };

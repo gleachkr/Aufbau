@@ -843,6 +843,17 @@ context member mentioning it, so forgetting that member first is a
 generating step) is the theory author's trade to make. Requires a
 hypothesis (`error.BridgeRuleHasNoHypotheses`).
 
+The search core gives a bridge its own role (`catalog.Role.bridge`): it is
+tried with the closers, at no depth, and its premise goals carry the
+bridge's goal (`Goal.bridged`): `Prover.expand` tries the facts, skipping
+one that states the bridge's goal (it closed that goal directly), and
+stops; a premise no fact closes is not memoized as failed, and `apply`
+does not take a bridge step whose premise no fact might close. `weak`'s two rest binders are
+shares, so the fact a premise is closed by binds `g` to the part of the
+context it states and the settle step hands `h` the rest. Opening the
+premise to rules would not terminate: the step costs no depth and its
+premise, with a fresh share, is a new goal each time.
+
 ### `@auto focus` — focused chains
 
 `focus_rules.zig` parses `@auto focus $ P $ : C...` into a `FocusDecl` per
@@ -1570,7 +1581,7 @@ width is real.
 | `generate.zig` | `auto?` driver: hybrid depth-major/phase-major retry ladder, forward saturation wiring |
 | `meta_store.zig` | `Sigma`, the search's substitution (every meta's constraints and assignment, keyed by `meta_id` or a view-local alias, with one trail; one per `auto?` call), and `MetaStore`, a branch-local view over it (pid → key map, rollback marks); the leaf kinds live in `../inference/open_terms.zig` |
 | `core/root.zig` | the search core (`docs/design_notes/shared_witness.md` revision 2), tried before the ladder (`GenerateOptions.core`, on by default), in a discarded clone of the work theorem: entry, abstention, close-out (name leftover eigenvariables, then witnesses, from `@vars`, render every binding explicitly, one `probe`) |
-| `core/catalog.zig` | the rules the core applies, by role (closer, safe = `@auto eager`, unsafe), indexed by conclusion head; quantifier rules' witnesses (γ, δ) read off their `@view`/`@recover` |
+| `core/catalog.zig` | the rules the core applies, by role (closer, bridge = `@auto bridge`, safe = `@auto eager`, unsafe), indexed by conclusion head; quantifier rules' witnesses (γ, δ) read off their `@view`/`@recover` |
 | `core/terms.zig` | canonical ACUI bags, conclusion matching and unification through witness variables (bag members as choice points), premise building, the view's leaf swap |
 | `core/wvars.zig` | witness variables (σ, one undo log) and eigenvariables, named only when a binding or the close-out needs one: level, capture and occurs checks at binding; the W5 signature of a goal's effect on older witnesses |
 | `core/keys.zig` | failure-memo keys for goals holding witness variables, up to renaming them |

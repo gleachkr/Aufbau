@@ -3,6 +3,8 @@
 //! annotations and shape alone:
 //!
 //! - a **closer** has no premises (`ax`, `contra_left`);
+//! - a **bridge** is `@auto bridge` (`weak`): only facts close its
+//!   premises, so it is tried with the closers, at no depth;
 //! - a **safe** rule is `@auto eager`: invertible, so once it applies the
 //!   goal is committed to the safe rules;
 //! - an **unsafe** rule is any other rule; each application charges one
@@ -44,8 +46,7 @@
 //! facts (`terms.zig`), never in a rule's own templates. A relation's transport (`mpbi`) is left out:
 //! the core converts by unification, unfolding and normal forms instead.
 //! Rules mixing cuts with a view and other rules with fresh variables wait
-//! for the later stages, as do bridges, which only link facts already in
-//! hand.
+//! for the later stages.
 
 const std = @import("std");
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
@@ -57,7 +58,7 @@ const AbstractDecl = @import("../../../derived_bindings.zig").AbstractDecl;
 const RuleDecl = @import("../../../env.zig").RuleDecl;
 const Context = @import("../types.zig").Context;
 
-pub const Role = enum { closer, safe, unsafe };
+pub const Role = enum { closer, bridge, safe, unsafe };
 
 pub const Rule = struct {
     rule_id: u32,
@@ -197,6 +198,8 @@ pub fn build(allocator: std.mem.Allocator, context: *const Context) !Catalog {
         entry.specificity = @intCast(@min(rigidApps(context, concl), std.math.maxInt(u8)));
         if (rule.hyps.len == 0) {
             entry.role = .closer;
+        } else if (context.registry.isAutoBridgeRule(rule_id)) {
+            entry.role = .bridge;
         } else if (context.registry.eagerPriority(rule_id)) |priority| {
             entry.role = .safe;
             entry.priority = priority;
@@ -242,7 +245,6 @@ fn admit(allocator: std.mem.Allocator, context: *const Context, rule_id: u32) !?
         },
     }
     if (context.registry.isRelationTransport(context.env, rule_id)) return null;
-    if (context.registry.isAutoBridgeRule(rule_id)) return null;
     if (context.views.getPtr(rule_id)) |view| for (view.derived_bindings) |derived| {
         if (derived == .abstract) return admitAbstraction(allocator, context, rule_id, view);
     };
