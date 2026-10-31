@@ -1347,7 +1347,9 @@ test "auto co-solves a context-member/succedent two-meta ax leaf" {
     // costly route through the non-enrolled `all_elim`). The fixture's
     // `@auto trigger` on `ax` is stripped here: its seed `∀ x R x y ⊢ ∀ x R x y`
     // feeds `all_elim` directly, a shorter proof the search would find first
-    // and never reach the anchored pass.
+    // and never reach the anchored pass. The anchored pass is the generation
+    // search's, so the search core, which finds the `all_elim` route
+    // itself, is off.
     const proof_src =
         \\ex_all_to_all_ex
         \\----------------
@@ -1365,7 +1367,7 @@ test "auto co-solves a context-member/succedent two-meta ax leaf" {
         mm0,
         proof_src,
         "auto?",
-        .{ .generate = .{ .enabled = true } },
+        .{ .generate = .{ .enabled = true, .core = false } },
     );
     defer suggestions.deinit();
 

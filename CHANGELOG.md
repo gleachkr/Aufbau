@@ -22,7 +22,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   eliminator's type `[k/n] C`) meets the goal's normal form once the
   rest of the conclusion has fixed it, and a variable that occurs only
   inside the substitution is chosen by a hypothesis or a premise's
-  proof, as for modus ponens. A rule joining several contexts
+  proof, as for modus ponens. A substitution of a witness still unknown
+  (`all_elim`'s `[x/t] p`) meets the goal in the form it reduces to with
+  the witness as a fresh variable, which fixes the witness where the
+  goal says what it is. A rule's conclusion gives an unknown the
+  structure the rest of the conclusion fixes (`R a (f a)` against
+  `R C ?t` makes the witness `f C`), and never structure nothing fixes.
+  A rule joining several contexts
   (`or_elim`'s `G , H , K ⊢ r`) splits the goal's context between its
   premises without enumerating splits: a hypothesis fixes the part of
   the premise it proves, and a premise proved by rules gets what the
@@ -35,10 +41,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   goal the core does not take (holes, idempotent non-commutative `@acui`
   combiners) or cannot prove goes on to the existing generation search
   in what is left of the same budget, and the checker validates every
-  proof either way. On the bench corpus the core alone finds 98% of the
-  depth rows the generation search alone finds and 431 of its 474 whole
-  proofs. With both, 191 rows are new and 119 are lost, where a failed
-  core search uses up the budget the generation search needed. The
+  proof either way. The core keeps MM0's dependency conditions on the
+  proofs it builds, including for theorem variables declared to depend
+  on a bound variable, so the checker rejects few of them. On the bench
+  corpus the core alone finds 2% more depth rows than the generation
+  search alone, and 487 whole proofs to its 474. With both, 225 rows
+  are new and 105 are lost, where a failed core search uses up the
+  budget the generation search needed. The
   `nd_fol` rows cost 97% fewer ticks and the `additive_fol` rows 29%
   fewer, and the Pelletier battery goes from 36 to 47 of 48 problems
   found. The per-call `nodes` and `fuel` parameters bound only the

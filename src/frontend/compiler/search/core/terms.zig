@@ -27,9 +27,13 @@
 //! else pairs with. A sequence matches in order instead: a template member
 //! takes the next goal member and a rest binder a run of them, and two
 //! sequences unify member by member, where one unbound wvar of the
-//! sequence's sort takes the run its neighbours leave. An unbound wvar
-//! facing template structure does not match: the witnesses of these
-//! stages stand for terms the theory's rules never take apart.
+//! sequence's sort takes the run its neighbours leave. An unbound goal
+//! wvar facing template structure takes it by narrowing: the node waits
+//! for the end of the match, and once the rest of the conclusion has bound
+//! the node's binders it is instantiated and unified with the wvar. A
+//! binder left unbound fails the match, so a wvar takes only structure the
+//! goal fixes elsewhere, never a guess: a goal that is a bare wvar meets no
+//! conclusion with binders.
 //!
 //! Matching and unification are modulo definitions: where heads differ,
 //! an application of the later-declared definition unfolds one step
@@ -46,7 +50,10 @@
 //! variable has none yet, since what the variable becomes decides a
 //! rewrite's dependency conditions (`sb_t x t a` drops the substitution
 //! only when `a` does not depend on `x`); an eigenvariable normalizes as a
-//! fresh bound variable, which is what it becomes.
+//! fresh bound variable, which is what it becomes. `openNormalForm` takes
+//! one with every wvar as a fresh bound variable: each step it makes holds
+//! for any value that, like the stand-in, holds no bound variable of the
+//! expression.
 //!
 //! A rule's conclusion may hold such a term too (`nat_ind_elim`'s type
 //! `[k/n] C`). Against a goal node with its head it matches argument by
@@ -111,7 +118,7 @@ pub const Terms = struct {
     template_unfolds: std.AutoHashMapUnmanaged(TemplateKey, ?TemplateExpr) = .empty,
     template_arena: std.heap.ArenaAllocator,
     /// Bound variables that stand in for eigenvariables while a goal is
-    /// normalized (`eigenNormal`), each with its sort.
+    /// normalized (`standInNormal`), each with its sort.
     stand_ins: std.ArrayListUnmanaged(struct { sort_name: []const u8, expr: ExprId }) = .empty,
 
     pub fn init(
@@ -307,7 +314,10 @@ pub const Terms = struct {
     fn normalPart(self: *Terms, expr: ExprId) Error!ExprId {
         if (!try self.holdsHead(&self.redexes, expr, isRewritten)) return expr;
         if (!try self.wvars.holdsWVar(expr)) return self.groundNormal(expr);
-        if (try self.eigenNormal(expr)) |normal| return normal;
+        // Eigenvariables normalize as fresh bound variables: each is one,
+        // which nothing else in the goal depends on. A γ wvar's value
+        // decides a rewrite's dependency conditions.
+        if (try self.standInNormal(expr, true)) |normal| return normal;
         const app = switch (self.theorem.interner.node(expr).*) {
             .app => |app| app,
             .variable, .placeholder => return expr,
@@ -326,32 +336,41 @@ pub const Terms = struct {
         };
     }
 
-    /// The normal form of `expr` when its only unbound wvars are
-    /// eigenvariables, which normalize as fresh bound variables: each is
-    /// one, which nothing else in the goal depends on. Null when it holds
-    /// a γ wvar, whose value decides a rewrite's dependency conditions.
-    fn eigenNormal(self: *Terms, expr: ExprId) Error!?ExprId {
+    /// The normal form of `expr` with every unbound wvar, γ ones too, as a
+    /// stand-in bound variable; null when nothing rewrites. It holds for
+    /// the values the γ wvars take that, like the stand-ins, hold no bound
+    /// variable of `expr` (`WVars.narrowCapture`).
+    pub fn openNormalForm(self: *Terms, expr: ExprId) Error!?ExprId {
+        if (!try self.holdsHead(&self.redexes, expr, isRewritten)) return null;
+        const normal = (try self.standInNormal(expr, false)) orelse return null;
+        return if (normal == expr) null else normal;
+    }
+
+    /// The normal form of `expr` with each unbound wvar as a stand-in bound
+    /// variable, or `expr` itself; null when `only_eigens` and it holds a γ
+    /// wvar, or a sort has no stand-in left.
+    fn standInNormal(self: *Terms, expr: ExprId, only_eigens: bool) Error!?ExprId {
         var held = std.ArrayListUnmanaged(u32).empty;
         defer held.deinit(self.allocator);
         try self.wvars.collectUnbound(self.allocator, expr, &held);
-        var eigens: [catalog.max_args]ExprId = undefined;
+        var wexprs: [catalog.max_args]ExprId = undefined;
         var stand_ins: [catalog.max_args]ExprId = undefined;
-        if (held.items.len > eigens.len) return null;
+        if (held.items.len > wexprs.len) return null;
         for (held.items, 0..) |idx, at| {
-            if (!self.wvars.isEigen(idx)) return null;
+            if (only_eigens and !self.wvars.isEigen(idx)) return null;
             const sort_name = self.wvars.vars.items[idx].sort_name;
             var nth: usize = 0;
             for (held.items[0..at]) |other| {
                 if (std.mem.eql(u8, self.wvars.vars.items[other].sort_name, sort_name)) nth += 1;
             }
-            eigens[at] = self.wvars.vars.items[idx].expr;
+            wexprs[at] = self.wvars.vars.items[idx].expr;
             stand_ins[at] = (try self.standIn(sort_name, nth)) orelse return null;
         }
         const n = held.items.len;
-        const ground = try self.replace(expr, eigens[0..n], stand_ins[0..n]);
+        const ground = try self.replace(expr, wexprs[0..n], stand_ins[0..n]);
         const normal = try self.groundNormal(ground);
         if (normal == ground) return expr;
-        return self.canonical(try self.replace(normal, stand_ins[0..n], eigens[0..n])) catch |err| switch (err) {
+        return self.canonical(try self.replace(normal, stand_ins[0..n], wexprs[0..n])) catch |err| switch (err) {
             error.Unsupported => expr,
             else => |e| return e,
         };
@@ -643,12 +662,17 @@ pub const SplitBag = struct {
     taken: u64,
 };
 
-/// A conclusion node under a head some `@rewrite` rule rewrites, matched
-/// against the goal node `goal` once its binders are known.
+/// A conclusion node matched against the goal node `goal` once its binders
+/// are known: one under a head some `@rewrite` rule rewrites, or, when
+/// `narrow`, one facing an unbound wvar.
 pub const Postponed = struct {
     template: TemplateExpr,
     goal: ExprId,
     next: ?*const Postponed,
+    /// The node gives the wvar its structure, so the match fails when it
+    /// leaves one of the node's binders unbound: the wvar takes only
+    /// structure the rest of the conclusion fixes.
+    narrow: bool = false,
 };
 
 /// What is left to match after the current step, as a stack-allocated
@@ -777,10 +801,10 @@ fn Matcher(comptime Sink: type) type {
         }
 
         /// Defer the conclusion node `template` against `expr` to the end
-        /// of the match.
-        fn postpone(self: *Self, template: TemplateExpr, expr: ExprId, next: ?*const Pending) MatchError!void {
+        /// of the match (`Postponed.narrow`).
+        fn postpone(self: *Self, template: TemplateExpr, expr: ExprId, narrow: bool, next: ?*const Pending) MatchError!void {
             const outer = self.postponed;
-            const cell = Postponed{ .template = template, .goal = expr, .next = outer };
+            const cell = Postponed{ .template = template, .goal = expr, .next = outer, .narrow = narrow };
             self.postponed = &cell;
             defer self.postponed = outer;
             try self.run(next);
@@ -788,10 +812,12 @@ fn Matcher(comptime Sink: type) type {
 
         /// Unify each postponed node of `list` whose binders the match
         /// bound with its goal node, instantiated and in normal form; the
-        /// others join `left` for `report`.
+        /// others join `left` for `report`, except a narrowing one, which
+        /// fails the match.
         fn check(self: *Self, list: ?*const Postponed, left: ?*const Postponed) MatchError!void {
             const node = list orelse return self.report(left);
             const instance = (try @call(.never_inline, instantiateBound, .{ self, node.template })) orelse {
+                if (node.narrow) return;
                 const kept = Postponed{ .template = node.template, .goal = node.goal, .next = left };
                 return self.check(node.next, &kept);
             };
@@ -815,8 +841,9 @@ fn Matcher(comptime Sink: type) type {
                 .binder => |idx| try self.bind(idx, expr, next),
                 .app => |app| {
                     const target = self.terms.wvars.resolve(expr);
+                    if (self.terms.wvars.of(target) != null) return self.postpone(template, target, true, next);
                     if (self.terms.isRewritten(app.term_id) and self.terms.headOf(target) != app.term_id) {
-                        return self.postpone(template, target, next);
+                        return self.postpone(template, target, false, next);
                     }
                     if (try self.unfoldToward(app.term_id, target)) |unfolded| {
                         return self.term(template, unfolded, next);

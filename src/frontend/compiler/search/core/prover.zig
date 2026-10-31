@@ -25,12 +25,18 @@
 //! A conclusion node the match postponed with binders it left unbound
 //! (`Terms.postponed`) is checked once the premises are proved and have
 //! bound those cuts: instantiated, in normal form, it must unify with the
-//! goal node it stood against.
+//! goal node it stood against. An instance whose wvars keep it from a
+//! normal form (`[x/?t] φ` with `?t` still open) first meets the goal in
+//! the normal form with those wvars as stand-ins (`Terms.openNormalForm`),
+//! which binds what the goal fixes; then its own normal form must meet the
+//! goal, or, where a wvar is still open, the wvar keeps out of the
+//! instance's bound variables as its stand-in did.
 //!
 //! A cut wvar is chosen by the proof, never invented: a goal that holds
 //! one unbound is closed by a fact or a closer, or by a rule whose
-//! conclusion match binds one of its cut wvars, and no other rule works on
-//! it. So a rule's premises that a fact might close come first, and
+//! conclusion match binds one of its cut wvars or leaves a postponed node
+//! over a part of the goal holding one, which the node's check binds, and
+//! no other rule works on it. So a rule's premises that a fact might close come first, and
 //! an unbound wvar premise waits for a sibling that fixes it.
 //!
 //! When the continuation of a proved goal fails, and proving the goal bound
@@ -39,6 +45,17 @@
 //! more. Likewise a proof that leaves the older witness variables as an
 //! earlier proof of the goal did, whose continuation failed, is skipped
 //! (W5 dedupe). A failure that includes a rejected close-out does neither.
+//!
+//! A step whose bound binder is fixed to an eigenvariable bars it from the
+//! step's other arguments that do not depend on the binder
+//! (`WVars.bar`), so no later merge, binding or name breaks MM0's condition
+//! for that step. A bar does not count as constraining the eigenvariable
+//! for the W5 prune or W9: a proof that bars an older one is remembered,
+//! and its bars are applied again where it is reused. This leaves a gap:
+//! when a continuation fails only because a bar refused something, the
+//! W5 prune still skips the goal's other proofs, one of which might not
+//! have barred. The corpus shows no case of it; counting bars closes it at
+//! a large cost in re-search.
 //!
 //! A goal that runs out of alternatives without reaching its marker has no
 //! proof at its depth; a goal proved without binding or narrowing a witness
@@ -53,6 +70,7 @@ const std = @import("std");
 const ExprId = @import("../../../expr.zig").ExprId;
 const ProofScript = @import("../../../proof_script.zig");
 const Rules = @import("../../../rules.zig");
+const ArgInfo = @import("../../../parse_recovery.zig").ArgInfo;
 const TemplateExpr = Rules.TemplateExpr;
 const ViewDecl = @import("../../../views.zig").ViewDecl;
 const PoolVars = @import("../../vars.zig").PoolVars;
@@ -278,6 +296,8 @@ pub const Prover = struct {
             .check => |check_cell| return self.check(check_cell, cell.next),
             .close => |frame| {
                 frame.reached = true;
+                // Bars do not count: a proof that only barred older
+                // eigenvariables is reused with its bars (`reuse`).
                 const constrained = self.wvars.constrainedOlderSince(frame.mark, frame.wvars);
                 if (!constrained) try self.remember(frame);
                 // A proof that left the older wvars as an earlier one did,
@@ -354,9 +374,11 @@ pub const Prover = struct {
             };
             break :blk self.proved_open.get(key);
         };
-        if (known) |proof| if (proof.depth <= goal.depth) {
+        if (known) |proof| if (proof.depth <= goal.depth) reused: {
             const rejects = self.stats.rejects;
-            goal.slot.* = try self.reuse(proof, order);
+            const mark = self.wvars.mark();
+            defer self.wvars.rollback(mark);
+            goal.slot.* = (try self.reuse(proof, order)) orelse break :reused;
             const outcome = try self.run(next);
             // As for the W5 prune: the proof bound nothing older, so no
             // other proof can help the continuation.
@@ -487,7 +509,10 @@ pub const Prover = struct {
     /// `proof` for the goal whose wvars in key order are `order`: its goal's
     /// wvars replaced by those, and its own by fresh ones minted or
     /// introduced now, so each is younger than every wvar the goal holds.
-    fn reuse(self: *Prover, proof: Proved, order: []const u32) Error!*const Node {
+    /// The goal's eigenvariables are barred as the proof's steps barred the
+    /// original's (`freshBound`); null when one now occurs where it is
+    /// barred.
+    fn reuse(self: *Prover, proof: Proved, order: []const u32) Error!?*const Node {
         if (proof.positions.len == 0 and proof.internals.len == 0) return proof.node;
         var map = std.AutoHashMapUnmanaged(u32, ExprId).empty;
         defer map.deinit(self.allocator);
@@ -515,7 +540,29 @@ pub const Prover = struct {
                 copy.fresh_in = renamed;
             }
         }
-        return self.renameNode(proof.node, &map, &memo);
+        const node = try self.renameNode(proof.node, &map, &memo);
+        return if (try self.rebar(node, order)) node else null;
+    }
+
+    /// Bar each eigenvariable of `order` that a bound binder of a step of
+    /// `node`'s proof holds, as `freshBound` did when the step was made.
+    fn rebar(self: *Prover, node: *const Node, order: []const u32) Error!bool {
+        switch (node.step) {
+            .ref => {},
+            .rule => |step| {
+                const args = self.context.env.rules.items[step.rule_id].args;
+                for (args, step.bindings, 0..) |arg, value, idx| {
+                    if (!arg.bound) continue;
+                    const wvar = self.wvars.of(self.wvars.resolve(value)) orelse continue;
+                    if (!self.wvars.isEigen(wvar) or std.mem.indexOfScalar(u32, order, wvar) == null) continue;
+                    if (!try self.barFrom(args, step.bindings, idx, wvar)) return false;
+                }
+            },
+        }
+        for (node.children) |child| {
+            if (!try self.rebar(child.?, order)) return false;
+        }
+        return true;
     }
 
     fn renameNode(
@@ -836,7 +883,7 @@ pub const Prover = struct {
         switch (applier.how) {
             .ref => |ref| step = .{ .ref = ref },
             .rule => |entry| {
-                if (entry.role != .closer and !self.bindsCut(applier.frame.cuts)) return .failed;
+                if (entry.role != .closer and !try self.bindsCut(applier.frame.cuts)) return .failed;
                 const full = try self.arena.alloc(ExprId, bindings.len);
                 for (full, bindings) |*value, binding| value.* = binding orelse undefined;
                 premises = entry.premises;
@@ -854,7 +901,7 @@ pub const Prover = struct {
                 try self.share(entry, eigen_deps, true, full, filled, &shares);
                 if (shares.items.len != 0) split = .{ .shares = shares.items, .bag = self.terms.split.?, .outer = self.splits };
                 if (self.terms.postponed) |list| checks = (try self.postponedChecks(list, full, filled)) orelse return .failed;
-                if (!self.freshBound(entry, bindings, full)) return .failed;
+                if (!try self.freshBound(entry, bindings, full)) return .failed;
                 step = .{ .rule = .{ .rule_id = entry.rule_id, .bindings = full } };
             },
         }
@@ -920,22 +967,44 @@ pub const Prover = struct {
     }
 
     /// Whether each bound binder of `entry` the match fixed to a variable
-    /// keeps it out of the other arguments that do not depend on the
-    /// binder, as MM0 requires. A binder fixed to an eigenvariable is held
-    /// to the same when close-out names it. The match's `bindings` say
-    /// which binders it fixed; `full` holds every binder's value.
-    fn freshBound(self: *Prover, entry: *const catalog_mod.Rule, bindings: []const ?ExprId, full: []const ExprId) bool {
+    /// keeps it, and the theorem variables that depend on it, out of the
+    /// other arguments that do not depend on the binder, as MM0 requires.
+    /// A binder fixed to an unbound eigenvariable bars it from those
+    /// arguments (`WVars.bar`), so no later binding or name breaks the
+    /// condition either. The match's `bindings` say which binders it
+    /// fixed; `full` holds every binder's value.
+    fn freshBound(self: *Prover, entry: *const catalog_mod.Rule, bindings: []const ?ExprId, full: []const ExprId) Error!bool {
         const args = self.context.env.rules.items[entry.rule_id].args;
         for (args, bindings, 0..) |arg, binding, idx| {
             if (!arg.bound or binding == null) continue;
             const value = self.wvars.resolve(full[idx]);
-            if (self.terms.theorem.interner.node(value).* != .variable) continue;
-            for (args, full, 0..) |other, other_value, other_idx| {
-                if (other_idx == idx or other.deps & arg.deps != 0) continue;
-                if (self.wvars.mentions(other_value, value)) return false;
+            switch (self.terms.theorem.interner.node(value).*) {
+                .variable => for (args, full, 0..) |other, other_value, other_idx| {
+                    if (other_idx == idx or other.deps & arg.deps != 0) continue;
+                    if (self.wvars.mentions(other_value, value)) return false;
+                },
+                .placeholder => {
+                    const wvar = self.wvars.of(value) orelse continue;
+                    if (!self.wvars.isEigen(wvar)) continue;
+                    if (!try self.barFrom(args, full, idx, wvar)) return false;
+                },
+                .app => {},
             }
         }
         return true;
+    }
+
+    /// Bar the eigenvariable `wvar` that bound binder `idx` holds from the
+    /// step's other arguments that do not depend on the binder; false when
+    /// one holds it.
+    fn barFrom(self: *Prover, args: []const ArgInfo, values: []const ExprId, idx: usize, wvar: u32) Error!bool {
+        var others = std.ArrayListUnmanaged(ExprId).empty;
+        defer others.deinit(self.allocator);
+        for (args, values, 0..) |other, other_value, other_idx| {
+            if (other_idx == idx or other.deps & args[idx].deps != 0) continue;
+            try others.append(self.allocator, other_value);
+        }
+        return self.wvars.bar(wvar, others.items);
     }
 
     /// The checks of the postponed conclusion nodes `list` with the step's
@@ -967,9 +1036,49 @@ pub const Prover = struct {
         };
         const resolved = try self.terms.resolveGoal(instance);
         var continuer = Continuer{ .prover = self, .next = next };
-        _ = try self.terms.unify((try self.terms.normalForm(resolved)) orelse resolved, made.goal, Continuer, &continuer);
+        const normal = (try self.terms.normalForm(resolved)) orelse resolved;
+        // A substitution of a term still open has no normal form yet; the
+        // one taken over stand-ins binds what the goal fixes.
+        if (try self.wvars.holdsWVar(normal)) if (try self.terms.openNormalForm(normal)) |open| {
+            var verifier = Verifier{ .prover = self, .instance = resolved, .goal = made.goal, .continuer = &continuer };
+            _ = try self.terms.unify(open, made.goal, Verifier, &verifier);
+            return continuer.outcome;
+        };
+        _ = try self.terms.unify(normal, made.goal, Continuer, &continuer);
         return continuer.outcome;
     }
+
+    /// The unifier's sink for a check taken over stand-ins: with the wvars
+    /// the goal bound, the instance's normal form must meet the goal. Where
+    /// a wvar is left open, it keeps out of the instance's bound variables,
+    /// as its stand-in did, and the normal form over stand-ins stands.
+    const Verifier = struct {
+        prover: *Prover,
+        instance: ExprId,
+        goal: ExprId,
+        continuer: *Continuer,
+
+        pub const Error = ProveError;
+
+        pub fn match(self: *Verifier, _: []const ?ExprId) ProveError!bool {
+            const terms = self.prover.terms;
+            const wvars = self.prover.wvars;
+            const resolved = try terms.resolveGoal(self.instance);
+            const normal = (try terms.normalForm(resolved)) orelse resolved;
+            const open = if (try wvars.holdsWVar(normal)) (try terms.openNormalForm(normal)) orelse normal else normal;
+            if (open == normal) return terms.unify(normal, self.goal, Continuer, self.continuer);
+            const mark = wvars.mark();
+            defer wvars.rollback(mark);
+            var bound = std.ArrayListUnmanaged(ExprId).empty;
+            defer bound.deinit(self.prover.allocator);
+            try wvars.collectBound(self.prover.allocator, resolved, &bound);
+            var held = std.ArrayListUnmanaged(u32).empty;
+            defer held.deinit(self.prover.allocator);
+            try wvars.collectUnbound(self.prover.allocator, normal, &held);
+            for (held.items) |idx| try wvars.narrowCapture(idx, bound.items);
+            return terms.unify(open, self.goal, Continuer, self.continuer);
+        }
+    };
 
     /// The unifier's sink that runs the rest of the agenda.
     const Continuer = struct {
@@ -1134,12 +1243,24 @@ pub const Prover = struct {
     }
 
     /// Whether a goal whose unbound cut wvars were `cuts` has none, or the
-    /// match just made binds one.
-    fn bindsCut(self: *const Prover, cuts: []const u32) bool {
+    /// match just made binds one, or postponed a conclusion node against a
+    /// part of the goal holding one, which the node's check binds.
+    fn bindsCut(self: *Prover, cuts: []const u32) Error!bool {
+        if (cuts.len == 0) return true;
         for (cuts) |idx| {
             if (self.wvars.vars.items[idx].value != null) return true;
         }
-        return cuts.len == 0;
+        var held = std.ArrayListUnmanaged(u32).empty;
+        defer held.deinit(self.allocator);
+        var node = self.terms.postponed;
+        while (node) |cell| : (node = cell.next) {
+            held.clearRetainingCapacity();
+            try self.wvars.collectUnbound(self.allocator, cell.goal, &held);
+            for (held.items) |idx| {
+                if (std.mem.indexOfScalar(u32, cuts, idx) != null) return true;
+            }
+        }
+        return false;
     }
 
     /// The binders of `entry`'s eigenvariables, as a dependency mask.

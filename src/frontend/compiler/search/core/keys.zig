@@ -13,7 +13,11 @@
 //!   above became) and which of the goal's eigenvariables are older than
 //!   it;
 //! - an eigenvariable: the variables it may not become, among those the
-//!   goal or a fact mentions, since no other variable can meet it.
+//!   goal or a fact mentions, since no other variable can meet it; its
+//!   introduction goal bars a variable it mentions or holds a theorem
+//!   variable depending on; and which of the goal's other wvars it must
+//!   stay out of (its introduction goal, or what it is kept fresh in,
+//!   bars included, mentions them).
 //!
 //! Equal keys mean goals equal up to renaming their wvars, so a failure
 //! recorded under one key holds for every goal with that key. Bag members
@@ -81,7 +85,10 @@ pub const Keys = struct {
                 }
                 for ([_][]const ExprId{ goal_vars, self.fact_vars }) |reachable| {
                     for (reachable) |variable| {
-                        if (std.mem.indexOfScalar(ExprId, mentioned.items, variable) != null or
+                        const in_goal = for (mentioned.items) |leaf| {
+                            if (leaf == variable or self.wvars.dependsOn(leaf, variable)) break true;
+                        } else false;
+                        if (in_goal or
                             std.mem.indexOfScalar(ExprId, wvar.capture, variable) != null or
                             self.wvars.eigens.contains(variable))
                         {
@@ -90,6 +97,16 @@ pub const Keys = struct {
                     }
                 }
                 try self.putSet(list.items);
+                // The goal's other wvars it must stay out of: whether it
+                // may merge with one is part of what the goal can prove.
+                for (self.order.items, 0..) |other, pos| {
+                    if (other == idx) continue;
+                    const kept_out = for (wvar.fresh_in orelse &.{at}) |expr| {
+                        if (self.wvars.mentions(expr, self.wvars.vars.items[other].expr)) break true;
+                    } else false;
+                    if (kept_out) try self.put(@intCast(pos));
+                }
+                try self.put(std.math.maxInt(u32));
             } else {
                 try self.bytes.append(self.allocator, if (wvar.cut) 'c' else 'g');
                 try list.appendSlice(self.allocator, wvar.capture);

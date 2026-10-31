@@ -22,7 +22,8 @@
 //! older clear of what either must not occur in.
 //!
 //! A wvar also carries the variables bound inside the formula it was swapped
-//! into: holding one of those would capture it.
+//! into: holding one of those, or a theorem variable that depends on one,
+//! would capture it.
 //!
 //! A cut wvar stands for a binder of a cut rule (`imp_trans`'s `q`); the
 //! prover lets only a closure or a rule match that binds it work on a goal
@@ -48,7 +49,8 @@ pub const WVar = struct {
     introduced_at: ?ExprId = null,
     /// For an eigenvariable a rule introduces, the rule's arguments that
     /// do not depend on it, which it may not occur in; null when it may
-    /// occur nowhere in its introduction goal.
+    /// occur nowhere in its introduction goal. A later step whose bound
+    /// binder it is adds its own such arguments (`bar`).
     fresh_in: ?[]const ExprId = null,
     cut: bool = false,
     value: ?ExprId = null,
@@ -60,6 +62,9 @@ const Entry = union(enum) {
     narrowed: struct { wvar: u32, level: u32, capture: []const ExprId },
     /// `variable` became an eigenvariable; `prev` is the level it had.
     named: struct { variable: ExprId, prev: ?u32 },
+    /// An eigenvariable was barred from more expressions; `prev` is the
+    /// list it had.
+    barred: struct { wvar: u32, prev: ?[]const ExprId },
 };
 
 pub const WVars = struct {
@@ -109,17 +114,20 @@ pub const WVars = struct {
                 } else {
                     _ = self.eigens.remove(old.variable);
                 },
+                .barred => |old| self.vars.items[old.wvar].fresh_in = old.prev,
             }
         }
     }
 
     /// Whether a wvar with index below `older_than` was bound or narrowed
-    /// since the log mark `since`.
+    /// since the log mark `since`. Barring one (`bar`) does not count: a
+    /// bar only refuses what would break the barring step's dependency
+    /// condition.
     pub fn constrainedOlderSince(self: *const WVars, since: usize, older_than: u32) bool {
         for (self.log.items[since..]) |entry| switch (entry) {
             .bound => |idx| if (idx < older_than) return true,
             .narrowed => |old| if (old.wvar < older_than) return true,
-            .named => {},
+            .barred, .named => {},
         };
         return false;
     }
@@ -127,7 +135,9 @@ pub const WVars = struct {
     /// Append to `out` what the steps logged since `since` did to the wvars
     /// with index below `older_than`: each binding (with the younger wvars
     /// it holds numbered by first occurrence), narrowing, and naming of an
-    /// eigenvariable, with levels above `level_cap` read as `level_cap`.
+    /// eigenvariable, with levels above `level_cap` read as `level_cap`, and
+    /// then the eigenvariables barred, in index order, each with the leaves
+    /// of what it was barred from since `since`.
     /// Two runs that leave the same signature leave those wvars, and every
     /// later goal that can see only them, in the same state.
     pub fn signature(
@@ -140,6 +150,9 @@ pub const WVars = struct {
     ) Error!void {
         var young = std.ArrayListUnmanaged(u32).empty;
         defer young.deinit(allocator);
+        // Each eigenvariable barred, with the length its list had at `since`.
+        var barred = std.AutoArrayHashMapUnmanaged(u32, usize).empty;
+        defer barred.deinit(allocator);
         for (self.log.items[since..]) |entry| switch (entry) {
             .bound => |idx| if (idx < older_than) {
                 try putWord(allocator, out, 'b');
@@ -159,7 +172,43 @@ pub const WVars = struct {
                 try putWord(allocator, out, named.variable);
                 try putWord(allocator, out, @min(self.eigens.get(named.variable).?, level_cap));
             },
+            .barred => |old| if (old.wvar < older_than) {
+                const gop = try barred.getOrPut(allocator, old.wvar);
+                // Unbarred, the list was the introduction goal alone.
+                if (!gop.found_existing) gop.value_ptr.* = if (old.prev) |prev| prev.len else 1;
+            },
         };
+        const Asc = struct {
+            keys: []const u32,
+            pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+                return ctx.keys[a] < ctx.keys[b];
+            }
+        };
+        barred.sort(Asc{ .keys = barred.keys() });
+        // A bar keeps the eigenvariable out of what its expressions' leaves
+        // become, so the leaves of what it was barred from since `since`
+        // are all that matters, whatever order or repeats the bars came in.
+        var leaves = std.ArrayListUnmanaged(ExprId).empty;
+        defer leaves.deinit(allocator);
+        for (barred.keys(), barred.values()) |idx, start| {
+            leaves.clearRetainingCapacity();
+            for (self.vars.items[idx].fresh_in.?[start..]) |expr| try self.collectLeaves(allocator, expr, &leaves);
+            std.mem.sort(ExprId, leaves.items, {}, std.sort.asc(ExprId));
+            try putWord(allocator, out, 'f');
+            try putWord(allocator, out, idx);
+            for (leaves.items) |leaf| try self.serialize(allocator, leaf, older_than, level_cap, &young, out);
+            try putWord(allocator, out, std.math.maxInt(u32));
+        }
+    }
+
+    /// The variables and unbound wvars of `expr`, after following
+    /// bindings, added to `out` once each.
+    fn collectLeaves(self: *WVars, allocator: std.mem.Allocator, expr: ExprId, out: *std.ArrayListUnmanaged(ExprId)) Error!void {
+        const at = self.resolve(expr);
+        switch (self.theorem.interner.node(at).*) {
+            .variable, .placeholder => if (std.mem.indexOfScalar(ExprId, out.items, at) == null) try out.append(allocator, at),
+            .app => |app| for (app.args) |arg| try self.collectLeaves(allocator, arg, out),
+        }
     }
 
     fn serialize(
@@ -323,16 +372,60 @@ pub const WVars = struct {
     }
 
     /// Whether the variable `variable` occurs in `expr` (bound occurrences
-    /// included), following bindings.
+    /// included), following bindings, or a theorem variable `expr` holds
+    /// depends on it: substituting `expr` for a binder that does not
+    /// depend on `variable` breaks MM0's dependency condition either way.
     pub fn mentions(self: *WVars, expr: ExprId, variable: ExprId) bool {
         const at = self.resolve(expr);
         if (at == variable) return true;
         return switch (self.theorem.interner.node(at).*) {
-            .variable, .placeholder => false,
+            .variable => self.dependsOn(at, variable),
+            .placeholder => false,
             .app => |app| for (app.args) |arg| {
                 if (self.mentions(arg, variable)) break true;
             } else false,
         };
+    }
+
+    /// Whether the variable leaf `leaf` is declared to depend on the bound
+    /// variable `variable` (`p : wff x` on `x`).
+    pub fn dependsOn(self: *const WVars, leaf: ExprId, variable: ExprId) bool {
+        if (self.theorem.interner.node(variable).* != .variable) return false;
+        const info = (self.theorem.currentLeafInfo(leaf) catch null) orelse return false;
+        if (info.bound or info.deps == 0) return false;
+        const bound = (self.theorem.currentLeafInfo(variable) catch null) orelse return false;
+        return bound.bound and info.deps & bound.deps != 0;
+    }
+
+    /// The bound variables `expr` holds, after following bindings, once
+    /// each.
+    pub fn collectBound(
+        self: *WVars,
+        allocator: std.mem.Allocator,
+        expr: ExprId,
+        out: *std.ArrayListUnmanaged(ExprId),
+    ) Error!void {
+        const at = self.resolve(expr);
+        switch (self.theorem.interner.node(at).*) {
+            .variable => if (self.isBound(at) and std.mem.indexOfScalar(ExprId, out.items, at) == null) {
+                try out.append(allocator, at);
+            },
+            .placeholder => {},
+            .app => |app| for (app.args) |arg| try self.collectBound(allocator, arg, out),
+        }
+    }
+
+    /// Add `variables` to what the unbound wvar `idx` may not hold.
+    pub fn narrowCapture(self: *WVars, idx: u32, variables: []const ExprId) Error!void {
+        if (variables.len == 0) return;
+        const wvar = &self.vars.items[idx];
+        const capture = try std.mem.concat(self.arena, ExprId, &.{ wvar.capture, variables });
+        try self.log.append(self.allocator, .{ .narrowed = .{
+            .wvar = idx,
+            .level = wvar.level,
+            .capture = wvar.capture,
+        } });
+        wvar.capture = capture;
     }
 
     /// Whether `variable` is a bound variable, the only kind an
@@ -344,9 +437,13 @@ pub const WVars = struct {
 
     /// Whether wvar `idx` may hold, or as an eigenvariable become, the
     /// variable `variable`. An eigenvariable becomes only a bound variable.
+    /// A variable that depends on one the wvar may not hold is refused
+    /// with it.
     pub fn admits(self: *WVars, idx: u32, variable: ExprId) bool {
         const wvar = self.vars.items[idx];
-        if (std.mem.indexOfScalar(ExprId, wvar.capture, variable) != null) return false;
+        for (wvar.capture) |captured| {
+            if (self.mentions(variable, captured)) return false;
+        }
         if (wvar.introduced_at) |goal| {
             if (!self.isBound(variable) or self.eigens.contains(variable)) return false;
             for (wvar.fresh_in orelse &.{goal}) |expr| {
@@ -354,8 +451,12 @@ pub const WVars = struct {
             }
             return true;
         }
-        const level = self.eigens.get(variable) orelse return true;
-        return level < wvar.level;
+        if (self.eigens.get(variable)) |level| return level < wvar.level;
+        var it = self.eigens.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.* >= wvar.level and self.dependsOn(variable, entry.key_ptr.*)) return false;
+        }
+        return true;
     }
 
     /// Bind unbound wvar `idx` to `value`, unless that breaks its sort,
@@ -403,7 +504,8 @@ pub const WVars = struct {
     /// Unify the unbound eigenvariables `idx` and `other` as one fresh
     /// variable: the younger is bound to the older, which then stands for
     /// both, so a goal that existed before the younger one constrains
-    /// nothing older. Refused when one occurs where the other may not.
+    /// nothing older, and takes on what the younger must stay out of.
+    /// Refused when one occurs where the other may not.
     fn merge(self: *WVars, idx: u32, other: u32) Error!bool {
         if (idx == other) return false;
         const younger, const older = if (idx > other) .{ idx, other } else .{ other, idx };
@@ -413,9 +515,32 @@ pub const WVars = struct {
                 if (self.mentions(expr, self.vars.items[pair[1]].expr)) return false;
             }
         }
+        try self.extendFreshIn(older, self.vars.items[younger].fresh_in orelse &.{self.vars.items[younger].introduced_at.?});
         try self.log.append(self.allocator, .{ .bound = younger });
         self.vars.items[younger].value = self.vars.items[older].expr;
         return true;
+    }
+
+    /// Bar the unbound eigenvariable `idx` from `exprs` too: a step fixed a
+    /// bound binder to it, and these are the step's arguments that do not
+    /// depend on the binder. False, logging nothing, when one holds it.
+    pub fn bar(self: *WVars, idx: u32, exprs: []const ExprId) Error!bool {
+        const wvar = self.vars.items[idx];
+        std.debug.assert(wvar.introduced_at != null and wvar.value == null);
+        for (exprs) |expr| {
+            if (self.mentions(expr, wvar.expr)) return false;
+        }
+        try self.extendFreshIn(idx, exprs);
+        return true;
+    }
+
+    fn extendFreshIn(self: *WVars, idx: u32, exprs: []const ExprId) Error!void {
+        if (exprs.len == 0) return;
+        const wvar = &self.vars.items[idx];
+        const own = wvar.fresh_in orelse &.{wvar.introduced_at.?};
+        const list = try std.mem.concat(self.arena, ExprId, &.{ own, exprs });
+        try self.log.append(self.allocator, .{ .barred = .{ .wvar = idx, .prev = wvar.fresh_in } });
+        wvar.fresh_in = list;
     }
 
     fn constrain(self: *WVars, idx: u32, expr: ExprId) Error!bool {

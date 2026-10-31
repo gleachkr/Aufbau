@@ -202,7 +202,7 @@ test "the search core closes a quantifier witness by unification" {
     var suggestions = try ndFolSearch(&arena, "", "all_inst", "∅ ⊢ (∀ x P x) → P C", &counters, .{ .max_depth = 6 });
     defer suggestions.deinit();
 
-    try expectOffered(suggestions.items, &.{"imp_intro [all_left [ax (g := $ ∀ x P x $) []]]"});
+    try expectOffered(suggestions.items, &.{"imp_intro [all_elim [ax []]]"});
     try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
@@ -228,8 +228,9 @@ test "the search core names a witness the proof leaves open" {
     var suggestions = try ndFolSearch(&arena, "", "all_ex_inst", "∅ ⊢ (∀ x P x) → (∃ y P y)", &counters, .{ .max_depth = 6 });
     defer suggestions.deinit();
 
-    // Any object closes `P ?t ⊢ P ?t`; the first `@vars` name stands in.
-    try expectOffered(suggestions.items, &.{"imp_intro [ex_intro [all_left [ax (g := $ ∀ x P x $, a := $ P u $) []]]]"});
+    // Any object closes `[x/?t] P x` from `∀ x P x`; the first `@vars`
+    // name stands in.
+    try expectOffered(suggestions.items, &.{"imp_intro [ex_intro [all_elim (t := $ u $) [ax []]]]"});
     try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
 }
 
@@ -1213,6 +1214,114 @@ test "a rule's bound binder never takes a variable its other arguments hold" {
         \\-------
         \\l1: $ P x ⊢ pick x (P x) c ∧ pick x (P x) c $ by auto?
     , &counters);
+    defer suggestions.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
+    try std.testing.expect(counters.core_nodes > 0);
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "an open witness takes the structure a rule's conclusion fixes around it" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `ex_intro` leaves `R C ?t`; `R_f`'s `a` is `C`, so its `f a` gives
+    // `?t` the value `f C`.
+    var suggestions = try ndFolSearch(
+        &arena,
+        "term f (a: obj): obj;\naxiom R_f (g: ctx) (a: obj): $ g ⊢ R a (f a) $;\n" ++
+            "theorem ex_f {y: obj}: $ ∅ ⊢ ∃ y R C y $;\n",
+        "ex_f",
+        "∅ ⊢ ∃ y R C y",
+        &counters,
+        .{ .ladder = false },
+    );
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"ex_intro [R_f (a := $ C $) []]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "an open witness never takes structure with a binder nothing fixes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `R_f`'s `a` would be whatever `?t`'s argument is: nothing in the goal
+    // says, so the core does not guess one.
+    var suggestions = try ndFolSearch(
+        &arena,
+        "term f (a: obj): obj;\naxiom R_f (g: ctx) (a: obj): $ g ⊢ R C (f a) $;\n" ++
+            "theorem ex_f {y: obj}: $ ∅ ⊢ ∃ y R C y $;\n",
+        "ex_f",
+        "∅ ⊢ ∃ y R C y",
+        &counters,
+        .{ .ladder = false },
+    );
+    defer suggestions.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
+    try std.testing.expect(counters.core_nodes > 0);
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "a rule's bound binder never takes a variable a theorem variable in its other arguments depends on" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `pick_intro`'s context is `q`, which depends on the `x` it would bind:
+    // the checker would reject the step as it would for `P x` itself.
+    var suggestions = try sbSearch(&arena,
+        \\axiom pick_intro (g: ctx) {x: obj} (p: wff x) (t: obj): $ g ⊢ p $ > $ g ⊢ pick x p t $;
+        \\theorem intro_q (c: obj) {x: obj} (q: wff x):
+        \\  $ q ⊢ P x $ > $ q ⊢ pick x (P x) c ∧ pick x (P x) c $;
+    ,
+        \\intro_q
+        \\-------
+        \\l1: $ q ⊢ pick x (P x) c ∧ pick x (P x) c $ by auto?
+    , &counters);
+    defer suggestions.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
+    try std.testing.expect(counters.core_nodes > 0);
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "an eigenvariable a rule's bound binder holds never merges with one in the rule's other arguments" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `F` unfolds to `all p (P p)` with a fresh `p`. Under `inst`, which
+    // introduces `x` with `eqv x top` in the context, `gen` binds `p` with
+    // that context, and closing `P p` from `eqv x top` would make `p` the
+    // same variable as `x`. The core bars `p` from `gen`'s context, so it
+    // never builds the proof the checker would reject. (`gen` first, `inst`
+    // fails on its own: `dom p` is in the context `x` must stay out of.)
+    var suggestions = try suggestionsAtNeedle(&arena, nd_rules ++
+        \\--| @vars u v w
+        \\sort obj;
+        \\term P (a: obj): wff;
+        \\term ok (a: obj): wff;
+        \\term dom (a: obj): wff;
+        \\term all {x: obj} (a: wff x): wff;
+        \\term eqv (a b: obj): wff;
+        \\term top: obj;
+        \\def F {.p: obj}: wff = $ all p (P p) $;
+        \\axiom ok_top (g: ctx): $ g ⊢ ok top $;
+        \\axiom P_top (g: ctx): $ g ⊢ P top $;
+        \\axiom gen (g: ctx) {x: obj} (a: wff x): $ g , dom x ⊢ a $ > $ g ⊢ all x a $;
+        \\axiom inst (g: ctx) {x: obj} (t: obj x) (a: wff x):
+        \\  $ g ⊢ ok t $ > $ g , eqv x t ⊢ a $ > $ g ⊢ a $;
+        \\axiom eqv_P (g: ctx) (a b: obj): $ g ⊢ eqv a b $ > $ g ⊢ P b $ > $ g ⊢ P a $;
+        \\theorem not_F: $ ∅ ⊢ F $;
+    ,
+        \\not_F
+        \\-----
+        \\l1: $ ∅ ⊢ F $ by auto?
+    , "auto?", .{
+        .counters = &counters,
+        .generate = .{ .enabled = true, .ladder = false },
+    });
     defer suggestions.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);

@@ -106,9 +106,16 @@ needs what it stands for, in a goal, a hypothesis, or a rule's own
 statement (except a definition with dummies there). It also tries a goal
 in its `@rewrite` normal form, so a premise a rule states as a redex (an
 induction rule's `sb_f x 0 p`) meets the hypotheses and rules for the
-form it reduces to; a part of the goal that holds a witness the core has
-not chosen waits, since what the witness becomes can decide a rewrite,
-while a definition's bound variable counts as a fresh one. A rule whose
+form it reduces to. A part that holds a witness the core has not chosen
+is normalized with the witness standing for a fresh variable, which
+fixes the witness where the goal says what it is (`∀ x P x` gives `P C`
+by taking `t` to be `C`); a witness still open after that is kept clear
+of the formula's bound variables, as the fresh one was. A definition's
+bound variable counts as a fresh one too. A rule's conclusion gives an
+unknown the structure the rest of the conclusion fixes: `R a (f a)`
+against `R C ?t` makes `?t` be `f C`. It never invents one, so a
+conclusion part with a variable nothing else fixes does not meet an
+unknown. A rule whose
 conclusion states such a redex itself (an eliminator's type `[k/n] C`)
 meets the goal's normal form once the rest of the conclusion has fixed
 the redex; a variable that occurs only inside the redex is chosen like
