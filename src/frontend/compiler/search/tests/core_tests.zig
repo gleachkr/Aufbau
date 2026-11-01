@@ -182,10 +182,11 @@ fn ndFolSearch(
     comptime name: []const u8,
     comptime statement: []const u8,
     counters: *types.SearchCounters,
-    options: struct { max_depth: usize = 6, ladder: bool = true },
+    options: struct { max_depth: usize = 6, ladder: bool = true, fixture: []const u8 = "nd_fol" },
 ) !types.SourceSuggestions {
     const allocator = arena.allocator();
-    const fixture = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/nd_fol.mm0", allocator, .unlimited);
+    const path = try std.fmt.allocPrint(allocator, "tests/search_bench_cases/{s}.mm0", .{options.fixture});
+    const fixture = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .unlimited);
     const mm0_src = try std.mem.concat(allocator, u8, &.{ fixture, extra });
     const underline: [name.len]u8 = @splat('-');
     const proof_src = name ++ "\n" ++ underline ++ "\nl1: $ " ++ statement ++ " $ by auto?\n";
@@ -1530,6 +1531,27 @@ test "a narrowing gives a binder nothing fixes a cut a premise's fact fixes" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"syl [a2i [#1], ax_1 []]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// `rall`'s context `∀ x P x` holds the `x` it binds, but only bound, and
+// `rall` declares `@freshen g x`: the checker renames it.
+test "a bound binder's variable an argument holds bound is renamed by its @freshen" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try ndFolSearch(
+        &arena,
+        "theorem all_dup {x: obj}: $ ∀ x P x ⊢ ∀ x (P x ∧ P x) $;\n",
+        "all_dup",
+        "∀ x P x ⊢ ∀ x (P x ∧ P x)",
+        &counters,
+        .{ .ladder = false, .fixture = "additive_fol" },
+    );
+    defer suggestions.deinit();
+
+    try std.testing.expect(suggestions.items.len != 0);
     try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }

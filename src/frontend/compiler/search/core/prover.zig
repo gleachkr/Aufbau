@@ -1187,7 +1187,11 @@ pub const Prover = struct {
             switch (self.terms.theorem.interner.node(value).*) {
                 .variable => for (args, full, 0..) |other, other_value, other_idx| {
                     if (other_idx == idx or other.deps & arg.deps != 0) continue;
-                    if (self.wvars.mentions(other_value, value)) return false;
+                    if (!self.wvars.mentions(other_value, value)) continue;
+                    // `@freshen` renames the variable out of the argument
+                    // when the checker applies the step.
+                    if (entry.abstraction == null and self.freshens(entry.rule_id, other_idx, idx)) continue;
+                    return false;
                 },
                 .placeholder => {
                     const wvar = self.wvars.of(value) orelse continue;
@@ -1198,6 +1202,15 @@ pub const Prover = struct {
             }
         }
         return true;
+    }
+
+    /// Whether rule `rule_id` declares `@freshen target blocker`.
+    fn freshens(self: *const Prover, rule_id: u32, target: usize, blocker: usize) bool {
+        const decls = self.context.freshen_bindings.get(rule_id) orelse return false;
+        for (decls) |decl| {
+            if (decl.target_arg_idx == target and decl.blocker_arg_idx == blocker) return true;
+        }
+        return false;
     }
 
     /// Bar the eigenvariable `wvar` that bound binder `idx` holds from the

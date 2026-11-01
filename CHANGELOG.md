@@ -56,7 +56,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   in what is left of the same budget, and the checker validates every
   proof either way. The core keeps MM0's dependency conditions on the
   proofs it builds, including for theorem variables declared to depend
-  on a bound variable, so the checker rejects few of them. On the bench
+  on a bound variable, so the checker rejects few of them; where a rule
+  declares `@freshen` for an argument that holds the bound variable, the
+  core leaves the renaming to the checker. On the bench
   corpus the core alone finds 9% more depth rows than the generation
   search alone, and 500 whole proofs to its 474. With both, 316 rows
   are new and 71 are lost, where a failed core search uses up the
