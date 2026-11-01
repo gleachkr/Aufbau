@@ -33,7 +33,9 @@
 //! the node's binders it is instantiated and unified with the wvar. A
 //! binder left unbound fails the match, so a wvar takes only structure the
 //! goal fixes elsewhere, never a guess: a goal that is a bare wvar meets no
-//! conclusion with binders.
+//! conclusion with binders. A sink with `mayInvent` may instead give such
+//! binders cut wvars of their own (`Matcher.invent`), for premises to fix
+//! from facts, while the node holds a binder the match bound.
 //!
 //! Matching and unification are modulo definitions: where heads differ,
 //! an application of the later-declared definition unfolds one step
@@ -96,6 +98,9 @@ pub const Terms = struct {
     /// The conclusion nodes the match in progress left to check once the
     /// premises bind their binders, while the sink runs.
     postponed: ?*const Postponed = null,
+    /// The cut wvars the match in progress minted for binders a narrowing
+    /// left unbound, while the sink runs.
+    invented: ?*const Invented = null,
     /// The bag combiner each combiner head and each unit term reads as.
     bags: std.AutoHashMapUnmanaged(u32, AcuiBag.Combiner) = .empty,
     canonical_memo: std.AutoHashMapUnmanaged(ExprId, ExprId) = .empty,
@@ -675,6 +680,10 @@ pub const Postponed = struct {
     narrow: bool = false,
 };
 
+/// A cut wvar a narrowing minted for a binder the match left unbound
+/// (`Matcher.invent`), as a list.
+pub const Invented = struct { wvar: u32, next: ?*const Invented };
+
 /// What is left to match after the current step, as a stack-allocated
 /// list: the arguments of an application from position `at` on (template
 /// against goal, or two terms unified), and the next member of a bag in
@@ -754,6 +763,8 @@ fn Matcher(comptime Sink: type) type {
         stop: bool = false,
         /// The conclusion nodes postponed so far (`postpone`).
         postponed: ?*const Postponed = null,
+        /// The cut wvars minted so far (`invent`).
+        invented: ?*const Invented = null,
 
         const Self = @This();
         const MatchError = Error || Sink.Error;
@@ -797,6 +808,9 @@ fn Matcher(comptime Sink: type) type {
             const outer = self.terms.postponed;
             self.terms.postponed = left;
             defer self.terms.postponed = outer;
+            const outer_invented = self.terms.invented;
+            self.terms.invented = self.invented;
+            defer self.terms.invented = outer_invented;
             if (try self.sink.match(self.bindings)) self.stop = true;
         }
 
@@ -813,16 +827,63 @@ fn Matcher(comptime Sink: type) type {
         /// Unify each postponed node of `list` whose binders the match
         /// bound with its goal node, instantiated and in normal form; the
         /// others join `left` for `report`, except a narrowing one, which
-        /// fails the match.
+        /// invents its unbound binders or fails the match.
         fn check(self: *Self, list: ?*const Postponed, left: ?*const Postponed) MatchError!void {
             const node = list orelse return self.report(left);
             const instance = (try @call(.never_inline, instantiateBound, .{ self, node.template })) orelse {
-                if (node.narrow) return;
+                if (node.narrow) return self.invent(node, left);
                 const kept = Postponed{ .template = node.template, .goal = node.goal, .next = left };
                 return self.check(node.next, &kept);
             };
             const cell = Pending{ .step = .{ .check = .{ .list = node.next, .left = left } }, .next = null };
             try self.unify(instance, node.goal, &cell);
+        }
+
+        /// The narrowing `node` holds binders the match left unbound: give
+        /// each a cut wvar of its own, reported as `Terms.invented`, and
+        /// check `node` again. A premise must then fix them from a fact.
+        /// Only a sink with `mayInvent` invents, and only when the node
+        /// also holds a binder the rest of the match bound: structure made
+        /// of invented binders alone is a guess. A bound binder is never
+        /// invented, since a cut wvar may take any term and it must be a
+        /// variable.
+        fn invent(self: *Self, node: *const Postponed, left: ?*const Postponed) MatchError!void {
+            if (!@hasDecl(Sink, "mayInvent")) return;
+            const rule = self.rule orelse return;
+            // The catalog admits rules of at most 64 arguments.
+            const held = Rules.templateBinderMask(node.template).mask;
+            var bound: u64 = 0;
+            for (self.bindings, 0..) |binding, idx| {
+                if (binding != null) bound |= @as(u64, 1) << @intCast(idx);
+            }
+            if (held & bound == 0) return;
+            const unbound = held & ~bound;
+            var rest = unbound;
+            while (rest != 0) : (rest &= rest - 1) {
+                const idx = @ctz(rest);
+                if (rule.args[idx].bound or !self.sink.mayInvent(idx)) return;
+            }
+            // On the heap: the match stays on the stack for the rest of
+            // the proof.
+            const cells = try self.terms.allocator.alloc(Invented, @popCount(unbound));
+            defer self.terms.allocator.free(cells);
+            const outer = self.invented;
+            defer {
+                self.invented = outer;
+                rest = unbound;
+                while (rest != 0) : (rest &= rest - 1) self.bindings[@ctz(rest)] = null;
+            }
+            rest = unbound;
+            var at: usize = 0;
+            while (rest != 0) : (rest &= rest - 1) {
+                const idx = @ctz(rest);
+                const wvar = try self.terms.wvars.mint(rule.args[idx].sort_name, &.{}, true);
+                self.bindings[idx] = wvar;
+                cells[at] = .{ .wvar = self.terms.wvars.of(wvar).?, .next = self.invented };
+                self.invented = &cells[at];
+                at += 1;
+            }
+            return self.check(node, left);
         }
 
         /// `template` instantiated with the match's bindings, resolved and

@@ -422,13 +422,15 @@ pub const guards = [_]FrontierGuard{
     // sub-goal harvest, its free-variable gate, or the scoped extension
     // pool regresses. Capped at k=5, the frontier, for the core budget
     // spend described at `lt_trans_ax`, so this no longer reaches the k=7
-    // cut.
+    // cut. The k=4 and k=5 cuts take 6.9G since the core passes open cuts
+    // through rules, so the budget is 8G.
     .{
         .filter = "cb_bijection_maps_domain",
         .files = "tests/search_bench_cases/zermelo_frontier.mm0:" ++
             "tests/search_bench_cases/zermelo_frontier.auf",
         .mode = "depth",
         .max_k = 5,
+        .global_budget = 8_000_000_000,
     },
     // Pinned family fills (task #512, `backtrack.solvePinnedMetas`) must be
     // anchored. hoare's `valid_elim` families `?g ⊢ ?w : φ` face `at_mp`'s

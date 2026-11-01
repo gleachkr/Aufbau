@@ -123,3 +123,10 @@ budget in the core). A check that the major premise can still be proved
 before trying the minor recovered the first two but cost the core alone
 59 depth rows net, mostly Hilbert-style modus ponens steps, which need
 the same guess.
+
+When the core began passing a goal's open cut through a rule to premises
+that facts close, and inventing cuts for binders a narrowing leaves
+unbound (2026-11-01), `cb_bijection_maps_domain`'s k=4 and k=5 cuts went
+from 5.9G to 6.9G ticks, past the 6.3G default: the core tries more cut
+values before the generation search gets its turn. The guard keeps its
+k=5 cap with an 8G budget.

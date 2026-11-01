@@ -12,11 +12,18 @@ This file records notable user-facing changes to Aufbau. The project follows
   proof and fills it in by unification when a later step needs a
   particular term. A premise variable a rule's conclusion leaves open
   (the middle formula of a transitivity rule, the antecedent of modus
-  ponens) is such an unknown too, chosen only by a hypothesis, an axiom
-  or a rule whose conclusion fixes it. The core unfolds a definition in
-  a goal or hypothesis where a rule needs what the definition stands
-  for, with the definition's hidden bound variables named once the proof
-  needs them, and tries a goal in its `@rewrite` normal form too, so an
+  ponens) is such an unknown too, chosen by a hypothesis, an axiom or a
+  rule whose conclusion fixes it, or read off a hypothesis one rule
+  away: a rule with no such unknowns of its own may leave one to
+  premises that hypotheses close (`R x ?b` by way of `S x ?b`), but
+  never to a premise that is the bare unknown, which any hypothesis
+  would close. Where a rule's conclusion gives an unknown structure
+  with parts nothing in the goal fixes, those parts become unknowns of
+  their own for the rule's premises to fix from hypotheses (`syl`'s
+  middle formula against `a2i`'s `(a → b) → (a → c)`). The core
+  unfolds a definition in a goal or hypothesis where a rule needs what
+  the definition stands for, with the definition's hidden bound
+  variables named once the proof needs them, and tries a goal in its `@rewrite` normal form too, so an
   induction rule's premise stated as a substitution meets the facts for
   what it reduces to. A rule whose conclusion states a substitution (an
   eliminator's type `[k/n] C`) meets the goal's normal form once the
@@ -50,9 +57,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   proof either way. The core keeps MM0's dependency conditions on the
   proofs it builds, including for theorem variables declared to depend
   on a bound variable, so the checker rejects few of them. On the bench
-  corpus the core alone finds 6% more depth rows than the generation
-  search alone, and 493 whole proofs to its 474. With both, 274 rows
-  are new and 79 are lost, where a failed core search uses up the
+  corpus the core alone finds 9% more depth rows than the generation
+  search alone, and 500 whole proofs to its 474. With both, 316 rows
+  are new and 71 are lost, where a failed core search uses up the
   budget the generation search needed. The
   `nd_fol` rows cost 97% fewer ticks and the `additive_fol` rows 29%
   fewer, and the Pelletier battery goes from 36 to 47 of 48 problems

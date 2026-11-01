@@ -32,11 +32,19 @@
 //! goal, or, where a wvar is still open, the wvar keeps out of the
 //! instance's bound variables as its stand-in did.
 //!
-//! A cut wvar is chosen by the proof, never invented: a goal that holds
-//! one unbound is closed by a fact or a closer, or by a rule whose
-//! conclusion match binds one of its cut wvars or leaves a postponed node
-//! over a part of the goal holding one, which the node's check binds, and
-//! no other rule works on it. So a rule's premises that a fact might close come first, and
+//! A cut wvar is chosen by the proof: a goal that holds one unbound is
+//! closed by a fact or a closer, or by a rule whose conclusion match binds
+//! one of its cut wvars or leaves a postponed node over a part of the goal
+//! holding one, which the node's check binds. Any other rule without cuts
+//! of its own passes the goal's cut wvars on to its premises
+//! (`Goal.pass`): each premise holding one is closed by facts only, and
+//! none may be the bare wvar, which any fact closes. The step then reads
+//! the cut's value off a fact one rule away, as a bridge does; a cut rule
+//! never passes one on, which would stack one guess on another. A
+//! narrowing that leaves binders of its node unbound gives each a cut
+//! wvar of its own (`Terms.invented`) when the rule is unsafe, a premise
+//! mentions the binder and the node holds a binder the match bound; the
+//! step passes those on too. So a rule's premises that a fact might close come first, and
 //! an unbound wvar premise waits for a sibling that fixes it. When no fact
 //! closes that sibling, a lone such premise is still closed by a fact
 //! first, which guesses the wvar from the facts; two or more wait, since
@@ -49,7 +57,7 @@
 //! states the bridge's goal itself is skipped, since it closes that goal
 //! directly, and a step whose premise no fact might close is not taken.
 //! A premise that no fact closes has failed only as a bridge's, so it is
-//! not memoized.
+//! not memoized; neither is a premise a passing step left to facts.
 //!
 //! A step by a rule whose view abstracts a binder (`catalog.Abstraction`)
 //! reads that binder off the view's two sides once its premises are
@@ -156,6 +164,9 @@ const Goal = struct {
     /// For a bridge's premise, the bridge's goal: only a fact closes the
     /// premise, and not one that states that goal, which closes it directly.
     bridged: ?ExprId = null,
+    /// For a premise of a step that left the goal's cut wvars `pass`
+    /// unbound: while it holds one unbound, only a fact closes it.
+    pass: []const u32 = &.{},
 };
 
 const PathCell = struct {
@@ -470,7 +481,9 @@ pub const Prover = struct {
             .failed => {},
             .cut => |id| if (id != frame.id) return .{ .cut = id },
         }
-        if (!frame.reached and !shared and goal.bridged == null and self.prune_floor >= level) {
+        // A goal only facts may close (a bridge's or a passing step's
+        // premise) has not failed as the same goal closed by rules would.
+        if (!frame.reached and !shared and goal.bridged == null and goal.pass.len == 0 and self.prune_floor >= level) {
             // Every binding made below is undone, so the key is the
             // entry's again.
             const failed_at = if (ground) blk: {
@@ -690,6 +703,13 @@ pub const Prover = struct {
             }
         }
         if (goal.bridged != null) return .failed;
+        // While it holds a cut its step passed on, only a fact closes it.
+        if (goal.pass.len != 0) {
+            var open = std.ArrayListUnmanaged(u32).empty;
+            defer open.deinit(self.allocator);
+            try self.wvars.collectUnbound(self.allocator, goal.expr, &open);
+            for (open.items) |idx| if (std.mem.indexOfScalar(u32, goal.pass, idx) != null) return .failed;
+        }
         var held = std.ArrayListUnmanaged(u32).empty;
         defer held.deinit(self.allocator);
         const split = try self.heldShares(goal.expr, &held) orelse return self.expandRules(frame, goal.expr, close, path);
@@ -851,6 +871,17 @@ pub const Prover = struct {
         }
     };
 
+    /// Whether `entry` may invent `binder`: only an unsafe rule makes a
+    /// guess, and only for a binder a premise holds, which a fact closes.
+    fn inventable(entry: *const catalog_mod.Rule, binder: usize) bool {
+        if (entry.role != .unsafe) return false;
+        if (entry.view != null or entry.abstraction != null) return true;
+        for (entry.premises) |premise| {
+            if (Rules.templateMentionsBinder(premise, binder)) return true;
+        }
+        return false;
+    }
+
     /// The matcher's sink that lists an unsafe rule's matches as `Alt`s.
     const Scorer = struct {
         prover: *Prover,
@@ -862,6 +893,11 @@ pub const Prover = struct {
         index: usize = 0,
 
         pub const Error = ProveError;
+
+        /// Whether the match may invent `binder` (`Terms.invented`).
+        pub fn mayInvent(self: *const Scorer, binder: usize) bool {
+            return inventable(self.entry, binder);
+        }
 
         pub fn match(self: *Scorer, bindings: []const ?ExprId) ProveError!bool {
             const prover = self.prover;
@@ -906,6 +942,11 @@ pub const Prover = struct {
 
         pub const Error = ProveError;
 
+        /// As `Scorer.mayInvent`, so the picked match is the scored one.
+        pub fn mayInvent(self: *const Picker, binder: usize) bool {
+            return self.applier.mayInvent(binder);
+        }
+
         pub fn match(self: *Picker, bindings: []const ?ExprId) ProveError!bool {
             defer self.index += 1;
             if (self.index != self.target) return false;
@@ -927,8 +968,19 @@ pub const Prover = struct {
         /// Some match applied.
         matched: bool = false,
         outcome: Outcome = .failed,
+        /// The cut wvars the step leaves open: the goal's, when the match
+        /// left them unbound, and the ones it invented.
+        pass: []const u32 = &.{},
 
         pub const Error = ProveError;
+
+        /// Whether the match may invent `binder` (`Terms.invented`).
+        pub fn mayInvent(self: *const Applier, binder: usize) bool {
+            return switch (self.how) {
+                .rule => |entry| inventable(entry, binder),
+                .ref => false,
+            };
+        }
 
         pub fn match(self: *Applier, bindings: []const ?ExprId) ProveError!bool {
             const outcome = try self.prover.apply(self, bindings);
@@ -951,10 +1003,17 @@ pub const Prover = struct {
         var checks: []const Check = &.{};
         var abstract: ?Abstract = null;
         if (!try self.sharesFit()) return .failed;
+        applier.pass = &.{};
+        const invented = self.terms.invented;
         switch (applier.how) {
             .ref => |ref| step = .{ .ref = ref },
             .rule => |entry| {
-                if (entry.role != .closer and entry.role != .bridge and !try self.bindsCut(applier.frame.cuts)) return .failed;
+                if (entry.role != .closer and entry.role != .bridge and !try self.bindsCut(applier.frame.cuts)) {
+                    // A cut rule passing the goal's cut on would stack one
+                    // guess on another.
+                    if (entry.cuts.len != 0) return .failed;
+                    applier.pass = applier.frame.cuts;
+                }
                 const full = try self.arena.alloc(ExprId, bindings.len);
                 for (full, bindings) |*value, binding| value.* = binding orelse undefined;
                 premises = entry.premises;
@@ -997,6 +1056,49 @@ pub const Prover = struct {
                 step = .{ .rule = .{ .rule_id = entry.rule_id, .bindings = rule_bindings } };
             },
         }
+        // Only an unsafe rule, which charges depth, invents (`inventable`).
+        std.debug.assert(invented == null or (applier.how == .rule and applier.how.rule.role == .unsafe));
+        if (invented) |first| {
+            var list = std.ArrayListUnmanaged(u32).empty;
+            try list.appendSlice(self.arena, applier.pass);
+            var cell: ?*const terms_mod.Invented = first;
+            while (cell) |c| : (cell = c.next) try list.append(self.arena, c.wvar);
+            applier.pass = list.items;
+        }
+        // The cuts the step leaves open, passed on from the goal or
+        // invented, are each held by a premise a fact closes
+        // (`Goal.pass`): a rule closing it would guess their values, and
+        // so would any fact closing a bare one.
+        var instantiated: ?[]const ExprId = null;
+        if (applier.pass.len != 0) {
+            const exprs = try self.arena.alloc(ExprId, premises.len);
+            const held = try self.arena.alloc(bool, applier.pass.len);
+            @memset(held, false);
+            var open = std.ArrayListUnmanaged(u32).empty;
+            defer open.deinit(self.allocator);
+            for (exprs, premises) |*expr, premise| {
+                expr.* = self.terms.instantiate(premise, values) catch |err| switch (err) {
+                    error.Unsupported => return .failed,
+                    else => |e| return e,
+                };
+                if (self.wvars.of(expr.*)) |idx| if (std.mem.indexOfScalar(u32, applier.pass, idx) != null) return .failed;
+                open.clearRetainingCapacity();
+                try self.wvars.collectUnbound(self.allocator, expr.*, &open);
+                var holds = false;
+                for (open.items) |idx| if (std.mem.indexOfScalar(u32, applier.pass, idx)) |at| {
+                    held[at] = true;
+                    holds = true;
+                };
+                if (!holds) continue;
+                for (self.facts) |fact| {
+                    if (try self.terms.mightEqual(fact.expr, expr.*, .unfolding)) break;
+                } else return .failed;
+            }
+            for (applier.pass, held) |pass_wvar, is_held| {
+                if (!is_held and self.wvars.vars.items[pass_wvar].value == null) return .failed;
+            }
+            instantiated = exprs;
+        }
         applier.matched = true;
 
         const frame = applier.frame;
@@ -1009,7 +1111,7 @@ pub const Prover = struct {
         // On the heap: the run stays on the stack for the rest of the proof.
         const exprs = try self.allocator.alloc(ExprId, premises.len);
         defer self.allocator.free(exprs);
-        for (exprs, premises) |*expr, premise| {
+        if (instantiated) |made| @memcpy(exprs, made) else for (exprs, premises) |*expr, premise| {
             expr.* = self.terms.instantiate(premise, values) catch |err| switch (err) {
                 error.Unsupported => return .failed,
                 else => |e| return e,
@@ -1291,6 +1393,7 @@ pub const Prover = struct {
                     .slot = &children[idx],
                     .path = applier.path,
                     .bridged = if (applier.how == .rule and applier.how.rule.role == .bridge) applier.target else null,
+                    .pass = applier.pass,
                 } },
                 .next = head,
             };

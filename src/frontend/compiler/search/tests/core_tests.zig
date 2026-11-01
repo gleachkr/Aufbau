@@ -1462,3 +1462,74 @@ test "an eigenvariable a rule's bound binder holds never merges with one in the 
     try std.testing.expect(counters.core_nodes > 0);
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
+
+// `s_r` has no cuts of its own, so on `trans`'s premise `R x ?b` it passes
+// the cut on to `S x ?b`, which the hypothesis closes with `?b = y`. No
+// fact is an `R` for the cut to come from directly.
+test "a rule passes a goal's open cut to a premise a fact closes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena,
+        \\sort obj;
+        \\term S (a b: obj): wff;
+        \\term R (a b: obj): wff;
+        \\axiom trans (a b c: obj): $ R a b $ > $ R b c $ > $ R a c $;
+        \\axiom s_r (a b: obj): $ S a b $ > $ R a b $;
+        \\theorem s_chain (x y z: obj): $ S x y $ > $ S y z $ > $ R x z $;
+    ,
+        \\s_chain
+        \\-------
+        \\l1: $ R x z $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"trans [s_r [#1], s_r [#2]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// On `and_l`'s premise `p ∧ ?b`, `and_i` would pass the cut on to its
+// premise `?b`, which every hypothesis closes; the core does not take it
+// (17 goals if it did).
+test "a rule never passes an open cut to a premise that is the bare cut" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena,
+        \\axiom and_i (a b: wff): $ a $ > $ b $ > $ a ∧ b $;
+        \\axiom and_l (a b: wff): $ a ∧ b $ > $ a $;
+        \\theorem no_p (p q r s t u v: wff): $ q $ > $ r $ > $ s $ > $ t $ > $ u $ > $ v $ > $ p $;
+    ,
+        \\no_p
+        \\----
+        \\l1: $ p $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try std.testing.expect(counters.core_nodes <= 12);
+}
+
+// `syl`'s premise `?m → (a → c)` meets `a2i`'s conclusion
+// `(x → y) → (x → z)`: `?m` takes `a → ?y`, with `?y` a cut of its own
+// that `a2i`'s premise `a → ?y → c` fixes from the hypothesis.
+test "a narrowing gives a binder nothing fixes a cut a premise's fact fixes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena,
+        \\axiom syl (a b c: wff): $ b → c $ > $ a → b $ > $ a → c $;
+        \\axiom a2i (x y z: wff): $ x → y → z $ > $ (x → y) → (x → z) $;
+        \\axiom ax_1 (a b: wff): $ a → b → a $;
+        \\theorem com12 (a b c: wff): $ a → b → c $ > $ b → a → c $;
+    ,
+        \\com12
+        \\-----
+        \\l1: $ b → a → c $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"syl [a2i [#1], ax_1 []]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
