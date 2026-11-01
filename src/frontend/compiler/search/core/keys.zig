@@ -10,14 +10,15 @@
 //! followed by each wvar's constraints:
 //! - a γ wvar: whether it is a cut wvar, the variables it may not hold
 //!   (its capture list and the variables eigenvariables of its level or
-//!   above became) and which of the goal's eigenvariables are older than
-//!   it;
+//!   above became) and which of the goal's eigenvariables it may hold
+//!   (older ones, and bound names);
 //! - an eigenvariable: the variables it may not become, among those the
 //!   goal or a fact mentions, since no other variable can meet it; its
 //!   introduction goal bars a variable it mentions or holds a theorem
 //!   variable depending on; and which of the goal's other wvars it must
 //!   stay out of (its introduction goal, or what it is kept fresh in,
-//!   bars included, mentions them).
+//!   bars included, mentions them); a bound name also, which of them it
+//!   may merge with.
 //!
 //! Equal keys mean goals equal up to renaming their wvars, so a failure
 //! recorded under one key holds for every goal with that key. Bag members
@@ -77,7 +78,7 @@ pub const Keys = struct {
             const wvar = self.wvars.vars.items[idx];
             list.clearRetainingCapacity();
             if (wvar.introduced_at) |at| {
-                try self.bytes.append(self.allocator, 'e');
+                try self.bytes.append(self.allocator, if (wvar.name) 'm' else 'e');
                 var mentioned = std.ArrayListUnmanaged(ExprId).empty;
                 defer mentioned.deinit(self.allocator);
                 for (wvar.fresh_in orelse &.{at}) |expr| {
@@ -107,6 +108,14 @@ pub const Keys = struct {
                     if (kept_out) try self.put(@intCast(pos));
                 }
                 try self.put(std.math.maxInt(u32));
+                // A bound name: the eigenvariables it may merge with.
+                if (wvar.name) {
+                    for (self.order.items, 0..) |other, pos| {
+                        const eigen = self.wvars.vars.items[other];
+                        if (eigen.introduced_at != null and !eigen.name and eigen.level < wvar.level) try self.put(@intCast(pos));
+                    }
+                    try self.put(std.math.maxInt(u32));
+                }
             } else {
                 try self.bytes.append(self.allocator, if (wvar.cut) 'c' else 'g');
                 try list.appendSlice(self.allocator, wvar.capture);
@@ -117,7 +126,7 @@ pub const Keys = struct {
                 try self.putSet(list.items);
                 for (self.order.items, 0..) |other, pos| {
                     const eigen = self.wvars.vars.items[other];
-                    if (eigen.introduced_at != null and eigen.level < wvar.level) try self.put(@intCast(pos));
+                    if (eigen.introduced_at != null and (eigen.name or eigen.level < wvar.level)) try self.put(@intCast(pos));
                 }
                 try self.put(std.math.maxInt(u32));
             }

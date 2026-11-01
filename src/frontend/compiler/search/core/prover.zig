@@ -278,6 +278,7 @@ const Internal = struct {
     /// may not occur in, resolved.
     introduced_at: ?ExprId,
     fresh_in: ?[]const ExprId,
+    name: bool,
 };
 
 const no_prune = std.math.maxInt(usize);
@@ -533,6 +534,7 @@ pub const Prover = struct {
                 .wvar = idx,
                 .introduced_at = if (wvar.introduced_at) |goal| try self.wvars.deref(goal, null) else null,
                 .fresh_in = fresh_in,
+                .name = wvar.name,
             });
         }
         const proof = Proved{
@@ -584,7 +586,9 @@ pub const Prover = struct {
         for (proof.positions, order) |old, new| try map.put(self.allocator, old, self.wvars.vars.items[new].expr);
         for (proof.internals) |internal| {
             const wvar = self.wvars.vars.items[internal.wvar];
-            const fresh = if (internal.introduced_at) |at|
+            const fresh = if (internal.name)
+                try self.wvars.introduceName(wvar.sort_name)
+            else if (internal.introduced_at) |at|
                 try self.wvars.introduce(wvar.sort_name, at, null)
             else
                 try self.wvars.mint(wvar.sort_name, wvar.capture, wvar.cut);

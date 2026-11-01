@@ -21,6 +21,14 @@
 //! variable: the younger is bound to the older, and close-out names the
 //! older clear of what either must not occur in.
 //!
+//! A bound name is an eigenvariable for a bound binder a narrowing leaves
+//! unbound (`Terms` `Matcher.invent`): the step may pick any variable its
+//! dependency condition allows, so the name is kept out of only what its
+//! steps bar it from. Narrowing puts it into an older wvar, so W6, which
+//! keeps an eigenvariable out of what existed before it, does not apply;
+//! instead the name's level is the lowest of the wvars holding it, and it
+//! merges with an eigenvariable only below that level.
+//!
 //! A wvar also carries the variables bound inside the formula it was swapped
 //! into: holding one of those, or a theorem variable that depends on one,
 //! would capture it.
@@ -52,6 +60,9 @@ pub const WVar = struct {
     /// occur nowhere in its introduction goal. A later step whose bound
     /// binder it is adds its own such arguments (`bar`).
     fresh_in: ?[]const ExprId = null,
+    /// A bound name (see the module doc). Its introduction goal is its own
+    /// leaf, and `fresh_in` starts empty.
+    name: bool = false,
     cut: bool = false,
     value: ?ExprId = null,
 };
@@ -238,7 +249,7 @@ pub const WVars = struct {
                     break :blk young.items.len - 1;
                 };
                 const wvar = self.vars.items[idx];
-                try putWord(allocator, out, if (wvar.introduced_at != null) 'e' else if (wvar.cut) 'c' else 'y');
+                try putWord(allocator, out, if (wvar.name) 'm' else if (wvar.introduced_at != null) 'e' else if (wvar.cut) 'c' else 'y');
                 try putWord(allocator, out, @intCast(pos));
                 try putWord(allocator, out, @min(wvar.level, level_cap));
                 for (wvar.capture) |variable| try putWord(allocator, out, variable);
@@ -275,6 +286,21 @@ pub const WVars = struct {
             .fresh_in = fresh_in,
         });
         self.eigen_count += 1;
+        return expr;
+    }
+
+    /// A new bound name (`WVar.name`), which no wvar holds yet.
+    pub fn introduceName(self: *WVars, sort_name: []const u8) Error!ExprId {
+        const expr = try self.add(.{
+            .expr = undefined,
+            .sort_name = sort_name,
+            .level = std.math.maxInt(u32),
+            .capture = &.{},
+            .introduced_at = undefined,
+            .fresh_in = &.{},
+            .name = true,
+        });
+        self.vars.items[self.count() - 1].introduced_at = expr;
         return expr;
     }
 
@@ -492,6 +518,12 @@ pub const WVars = struct {
             .app => return false,
         }
         if (!self.admits(idx, value)) return false;
+        // A bound name's variable stays open to every wvar.
+        if (self.vars.items[idx].name) {
+            try self.log.append(self.allocator, .{ .bound = idx });
+            self.vars.items[idx].value = value;
+            return true;
+        }
         try self.eigens.ensureUnusedCapacity(self.allocator, 1);
         try self.log.ensureUnusedCapacity(self.allocator, 2);
         self.log.appendAssumeCapacity(.{ .named = .{ .variable = value, .prev = null } });
@@ -504,20 +536,33 @@ pub const WVars = struct {
     /// Unify the unbound eigenvariables `idx` and `other` as one fresh
     /// variable: the younger is bound to the older, which then stands for
     /// both, so a goal that existed before the younger one constrains
-    /// nothing older, and takes on what the younger must stay out of.
-    /// Refused when one occurs where the other may not.
+    /// nothing older, and takes on what the younger must stay out of. A
+    /// bound name is bound to an eigenvariable instead, which every wvar
+    /// holding the name must be younger than. Refused when one occurs
+    /// where the other may not.
     fn merge(self: *WVars, idx: u32, other: u32) Error!bool {
         if (idx == other) return false;
-        const younger, const older = if (idx > other) .{ idx, other } else .{ other, idx };
-        for ([2][2]u32{ .{ younger, older }, .{ older, younger } }) |pair| {
+        const is_name = self.vars.items[idx].name;
+        const gone_idx, const kept_idx = if (is_name != self.vars.items[other].name)
+            (if (is_name) .{ idx, other } else .{ other, idx })
+        else if (idx > other) .{ idx, other } else .{ other, idx };
+        const gone = self.vars.items[gone_idx];
+        const kept = self.vars.items[kept_idx];
+        if (gone.name and !kept.name and gone.level <= kept.level) return false;
+        for ([2][2]u32{ .{ gone_idx, kept_idx }, .{ kept_idx, gone_idx } }) |pair| {
             const wvar = self.vars.items[pair[0]];
             for (wvar.fresh_in orelse &.{wvar.introduced_at.?}) |expr| {
                 if (self.mentions(expr, self.vars.items[pair[1]].expr)) return false;
             }
         }
-        try self.extendFreshIn(older, self.vars.items[younger].fresh_in orelse &.{self.vars.items[younger].introduced_at.?});
-        try self.log.append(self.allocator, .{ .bound = younger });
-        self.vars.items[younger].value = self.vars.items[older].expr;
+        try self.extendFreshIn(kept_idx, gone.fresh_in orelse &.{gone.introduced_at.?});
+        // The kept name is held by what held the other too.
+        if (kept.name and gone.level < kept.level) {
+            try self.log.append(self.allocator, .{ .narrowed = .{ .wvar = kept_idx, .level = kept.level, .capture = kept.capture } });
+            self.vars.items[kept_idx].level = gone.level;
+        }
+        try self.log.append(self.allocator, .{ .bound = gone_idx });
+        self.vars.items[gone_idx].value = kept.expr;
         return true;
     }
 
@@ -552,7 +597,8 @@ pub const WVars = struct {
                 if (other == idx) return false;
                 const wvar = self.vars.items[idx];
                 const target = &self.vars.items[other];
-                if (target.introduced_at != null) {
+                // A bound name inside is narrowed like a γ wvar.
+                if (target.introduced_at != null and !target.name) {
                     // An eigenvariable inside: it must be older, and its
                     // name must stay clear of what `idx` would capture.
                     if (target.level >= wvar.level) return false;

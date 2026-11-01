@@ -20,10 +20,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   would close. Where a rule's conclusion gives an unknown structure
   with parts nothing in the goal fixes, those parts become unknowns of
   their own for the rule's premises to fix from hypotheses (`syl`'s
-  middle formula against `a2i`'s `(a → b) → (a → c)`). The core
-  unfolds a definition in a goal or hypothesis where a rule needs what
-  the definition stands for, with the definition's hidden bound
-  variables named once the proof needs them, and tries a goal in its `@rewrite` normal form too, so an
+  middle formula against `a2i`'s `(a → b) → (a → c)`); a bound variable
+  among them is a fresh variable, named once the proof needs it (the
+  `f` of `λ f. f · p · q` in a definition's equation stated as a
+  rule). The core unfolds a definition in a goal or hypothesis where a
+  rule needs what the definition stands for, with the definition's
+  hidden bound variables named once the proof needs them, and named
+  apart where two uses of the definition need different ones (a Church
+  numeral's type at two instances), and tries a goal in its `@rewrite` normal form too, so an
   induction rule's premise stated as a substitution meets the facts for
   what it reduces to. A rule whose conclusion states a substitution (an
   eliminator's type `[k/n] C`) meets the goal's normal form once the
@@ -60,8 +64,8 @@ This file records notable user-facing changes to Aufbau. The project follows
   declares `@freshen` for an argument that holds the bound variable, the
   core leaves the renaming to the checker. On the bench
   corpus the core alone finds 9% more depth rows than the generation
-  search alone, and 500 whole proofs to its 474. With both, 316 rows
-  are new and 71 are lost, where a failed core search uses up the
+  search alone, and 503 whole proofs to its 474. With both, 319 rows
+  are new and 68 are lost, where a failed core search uses up the
   budget the generation search needed. The
   `nd_fol` rows cost 97% fewer ticks and the `additive_fol` rows 29%
   fewer, and the Pelletier battery goes from 36 to 47 of 48 problems

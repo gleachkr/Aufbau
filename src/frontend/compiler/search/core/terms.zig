@@ -35,7 +35,8 @@
 //! goal fixes elsewhere, never a guess: a goal that is a bare wvar meets no
 //! conclusion with binders. A sink with `mayInvent` may instead give such
 //! binders cut wvars of their own (`Matcher.invent`), for premises to fix
-//! from facts, while the node holds a binder the match bound.
+//! from facts, and bound ones bound names (`wvars.zig`), while the node
+//! holds a binder the match bound.
 //!
 //! Matching and unification are modulo definitions: where heads differ,
 //! an application of the later-declared definition unfolds one step
@@ -87,6 +88,11 @@ pub const Error = error{
 
 const TemplateKey = struct { args: usize, term_id: u32 };
 
+/// One unfolding of an expression (`Terms.unfold`): its result, with the
+/// wvars from `dummies` on, `count` of them, as its dummies, and the
+/// expression's older unfoldings.
+const Unfolded = struct { result: ExprId, dummies: u32, count: u32, next: ?*const Unfolded };
+
 pub const Terms = struct {
     allocator: std.mem.Allocator,
     context: *const Context,
@@ -104,9 +110,10 @@ pub const Terms = struct {
     /// The bag combiner each combiner head and each unit term reads as.
     bags: std.AutoHashMapUnmanaged(u32, AcuiBag.Combiner) = .empty,
     canonical_memo: std.AutoHashMapUnmanaged(ExprId, ExprId) = .empty,
-    /// One-step unfoldings of definition applications; an expression maps
-    /// to itself when its body is past what the core reads.
-    unfold_memo: std.AutoHashMapUnmanaged(ExprId, ExprId) = .empty,
+    /// One-step unfoldings of definition applications, newest first; an
+    /// expression's only one is itself when its body is past what the core
+    /// reads. They live in `template_arena`.
+    unfold_memo: std.AutoHashMapUnmanaged(ExprId, *const Unfolded) = .empty,
     /// Whether an expression holds an application of a definition the core
     /// can unfold.
     defs: std.AutoHashMapUnmanaged(ExprId, bool) = .empty,
@@ -207,17 +214,25 @@ pub const Terms = struct {
     /// eigenvariable introduced at the unfolding. Such a dummy may become
     /// only a variable the unfolding does not otherwise mention, which is
     /// MM0's condition on an unfolding: disjoint from the arguments, and
-    /// distinct from its siblings. An expression has one unfolding for the
-    /// run, so it unfolds with the same dummies wherever it appears. Null
-    /// when `expr` applies no such definition or its body is past what the
-    /// core reads.
+    /// distinct from its siblings. An expression unfolds with the same
+    /// dummies wherever it appears while no step has used them; once one
+    /// has, it unfolds again with fresh ones, since each use of a
+    /// definition picks its dummies apart. Null when `expr` applies no such
+    /// definition or its body is past what the core reads.
     pub fn unfold(self: *Terms, expr: ExprId) Error!?ExprId {
         const app = switch (self.theorem.interner.node(expr).*) {
             .app => |app| app,
             .variable, .placeholder => return null,
         };
         const def = self.context.env.openableDef(app.term_id) orelse return null;
-        if (self.unfold_memo.get(expr)) |done| return if (done == expr) null else done;
+        const known = self.unfold_memo.get(expr);
+        if (known) |newest| {
+            if (newest.result == expr) return null;
+            var at: ?*const Unfolded = newest;
+            while (at) |cell| : (at = cell.next) {
+                if (self.untouched(cell)) return cell.result;
+            }
+        }
         const values = try self.allocator.alloc(ExprId, app.args.len + def.dummy_args.len);
         defer self.allocator.free(values);
         @memcpy(values[0..app.args.len], app.args);
@@ -227,14 +242,27 @@ pub const Terms = struct {
         }
         const result = self.instantiate(def.body.?, values) catch |err| switch (err) {
             error.Unsupported => {
-                try self.unfold_memo.put(self.allocator, expr, expr);
+                const cell = try self.template_arena.allocator().create(Unfolded);
+                cell.* = .{ .result = expr, .dummies = first, .count = 0, .next = null };
+                try self.unfold_memo.put(self.allocator, expr, cell);
                 return null;
             },
             else => |e| return e,
         };
         for (first..self.wvars.count()) |idx| self.wvars.vars.items[idx].introduced_at = result;
-        try self.unfold_memo.put(self.allocator, expr, result);
+        const cell = try self.template_arena.allocator().create(Unfolded);
+        cell.* = .{ .result = result, .dummies = first, .count = self.wvars.count() - first, .next = known };
+        try self.unfold_memo.put(self.allocator, expr, cell);
         return result;
+    }
+
+    /// Whether no step has bound, barred or narrowed a dummy of `cell`.
+    fn untouched(self: *const Terms, cell: *const Unfolded) bool {
+        for (cell.dummies..cell.dummies + cell.count) |idx| {
+            const wvar = self.wvars.vars.items[idx];
+            if (wvar.value != null or wvar.fresh_in != null or wvar.capture.len != 0) return false;
+        }
+        return true;
     }
 
     /// The template application `app` of a definition unfolded one step:
@@ -844,9 +872,9 @@ fn Matcher(comptime Sink: type) type {
         /// check `node` again. A premise must then fix them from a fact.
         /// Only a sink with `mayInvent` invents, and only when the node
         /// also holds a binder the rest of the match bound: structure made
-        /// of invented binders alone is a guess. A bound binder is never
-        /// invented, since a cut wvar may take any term and it must be a
-        /// variable.
+        /// of invented binders alone is a guess. A bound binder gets a
+        /// bound name instead, which is no guess: any fresh variable will
+        /// do, and its steps' bars say which.
         fn invent(self: *Self, node: *const Postponed, left: ?*const Postponed) MatchError!void {
             if (!@hasDecl(Sink, "mayInvent")) return;
             const rule = self.rule orelse return;
@@ -858,14 +886,17 @@ fn Matcher(comptime Sink: type) type {
             }
             if (held & bound == 0) return;
             const unbound = held & ~bound;
+            var names: u64 = 0;
             var rest = unbound;
             while (rest != 0) : (rest &= rest - 1) {
                 const idx = @ctz(rest);
-                if (rule.args[idx].bound or !self.sink.mayInvent(idx)) return;
+                if (rule.args[idx].bound) {
+                    names |= @as(u64, 1) << @intCast(idx);
+                } else if (!self.sink.mayInvent(idx)) return;
             }
             // On the heap: the match stays on the stack for the rest of
             // the proof.
-            const cells = try self.terms.allocator.alloc(Invented, @popCount(unbound));
+            const cells = try self.terms.allocator.alloc(Invented, @popCount(unbound & ~names));
             defer self.terms.allocator.free(cells);
             const outer = self.invented;
             defer {
@@ -873,7 +904,12 @@ fn Matcher(comptime Sink: type) type {
                 rest = unbound;
                 while (rest != 0) : (rest &= rest - 1) self.bindings[@ctz(rest)] = null;
             }
-            rest = unbound;
+            rest = names;
+            while (rest != 0) : (rest &= rest - 1) {
+                const idx = @ctz(rest);
+                self.bindings[idx] = try self.terms.wvars.introduceName(rule.args[idx].sort_name);
+            }
+            rest = unbound & ~names;
             var at: usize = 0;
             while (rest != 0) : (rest &= rest - 1) {
                 const idx = @ctz(rest);

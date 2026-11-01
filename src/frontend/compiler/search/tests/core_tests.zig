@@ -1535,6 +1535,64 @@ test "a narrowing gives a binder nothing fixes a cut a premise's fact fixes" {
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
+// `tdef` narrows `eqmpr`'s cut to `all2 x (Q x p)` with its bound `x`
+// fixed by nothing: any fresh variable will do, so it is a bound name, and
+// `gen` then binds it.
+test "a narrowing gives a bound binder nothing fixes a fresh name" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena,
+        \\--| @vars x y
+        \\sort obj;
+        \\term all2 {x: obj} (p: wff x): wff;
+        \\term Q (x: obj) (p: wff): wff;
+        \\term D (p: wff): wff;
+        \\axiom eqmpr (p q: wff): $ q ↔ p $ > $ p $ > $ q $;
+        \\axiom tdef (p: wff) {x: obj}: $ D p ↔ all2 x (Q x p) $;
+        \\axiom gen {x: obj} (p: wff x): $ p $ > $ all2 x p $;
+        \\axiom qax (x: obj) (p: wff): $ Q x p $;
+        \\theorem d_p (p: wff): $ D p $;
+    ,
+        \\d_p
+        \\---
+        \\l1: $ D p $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"eqmpr [tdef (x := $ x $) [], gen [qax []]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// `both`'s premises each unfold `#1`'s `E`, whose dummy the first binds to
+// `a`; the second needs it to be `b`, so `E` unfolds again with a fresh
+// dummy.
+test "each use of a definition picks its own dummies" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena,
+        \\--| @vars x y
+        \\sort obj;
+        \\term all2 {x: obj} (p: wff x): wff;
+        \\term R (x y: obj): wff;
+        \\term K (x y: obj): wff;
+        \\def E (.x: obj): wff = $ all2 x (R x x) $;
+        \\axiom both {x y: obj} (p: wff x) (q: wff y): $ all2 x p $ > $ all2 y q $ > $ K x y $;
+        \\theorem k_ab {a b: obj}: $ E $ > $ K a b $;
+    ,
+        \\k_ab
+        \\----
+        \\l1: $ K a b $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"both [#1, #1]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
 // `rall`'s context `∀ x P x` holds the `x` it binds, but only bound, and
 // `rall` declares `@freshen g x`: the checker renames it.
 test "a bound binder's variable an argument holds bound is renamed by its @freshen" {
