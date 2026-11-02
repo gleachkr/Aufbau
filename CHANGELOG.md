@@ -198,6 +198,21 @@ This file records notable user-facing changes to Aufbau. The project follows
   `auto?` applies `@view` rules whose `@recover` target is such a binder,
   naming it from the `@vars` pool or after a reference that uses it. The
   `nd_fol` bench fixture states its quantifier rules this way.
+- The search core takes about a third less wall time across the depth
+  benchmarks (2,146 s to 1,375 s with the core alone, 1,436 s with the
+  older search behind it), and half less on equational goals
+  such as Peano associativity (6.4 s to 3.1 s). Its memos of facts about an
+  expression (whether it holds an unknown, a definition, a rewritable
+  term) and its canonical and normal forms are arrays indexed by the
+  expression instead of hash maps; a hypothesis or rule whose conclusion
+  differs from the goal where neither can unfold, rewrite or read as an
+  `@acui` bag is skipped before the unifier starts; and a head's rules are
+  split by the term each puts at the argument where most of them are
+  specific (the formula of a sequent), so a goal meets only the rules that
+  can fit it there. Every benchmark row finds what it found before; the
+  search now skips some definition unfoldings that could not lead
+  anywhere, so some searches report fewer work ticks (up to 14%), and a
+  few take slightly different paths (at most 1.6% more ticks).
 
 ### Fixed
 

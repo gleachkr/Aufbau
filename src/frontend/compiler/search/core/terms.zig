@@ -76,6 +76,8 @@ const AcuiBag = @import("../../../acui_bag.zig");
 const Context = @import("../types.zig").Context;
 const catalog = @import("./catalog.zig");
 const WVars = @import("./wvars.zig").WVars;
+const ExprFlags = @import("./wvars.zig").ExprFlags;
+const ExprMap = @import("./wvars.zig").ExprMap;
 const Canonicalizer = @import("../../../normalizer.zig").Canonicalizer;
 
 pub const Error = error{
@@ -107,22 +109,27 @@ pub const Terms = struct {
     /// The cut wvars the match in progress minted for binders a narrowing
     /// left unbound, while the sink runs.
     invented: ?*const Invented = null,
-    /// The bag combiner each combiner head and each unit term reads as.
-    bags: std.AutoHashMapUnmanaged(u32, AcuiBag.Combiner) = .empty,
-    canonical_memo: std.AutoHashMapUnmanaged(ExprId, ExprId) = .empty,
+    /// The bag combiner each combiner head and each unit term reads as, by
+    /// term id.
+    bags: []?AcuiBag.Combiner = &.{},
+    /// Whether some `@rewrite` rule rewrites each term, by term id.
+    rewritten: []bool = &.{},
+    /// Whether each term is a definition `unfold` opens, by term id.
+    opens: []bool = &.{},
+    canonical_memo: ExprMap = .{},
     /// One-step unfoldings of definition applications, newest first; an
     /// expression's only one is itself when its body is past what the core
     /// reads. They live in `template_arena`.
     unfold_memo: std.AutoHashMapUnmanaged(ExprId, *const Unfolded) = .empty,
     /// Whether an expression holds an application of a definition the core
     /// can unfold.
-    defs: std.AutoHashMapUnmanaged(ExprId, bool) = .empty,
+    defs: ExprFlags = .{},
     /// Whether an expression holds an application of a term some
     /// `@rewrite` rule rewrites.
-    redexes: std.AutoHashMapUnmanaged(ExprId, bool) = .empty,
+    redexes: ExprFlags = .{},
     /// Normal forms; an expression maps to itself when it is its own, or
     /// the rewrites fail on it.
-    normal_memo: std.AutoHashMapUnmanaged(ExprId, ExprId) = .empty,
+    normal_memo: ExprMap = .{},
     /// Created on the first normal form; its cache lasts the run.
     canonicalizer: ?Canonicalizer = null,
     /// Template unfoldings (`unfoldTemplate`), null for a definition that
@@ -147,18 +154,29 @@ pub const Terms = struct {
             .template_arena = std.heap.ArenaAllocator.init(allocator),
         };
         errdefer self.deinit();
+        const term_count = context.env.terms.items.len;
+        self.bags = try allocator.alloc(?AcuiBag.Combiner, term_count);
+        @memset(self.bags, null);
+        self.rewritten = try allocator.alloc(bool, term_count);
+        for (self.rewritten, 0..) |*rewritten, term_id| {
+            rewritten.* = context.registry.getRewriteRules(@intCast(term_id)).len != 0;
+        }
+        self.opens = try allocator.alloc(bool, term_count);
+        for (self.opens, 0..) |*opens, term_id| opens.* = context.env.openableDef(@intCast(term_id)) != null;
         var it = context.registry.acui_by_head.keyIterator();
         while (it.next()) |head| {
             const combiner = AcuiBag.Combiner.of(context.registry, context.env, head.*) orelse continue;
             if (!catalog.readsLaw(combiner.law)) continue;
-            try self.bags.put(allocator, combiner.head, combiner);
-            if (combiner.unit) |unit| try self.bags.put(allocator, unit, combiner);
+            self.bags[combiner.head] = combiner;
+            if (combiner.unit) |unit| self.bags[unit] = combiner;
         }
         return self;
     }
 
     pub fn deinit(self: *Terms) void {
-        self.bags.deinit(self.allocator);
+        self.allocator.free(self.bags);
+        self.allocator.free(self.rewritten);
+        self.allocator.free(self.opens);
         self.canonical_memo.deinit(self.allocator);
         self.unfold_memo.deinit(self.allocator);
         self.defs.deinit(self.allocator);
@@ -175,7 +193,7 @@ pub const Terms = struct {
     /// unit. A combiner the core does not read (`catalog.readsLaw`) reads
     /// as an ordinary term; `supported` keeps such goals out.
     pub fn bagFor(self: *const Terms, term_id: u32) ?AcuiBag.Combiner {
-        return self.bags.get(term_id);
+        return if (term_id < self.bags.len) self.bags[term_id] else null;
     }
 
     /// Whether the core can search `expr`: no placeholders or combiners
@@ -299,22 +317,31 @@ pub const Terms = struct {
 
     /// Whether `expr` holds an application of a definition `unfold` opens.
     pub fn holdsDef(self: *Terms, expr: ExprId) Error!bool {
-        return self.holdsHead(&self.defs, expr, isOpenableDef);
+        return self.holdsHead(&self.defs, expr, opensDef);
     }
 
-    fn isOpenableDef(self: *const Terms, term_id: u32) bool {
-        return self.context.env.openableDef(term_id) != null;
+    /// Whether `term_id` is a definition `unfold` opens.
+    pub fn opensDef(self: *const Terms, term_id: u32) bool {
+        return term_id < self.opens.len and self.opens[term_id];
+    }
+
+    /// Whether a conclusion node applying `term_id` meets only goal nodes
+    /// applying it too: nothing rewrites it, it does not unfold and it
+    /// reads as no bag (`Matcher.term`). A goal node applying a definition
+    /// may still unfold toward it.
+    pub fn isRigid(self: *const Terms, term_id: u32) bool {
+        return !self.isRewritten(term_id) and !self.opensDef(term_id) and self.bagFor(term_id) == null;
     }
 
     pub fn isRewritten(self: *const Terms, term_id: u32) bool {
-        return self.context.registry.getRewriteRules(term_id).len != 0;
+        return term_id < self.rewritten.len and self.rewritten[term_id];
     }
 
     /// Whether `expr` holds an application of a term `pred` accepts,
     /// memoized in `memo`.
     fn holdsHead(
         self: *Terms,
-        memo: *std.AutoHashMapUnmanaged(ExprId, bool),
+        memo: *ExprFlags,
         expr: ExprId,
         comptime pred: fn (*const Terms, u32) bool,
     ) Error!bool {
@@ -662,6 +689,7 @@ pub const Terms = struct {
         comptime Sink: type,
         sink: *Sink,
     ) (Error || Sink.Error)!bool {
+        if (try self.conclusionClash(rule.concl, goal)) return false;
         // On the heap: the match stays on the stack for the rest of the
         // proof.
         const bindings = try self.allocator.alloc(?ExprId, rule.args.len);
@@ -681,10 +709,113 @@ pub const Terms = struct {
         comptime Sink: type,
         sink: *Sink,
     ) (Error || Sink.Error)!bool {
+        if (try self.clash(a, b)) return false;
         var matcher = Matcher(Sink){ .terms = self, .rule = null, .bindings = &.{}, .sink = sink };
         try matcher.unify(a, b, null);
         return matcher.stop;
     }
+
+    /// Whether no bindings let `a` and `b` unify: they differ where neither
+    /// is an unbound wvar, no definition the matcher would unfold applies
+    /// and no bag is read. It interns nothing, and further bindings leave
+    /// it true, so `unify` may skip the pair.
+    fn clash(self: *Terms, a: ExprId, b: ExprId) Error!bool {
+        const lhs = self.wvars.resolve(a);
+        const rhs = self.wvars.resolve(b);
+        if (lhs == rhs) return false;
+        if (self.wvars.of(lhs) != null or self.wvars.of(rhs) != null) return false;
+        if (!try self.wvars.holdsWVar(lhs) and !try self.wvars.holdsWVar(rhs) and
+            !try self.holdsDef(lhs) and !try self.holdsDef(rhs)) return true;
+        const lhs_head = self.headOf(lhs);
+        const rhs_head = self.headOf(rhs);
+        for ([_]?u32{ lhs_head, rhs_head }) |head| {
+            if (self.bagFor(head orelse continue) != null) return false;
+        }
+        if (lhs_head != rhs_head) {
+            // `Matcher.unify` unfolds only the later-declared head.
+            const lhs_later = rhs_head == null or (lhs_head != null and lhs_head.? > rhs_head.?);
+            const later = (if (lhs_later) lhs_head else rhs_head) orelse return true;
+            return !self.opensDef(later);
+        }
+        if (lhs_head == null) return true;
+        const interner = &self.theorem.interner;
+        const lhs_args = interner.node(lhs).app.args;
+        const rhs_args = interner.node(rhs).app.args;
+        if (lhs_args.len != rhs_args.len) return true;
+        for (lhs_args, rhs_args) |x, y| {
+            if (try self.clash(x, y)) return true;
+        }
+        return false;
+    }
+
+    /// What `clash` reads of the top of `expr`.
+    pub fn shape(self: *Terms, expr: ExprId) Error!Shape {
+        const head = self.headOf(expr);
+        return .{
+            .head = head,
+            .wild = if (head) |id| self.bagFor(id) != null or self.opensDef(id) else false,
+            .plain = !try self.wvars.holdsWVar(expr) and !try self.holdsDef(expr),
+        };
+    }
+
+    /// `goal` resolved once, to try many facts against (`excludes`).
+    pub fn screen(self: *Terms, goal: ExprId) Error!Screen {
+        const target = self.wvars.resolve(goal);
+        return .{ .target = target, .open = self.wvars.of(target) != null, .shape = try self.shape(target) };
+    }
+
+    /// Whether `fact`, of shape `fact_shape`, clashes with the screened
+    /// goal (`clash`), reading the goal's top from `screen`.
+    pub fn excludes(self: *Terms, goal: Screen, fact: ExprId, fact_shape: Shape) Error!bool {
+        if (goal.open or fact == goal.target) return false;
+        if (!fact_shape.plain) return self.clash(fact, goal.target);
+        if (goal.shape.plain) return true;
+        if (fact_shape.head != goal.shape.head and !fact_shape.wild and !goal.shape.wild) return true;
+        return self.clash(fact, goal.target);
+    }
+
+    /// Whether no bindings let the conclusion `template` fit `expr`, as
+    /// `clash` for `unify`: they differ where `expr` holds no unbound wvar
+    /// and the matcher neither postpones, unfolds nor reads a bag.
+    fn conclusionClash(self: *Terms, template: TemplateExpr, expr: ExprId) Error!bool {
+        const app = switch (template) {
+            .binder => return false,
+            .app => |app| app,
+        };
+        const target = self.wvars.resolve(expr);
+        if (self.wvars.of(target) != null) return false;
+        const head = self.headOf(target);
+        if (self.isRewritten(app.term_id) and head != app.term_id) return false;
+        if (head) |own| {
+            if (own > app.term_id and self.opensDef(own)) return false;
+            if (own < app.term_id and self.opensDef(app.term_id)) return false;
+        }
+        if (self.bagFor(app.term_id) != null) return false;
+        if (head != app.term_id) return true;
+        const args = self.theorem.interner.node(target).app.args;
+        if (args.len != app.args.len) return true;
+        for (app.args, args) |arg, value| {
+            if (try self.conclusionClash(arg, value)) return true;
+        }
+        return false;
+    }
+};
+
+/// The top of an expression as `clash` reads it: its head, whether that
+/// head reads as a bag or is a definition `unify` may unfold, and whether
+/// the expression holds no wvar and no definition.
+pub const Shape = struct {
+    head: ?u32,
+    wild: bool,
+    plain: bool,
+};
+
+/// A goal resolved for `Terms.excludes`; `open` when it is an unbound wvar,
+/// which any fact may close.
+pub const Screen = struct {
+    target: ExprId,
+    open: bool,
+    shape: Shape,
 };
 
 /// A conclusion bag whose rest binders are shares (`catalog.Rule.shares`):

@@ -92,7 +92,7 @@ pub fn run(request: Request) !Result {
         else => |e| return e,
     };
 
-    var catalog = try catalog_mod.build(request.scratch, request.context);
+    var catalog = try catalog_mod.build(request.scratch, request.context, &terms);
     defer catalog.deinit();
     const facts = try poolFacts(request, &theorem, &terms, arena.allocator());
     var keys = Keys{
@@ -147,7 +147,7 @@ fn poolFacts(request: Request, theorem: *TheoremContext, terms: *Terms, arena: s
             error.Unsupported => continue,
             else => |e| return e,
         };
-        try facts.append(arena, .{ .expr = canonical, .ref = entry.ref });
+        try facts.append(arena, .{ .expr = canonical, .ref = entry.ref, .shape = try terms.shape(canonical) });
     }
     if (request.derived) |dpool| for (dpool.refs) |*dref| {
         // A trigger seed has no sources: an axiom instance the closers
@@ -167,7 +167,11 @@ fn poolFacts(request: Request, theorem: *TheoremContext, terms: *Terms, arena: s
             dref,
             null,
         )) orelse continue;
-        try facts.append(arena, .{ .expr = canonical, .ref = .{ .application = application } });
+        try facts.append(arena, .{
+            .expr = canonical,
+            .ref = .{ .application = application },
+            .shape = try terms.shape(canonical),
+        });
     };
     return facts.items;
 }

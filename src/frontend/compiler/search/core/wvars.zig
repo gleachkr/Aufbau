@@ -40,11 +40,61 @@
 const std = @import("std");
 const ExprModule = @import("../../../expr.zig");
 const ExprId = ExprModule.ExprId;
-const PlaceholderId = ExprModule.PlaceholderId;
 const TheoremContext = ExprModule.TheoremContext;
 const Context = @import("../types.zig").Context;
 
 pub const Error = error{ OutOfMemory, TooManyTheoremExprs };
+
+const no_wvar = std.math.maxInt(u32);
+
+/// A fact about each expression of the run's theorem, memoized by id. The
+/// run's theorem only grows, so an id keeps its meaning.
+pub const ExprFlags = struct {
+    /// 0 when unknown, else 1 + the fact.
+    states: std.ArrayListUnmanaged(u8) = .empty,
+
+    pub fn deinit(self: *ExprFlags, allocator: std.mem.Allocator) void {
+        self.states.deinit(allocator);
+    }
+
+    pub fn get(self: *const ExprFlags, expr: ExprId) ?bool {
+        if (expr >= self.states.items.len) return null;
+        const state = self.states.items[expr];
+        return if (state == 0) null else state == 2;
+    }
+
+    pub fn put(self: *ExprFlags, allocator: std.mem.Allocator, expr: ExprId, fact: bool) Error!void {
+        if (expr >= self.states.items.len) {
+            try self.states.appendNTimes(allocator, 0, expr + 1 - self.states.items.len);
+        }
+        self.states.items[expr] = @as(u8, 1) + @intFromBool(fact);
+    }
+};
+
+/// An expression memoized for each expression of the run's theorem, by
+/// id, as `ExprFlags` memoizes a fact.
+pub const ExprMap = struct {
+    const none = std.math.maxInt(ExprId);
+
+    values: std.ArrayListUnmanaged(ExprId) = .empty,
+
+    pub fn deinit(self: *ExprMap, allocator: std.mem.Allocator) void {
+        self.values.deinit(allocator);
+    }
+
+    pub fn get(self: *const ExprMap, expr: ExprId) ?ExprId {
+        if (expr >= self.values.items.len) return null;
+        const value = self.values.items[expr];
+        return if (value == none) null else value;
+    }
+
+    pub fn put(self: *ExprMap, allocator: std.mem.Allocator, expr: ExprId, value: ExprId) Error!void {
+        if (expr >= self.values.items.len) {
+            try self.values.appendNTimes(allocator, none, expr + 1 - self.values.items.len);
+        }
+        self.values.items[expr] = value;
+    }
+};
 
 pub const WVar = struct {
     /// Its placeholder leaf.
@@ -85,13 +135,15 @@ pub const WVars = struct {
     context: *const Context,
     theorem: *TheoremContext,
     vars: std.ArrayListUnmanaged(WVar) = .empty,
-    by_placeholder: std.AutoHashMapUnmanaged(PlaceholderId, u32) = .empty,
+    /// The wvar each placeholder is, by placeholder id; `no_wvar` for one
+    /// that is not.
+    by_placeholder: std.ArrayListUnmanaged(u32) = .empty,
     log: std.ArrayListUnmanaged(Entry) = .empty,
     eigen_count: u32 = 0,
     /// The level of each variable an eigenvariable became.
     eigens: std.AutoHashMapUnmanaged(ExprId, u32) = .empty,
     /// Whether an expression has a wvar leaf.
-    holds: std.AutoHashMapUnmanaged(ExprId, bool) = .empty,
+    holds: ExprFlags = .{},
 
     pub fn deinit(self: *WVars) void {
         self.vars.deinit(self.allocator);
@@ -310,7 +362,10 @@ pub const WVars = struct {
             else => return error.TooManyTheoremExprs,
         };
         const pid = self.theorem.interner.node(expr).placeholder;
-        try self.by_placeholder.put(self.allocator, pid, self.count());
+        if (pid >= self.by_placeholder.items.len) {
+            try self.by_placeholder.appendNTimes(self.allocator, no_wvar, pid + 1 - self.by_placeholder.items.len);
+        }
+        self.by_placeholder.items[pid] = self.count();
         var entry = wvar;
         entry.expr = expr;
         try self.vars.append(self.allocator, entry);
@@ -324,7 +379,11 @@ pub const WVars = struct {
     /// The wvar `expr` is, if it is one.
     pub fn of(self: *const WVars, expr: ExprId) ?u32 {
         return switch (self.theorem.interner.node(expr).*) {
-            .placeholder => |pid| self.by_placeholder.get(pid),
+            .placeholder => |pid| {
+                if (pid >= self.by_placeholder.items.len) return null;
+                const idx = self.by_placeholder.items[pid];
+                return if (idx == no_wvar) null else idx;
+            },
             else => null,
         };
     }
@@ -590,6 +649,9 @@ pub const WVars = struct {
 
     fn constrain(self: *WVars, idx: u32, expr: ExprId) Error!bool {
         const at = self.resolve(expr);
+        // While no variable is an eigenvariable, a wvar that captures
+        // nothing admits every variable: only wvars inside can refuse.
+        if (self.vars.items[idx].capture.len == 0 and self.eigens.count() == 0 and !try self.holdsWVar(at)) return true;
         switch (self.theorem.interner.node(at).*) {
             .variable => return self.admits(idx, at),
             .placeholder => {

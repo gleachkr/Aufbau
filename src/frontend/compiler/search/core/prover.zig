@@ -143,6 +143,7 @@ pub const Step = union(enum) {
 pub const Fact = struct {
     expr: ExprId,
     ref: ProofScript.Ref,
+    shape: terms_mod.Shape,
 };
 
 /// Called once the agenda is empty, with the root of the finished proof
@@ -697,7 +698,9 @@ pub const Prover = struct {
         try targets.append(self.allocator, goal.expr);
         if (try self.terms.normalForm(goal.expr)) |normal| try targets.append(self.allocator, normal);
         for (targets.items) |target| {
+            const screen = try self.terms.screen(target);
             for (self.facts) |fact| {
+                if (try self.terms.excludes(screen, fact.expr, fact.shape)) continue;
                 if (goal.bridged) |bridged| if (try self.states(fact.expr, bridged)) continue;
                 var applier = Applier{
                     .prover = self,
@@ -739,6 +742,34 @@ pub const Prover = struct {
         return .failed;
     }
 
+    /// A head's rules, or the ones its split picks for a goal.
+    const Picked = struct {
+        rules: []const catalog_mod.Rule,
+        picks: ?[]const u32 = null,
+
+        fn count(self: Picked) usize {
+            return if (self.picks) |list| list.len else self.rules.len;
+        }
+
+        fn at(self: Picked, n: usize) *const catalog_mod.Rule {
+            return &self.rules[if (self.picks) |list| list[n] else n];
+        }
+    };
+
+    /// The positions of the rules of `head` whose conclusions may fit the
+    /// canonical `target` at the head's split argument, or null for all of
+    /// them: the split skips only rules whose conclusion clashes there
+    /// (`Terms.isRigid`).
+    fn rulePicks(self: *Prover, head: u32, target: ExprId) ?[]const u32 {
+        const split = self.catalog.splits.getPtr(head) orelse return null;
+        const arg = self.wvars.resolve(self.terms.theorem.interner.node(target).app.args[split.position]);
+        if (self.wvars.of(arg) != null) return null;
+        const arg_head = self.terms.headOf(arg);
+        // A definition there may unfold toward any rule's term.
+        if (arg_head) |id| if (self.terms.opensDef(id)) return null;
+        return split.picks(arg_head);
+    }
+
     /// Whether `fact` unifies with `goal`; the bindings are undone.
     fn states(self: *Prover, fact: ExprId, goal: ExprId) Error!bool {
         const mark = self.wvars.mark();
@@ -776,11 +807,16 @@ pub const Prover = struct {
             alts.deinit(self.allocator);
         }
         for (targets.items, 0..) |target, at| {
-            const by_head = if (self.terms.headOf(target)) |head| self.catalog.forHead(head) else &.{};
+            const head = self.terms.headOf(target);
+            const by_head = Picked{
+                .rules = if (head) |id| self.catalog.forHead(id) else &.{},
+                .picks = if (head) |id| self.rulePicks(id, target) else null,
+            };
             // A bare-binder conclusion matches the goal as it stands.
-            const bare = if (at == 0) self.catalog.forHead(catalog_mod.bare_head) else &.{};
-            for ([_][]const catalog_mod.Rule{ by_head, bare }) |rules| {
-                for (rules) |*entry| {
+            const bare = Picked{ .rules = if (at == 0) self.catalog.forHead(catalog_mod.bare_head) else &.{} };
+            for ([_]Picked{ by_head, bare }) |rules| {
+                for (0..rules.count()) |n| {
+                    const entry = rules.at(n);
                     switch (entry.role) {
                         .closer, .bridge => {},
                         .safe => {},
