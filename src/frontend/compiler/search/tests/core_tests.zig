@@ -1593,6 +1593,33 @@ test "each use of a definition picks its own dummies" {
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
+// `eqmp`'s bare premise `p` goes first and guesses `eq a b` from the fact,
+// which `iff (eq a b) (eq b a)` then refutes; the sibling no fact closes
+// goes first in its stead, and `cong` fixes `p` as `eq a a`.
+test "a premise no fact closes goes first when the fact guess for its sibling fails" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena,
+        \\sort obj;
+        \\term eq (a b: obj): wff;
+        \\term iff (p q: wff): wff;
+        \\axiom eqmp (p q: wff): $ iff p q $ > $ p $ > $ q $;
+        \\axiom cong (a b c: obj): $ eq a b $ > $ iff (eq a c) (eq b c) $;
+        \\axiom refl (a: obj): $ eq a a $;
+        \\theorem sym (a b: obj): $ eq a b $ > $ eq b a $;
+    ,
+        \\sym
+        \\---
+        \\l1: $ eq b a $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"eqmp [cong [#1], refl []]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
 // `rall`'s context `∀ x P x` holds the `x` it binds, but only bound, and
 // `rall` declares `@freshen g x`: the checker renames it.
 test "a bound binder's variable an argument holds bound is renamed by its @freshen" {

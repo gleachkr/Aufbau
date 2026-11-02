@@ -49,6 +49,10 @@
 //! closes that sibling, a lone such premise is still closed by a fact
 //! first, which guesses the wvar from the facts; two or more wait, since
 //! their guesses would multiply (`mp2`'s `a`, `b` behind `a → b → c`).
+//! When the premise that went first fails, another holding its cut wvars
+//! goes first in its stead: one a fact might close and holding one of
+//! them, or one no fact might close and holding all of them, which a rule
+//! may fix where the first only guessed.
 //!
 //! A bridge's premises are closed by facts only, never by a rule: the
 //! step costs no depth, and `weak`'s premise, with a fresh share for the
@@ -1159,7 +1163,9 @@ pub const Prover = struct {
         // Another premise holding a cut of the first may be the one whose
         // fact fixes it: `le_trans_ax`'s `y` in `suc a ≤ y` and `y ≤ c` is
         // `suc b` when `suc b ≤ c` is a fact and `suc a ≤ b` is the only
-        // one for the first.
+        // one for the first. Or whose rule does: `eqmp`'s `P` in `P ⇔ Q`
+        // and `P` is `a = a` by `bineq1` when the fact `a = b` that `P`
+        // guessed fails.
         const reordered = try self.allocator.alloc(usize, order.len);
         defer self.allocator.free(reordered);
         for (firsts.items) |first| {
@@ -1432,7 +1438,9 @@ pub const Prover = struct {
     /// with several, each fact one guesses meets every fact the others do
     /// before the sibling is tried. The other premises a fact might close that hold
     /// an unbound cut wvar of the first go to `firsts`, to go first in its
-    /// stead if it fails.
+    /// stead if it fails, and so does one no fact might close that holds
+    /// every such wvar of the first: a rule closing it fixes what the first
+    /// only guessed from the facts.
     fn orderPremises(self: *Prover, exprs: []const ExprId, order: []usize, firsts: *std.ArrayListUnmanaged(usize)) Error!void {
         const Rank = struct {
             /// 0: a fact might close the premise; 1: none might; 2: an
@@ -1498,15 +1506,16 @@ pub const Prover = struct {
         defer first_cuts.deinit(self.allocator);
         try self.wvars.collectUnbound(self.allocator, exprs[order[0]], &first_cuts);
         for (order[1..]) |idx| {
-            if (ranks[idx].class != 0) continue;
+            if (ranks[idx].class == 2) continue;
             held.clearRetainingCapacity();
             try self.wvars.collectUnbound(self.allocator, exprs[idx], &held);
-            for (held.items) |wvar| {
+            var holds_one = false;
+            var holds_all = true;
+            for (first_cuts.items) |wvar| {
                 if (!self.wvars.vars.items[wvar].cut) continue;
-                if (std.mem.indexOfScalar(u32, first_cuts.items, wvar) == null) continue;
-                try firsts.append(self.allocator, idx);
-                break;
+                if (std.mem.indexOfScalar(u32, held.items, wvar) != null) holds_one = true else holds_all = false;
             }
+            if (if (ranks[idx].class == 0) holds_one else holds_all) try firsts.append(self.allocator, idx);
         }
     }
 
