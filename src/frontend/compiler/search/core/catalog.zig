@@ -57,6 +57,8 @@ const ViewDecl = @import("../../../views.zig").ViewDecl;
 const AbstractDecl = @import("../../../derived_bindings.zig").AbstractDecl;
 const RuleDecl = @import("../../../env.zig").RuleDecl;
 const Context = @import("../types.zig").Context;
+const Terms = @import("./terms.zig").Terms;
+const TermIndex = @import("./term_index.zig").TermIndex;
 
 pub const Role = enum { closer, bridge, safe, unsafe };
 
@@ -155,40 +157,15 @@ pub fn readsLaw(law: AcuiBag.Law) bool {
 /// The head the rules with a bare-binder conclusion are listed under.
 pub const bare_head = std.math.maxInt(u32);
 
-/// A head's rules split on one argument of their conclusions: a goal
-/// whose argument there applies a rigid term (`build`'s `rigid`) meets only
-/// the rules whose argument there is that term or not rigid.
-pub const Split = struct {
-    position: usize,
-    /// For each rigid term some rule puts at `position`, the positions in
-    /// the head's rules of those that may meet a goal argument applying it,
-    /// in catalog order.
-    by_arg: std.AutoHashMapUnmanaged(u32, []const u32) = .empty,
-    /// The positions of the rules that may meet any goal argument there.
-    open: []const u32,
-
-    fn deinit(self: *Split, allocator: std.mem.Allocator) void {
-        var it = self.by_arg.valueIterator();
-        while (it.next()) |list| allocator.free(list.*);
-        self.by_arg.deinit(allocator);
-        allocator.free(self.open);
-    }
-
-    /// The rules a goal argument at `position` applying the rigid term
-    /// `head` may meet; `open` for a variable, with `head` null.
-    pub fn picks(self: *const Split, head: ?u32) []const u32 {
-        return self.by_arg.get(head orelse return self.open) orelse self.open;
-    }
-};
-
 pub const Catalog = struct {
     allocator: std.mem.Allocator,
     /// Admitted rules by conclusion head (`bare_head` for a bare binder):
     /// closers, then safe rules by priority, then unsafe rules, each in
     /// declaration order.
     by_head: std.AutoHashMapUnmanaged(u32, []const Rule) = .empty,
-    /// The heads whose rules split on an argument.
-    splits: std.AutoHashMapUnmanaged(u32, Split) = .empty,
+    /// Per head, an index over its rules' conclusions, items in catalog
+    /// order.
+    indexes: std.AutoHashMapUnmanaged(u32, TermIndex) = .empty,
 
     pub fn deinit(self: *Catalog) void {
         var it = self.by_head.valueIterator();
@@ -197,9 +174,9 @@ pub const Catalog = struct {
             self.allocator.free(rules.*);
         }
         self.by_head.deinit(self.allocator);
-        var splits = self.splits.valueIterator();
-        while (splits.next()) |made| made.deinit(self.allocator);
-        self.splits.deinit(self.allocator);
+        var indexes = self.indexes.valueIterator();
+        while (indexes.next()) |index| index.deinit();
+        self.indexes.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -209,9 +186,7 @@ pub const Catalog = struct {
     }
 };
 
-/// `rigid` tells whether a conclusion node applying a term meets only
-/// goal nodes applying the same term (`Terms.isRigid`).
-pub fn build(allocator: std.mem.Allocator, context: *const Context, rigid: anytype) !Catalog {
+pub fn build(allocator: std.mem.Allocator, context: *const Context, terms: *const Terms) !Catalog {
     var lists = std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(Rule)).empty;
     defer {
         var it = lists.valueIterator();
@@ -257,64 +232,12 @@ pub fn build(allocator: std.mem.Allocator, context: *const Context, rigid: anyty
         // The catalog owns the witness, cut and share lists now.
         entry.value_ptr.clearRetainingCapacity();
         if (entry.key_ptr.* == bare_head) continue;
-        if (try splitRules(allocator, context, rules, rigid)) |made| {
-            var owned = made;
-            errdefer owned.deinit(allocator);
-            try catalog.splits.put(allocator, entry.key_ptr.*, owned);
-        }
+        var index = try TermIndex.init(allocator, rules.len);
+        errdefer index.deinit();
+        for (rules) |*rule| try index.addTemplate(terms, rule.statement(context).concl);
+        try catalog.indexes.put(allocator, entry.key_ptr.*, index);
     }
     return catalog;
-}
-
-/// The rigid term `rule`'s conclusion applies at argument `position`, if
-/// any.
-fn rigidArg(context: *const Context, rule: *const Rule, position: usize, rigid: anytype) ?u32 {
-    const arg = rule.statement(context).concl.app.args[position];
-    return switch (arg) {
-        .binder => null,
-        .app => |app| if (rigid.isRigid(app.term_id)) app.term_id else null,
-    };
-}
-
-/// One head's `rules` split on the argument where most of them apply a
-/// rigid term; null when none does anywhere.
-fn splitRules(allocator: std.mem.Allocator, context: *const Context, rules: []const Rule, rigid: anytype) !?Split {
-    const arity = rules[0].statement(context).concl.app.args.len;
-    var best: ?usize = null;
-    var best_count: usize = 0;
-    for (0..arity) |position| {
-        var count: usize = 0;
-        for (rules) |*rule| {
-            if (rigidArg(context, rule, position, rigid) != null) count += 1;
-        }
-        if (count > best_count) {
-            best = position;
-            best_count = count;
-        }
-    }
-    const position = best orelse return null;
-    var made = Split{ .position = position, .open = &.{} };
-    errdefer made.deinit(allocator);
-    var open = std.ArrayListUnmanaged(u32).empty;
-    errdefer open.deinit(allocator);
-    for (rules, 0..) |*rule, at| {
-        if (rigidArg(context, rule, position, rigid) == null) try open.append(allocator, @intCast(at));
-    }
-    made.open = try open.toOwnedSlice(allocator);
-    for (rules) |*keyed| {
-        const key = rigidArg(context, keyed, position, rigid) orelse continue;
-        const gop = try made.by_arg.getOrPut(allocator, key);
-        if (gop.found_existing) continue;
-        gop.value_ptr.* = &.{};
-        var list = std.ArrayListUnmanaged(u32).empty;
-        errdefer list.deinit(allocator);
-        for (rules, 0..) |*rule, at| {
-            const term = rigidArg(context, rule, position, rigid);
-            if (term == null or term.? == key) try list.append(allocator, @intCast(at));
-        }
-        gop.value_ptr.* = try list.toOwnedSlice(allocator);
-    }
-    return made;
 }
 
 fn ruleLessThan(_: void, lhs: Rule, rhs: Rule) bool {

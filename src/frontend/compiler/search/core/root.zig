@@ -38,6 +38,7 @@ const catalog_mod = @import("./catalog.zig");
 const Terms = @import("./terms.zig").Terms;
 const WVars = @import("./wvars.zig").WVars;
 const Keys = @import("./keys.zig").Keys;
+const TermIndex = @import("./term_index.zig").TermIndex;
 const prover_mod = @import("./prover.zig");
 const Prover = prover_mod.Prover;
 const Node = prover_mod.Node;
@@ -95,6 +96,10 @@ pub fn run(request: Request) !Result {
     var catalog = try catalog_mod.build(request.scratch, request.context, &terms);
     defer catalog.deinit();
     const facts = try poolFacts(request, &theorem, &terms, arena.allocator());
+    var fact_index = try TermIndex.init(request.scratch, facts.len);
+    defer fact_index.deinit();
+    for (facts) |fact| try fact_index.addExpr(&terms, fact.expr);
+    const fact_scratch = try arena.allocator().alloc(u64, fact_index.scratchLen());
     var keys = Keys{
         .allocator = request.scratch,
         .arena = arena.allocator(),
@@ -116,6 +121,8 @@ pub fn run(request: Request) !Result {
         .theorem_vars = request.theorem_vars,
         .catalog = &catalog,
         .facts = facts,
+        .fact_index = &fact_index,
+        .fact_scratch = fact_scratch,
         .budget = request.budget,
         .close_out = .{ .ctx = &close_out, .tryFn = CloseOut.tryRoot },
         .stack_base = @frameAddress(),

@@ -114,6 +114,8 @@ const terms_mod = @import("./terms.zig");
 const Terms = terms_mod.Terms;
 const WVars = @import("./wvars.zig").WVars;
 const Keys = @import("./keys.zig").Keys;
+const term_index = @import("./term_index.zig");
+const TermIndex = term_index.TermIndex;
 const AcuiBag = @import("../../../acui_bag.zig");
 const DerivedBindings = @import("../../../derived_bindings.zig");
 const AbstractDecl = DerivedBindings.AbstractDecl;
@@ -300,6 +302,10 @@ pub const Prover = struct {
     theorem_vars: *const NameExprMap,
     catalog: *const Catalog,
     facts: []const Fact,
+    /// Over `facts`, in order.
+    fact_index: *const TermIndex,
+    /// For a query of `fact_index` whose loop starts no other query.
+    fact_scratch: []u64,
     budget: ?*GlobalBudget,
     close_out: CloseOut,
     stack_base: usize,
@@ -697,9 +703,13 @@ pub const Prover = struct {
         defer targets.deinit(self.allocator);
         try targets.append(self.allocator, goal.expr);
         if (try self.terms.normalForm(goal.expr)) |normal| try targets.append(self.allocator, normal);
+        const scratch = try self.allocator.alloc(u64, self.fact_index.scratchLen());
+        defer self.allocator.free(scratch);
         for (targets.items) |target| {
             const screen = try self.terms.screen(target);
-            for (self.facts) |fact| {
+            var picks = self.fact_index.query(self.terms, target, scratch);
+            while (picks.next()) |n| {
+                const fact = self.facts[n];
                 if (try self.terms.excludes(screen, fact.expr, fact.shape)) continue;
                 if (goal.bridged) |bridged| if (try self.states(fact.expr, bridged)) continue;
                 var applier = Applier{
@@ -710,7 +720,7 @@ pub const Prover = struct {
                     .close = close,
                     .path = path,
                 };
-                if (try self.terms.unify(fact.expr, target, Applier, &applier)) return applier.outcome;
+                if (try self.terms.unifyScreened(fact.expr, target, Applier, &applier)) return applier.outcome;
             }
         }
         if (goal.bridged != null) return .failed;
@@ -742,32 +752,28 @@ pub const Prover = struct {
         return .failed;
     }
 
-    /// A head's rules, or the ones its split picks for a goal.
+    /// A head's rules, or the ones its index picks for a goal, in
+    /// catalog order.
     const Picked = struct {
         rules: []const catalog_mod.Rule,
-        picks: ?[]const u32 = null,
+        picks: ?term_index.Picks = null,
+        n: usize = 0,
 
-        fn count(self: Picked) usize {
-            return if (self.picks) |list| list.len else self.rules.len;
-        }
-
-        fn at(self: Picked, n: usize) *const catalog_mod.Rule {
-            return &self.rules[if (self.picks) |list| list[n] else n];
+        fn next(self: *Picked) ?*const catalog_mod.Rule {
+            if (self.picks) |*picks| return &self.rules[picks.next() orelse return null];
+            if (self.n == self.rules.len) return null;
+            self.n += 1;
+            return &self.rules[self.n - 1];
         }
     };
 
-    /// The positions of the rules of `head` whose conclusions may fit the
-    /// canonical `target` at the head's split argument, or null for all of
-    /// them: the split skips only rules whose conclusion clashes there
-    /// (`Terms.isRigid`).
-    fn rulePicks(self: *Prover, head: u32, target: ExprId) ?[]const u32 {
-        const split = self.catalog.splits.getPtr(head) orelse return null;
-        const arg = self.wvars.resolve(self.terms.theorem.interner.node(target).app.args[split.position]);
-        if (self.wvars.of(arg) != null) return null;
-        const arg_head = self.terms.headOf(arg);
-        // A definition there may unfold toward any rule's term.
-        if (arg_head) |id| if (self.terms.opensDef(id)) return null;
-        return split.picks(arg_head);
+    /// Whether some fact might equal `expr` (`Terms.mightEqual`).
+    fn factMightEqual(self: *Prover, expr: ExprId) Error!bool {
+        var picks = self.fact_index.query(self.terms, expr, self.fact_scratch);
+        while (picks.next()) |n| {
+            if (try self.terms.mightEqual(self.facts[n].expr, expr, .unfolding)) return true;
+        }
+        return false;
     }
 
     /// Whether `fact` unifies with `goal`; the bindings are undone.
@@ -808,15 +814,18 @@ pub const Prover = struct {
         }
         for (targets.items, 0..) |target, at| {
             const head = self.terms.headOf(target);
+            const index = if (head) |id| self.catalog.indexes.getPtr(id) else null;
+            const scratch = try self.allocator.alloc(u64, if (index) |found| found.scratchLen() else 0);
+            defer self.allocator.free(scratch);
             const by_head = Picked{
                 .rules = if (head) |id| self.catalog.forHead(id) else &.{},
-                .picks = if (head) |id| self.rulePicks(id, target) else null,
+                .picks = if (index) |found| found.query(self.terms, target, scratch) else null,
             };
             // A bare-binder conclusion matches the goal as it stands.
             const bare = Picked{ .rules = if (at == 0) self.catalog.forHead(catalog_mod.bare_head) else &.{} };
-            for ([_]Picked{ by_head, bare }) |rules| {
-                for (0..rules.count()) |n| {
-                    const entry = rules.at(n);
+            for ([_]Picked{ by_head, bare }) |picked| {
+                var rules = picked;
+                while (rules.next()) |entry| {
                     switch (entry.role) {
                         .closer, .bridge => {},
                         .safe => {},
@@ -1134,9 +1143,7 @@ pub const Prover = struct {
                     holds = true;
                 };
                 if (!holds) continue;
-                for (self.facts) |fact| {
-                    if (try self.terms.mightEqual(fact.expr, expr.*, .unfolding)) break;
-                } else return .failed;
+                if (!try self.factMightEqual(expr.*)) return .failed;
             }
             for (applier.pass, held) |pass_wvar, is_held| {
                 if (!is_held and self.wvars.vars.items[pass_wvar].value == null) return .failed;
@@ -1163,9 +1170,7 @@ pub const Prover = struct {
         }
         // Only a fact closes a bridge's premise.
         if (applier.how == .rule and applier.how.rule.role == .bridge) for (exprs) |expr| {
-            for (self.facts) |fact| {
-                if (try self.terms.mightEqual(fact.expr, expr, .unfolding)) break;
-            } else return .failed;
+            if (!try self.factMightEqual(expr)) return .failed;
         };
         const order = try self.allocator.alloc(usize, premises.len);
         defer self.allocator.free(order);
@@ -1502,7 +1507,9 @@ pub const Prover = struct {
         defer held.deinit(self.allocator);
         for (ranks, exprs) |*rank, expr| {
             rank.* = .{ .class = 1, .cuts = 0, .strict = false };
-            for (self.facts) |fact| {
+            var picks = self.fact_index.query(self.terms, expr, self.fact_scratch);
+            while (picks.next()) |n| {
+                const fact = self.facts[n];
                 if (try self.terms.mightEqual(fact.expr, expr, .strict)) {
                     rank.* = .{ .class = 0, .cuts = 0, .strict = true };
                     break;

@@ -710,6 +710,18 @@ pub const Terms = struct {
         sink: *Sink,
     ) (Error || Sink.Error)!bool {
         if (try self.clash(a, b)) return false;
+        return self.unifyScreened(a, b, Sink, sink);
+    }
+
+    /// `unify` for a fact `a` that `excludes` let through for the screened
+    /// goal `b`: they do not clash.
+    pub fn unifyScreened(
+        self: *Terms,
+        a: ExprId,
+        b: ExprId,
+        comptime Sink: type,
+        sink: *Sink,
+    ) (Error || Sink.Error)!bool {
         var matcher = Matcher(Sink){ .terms = self, .rule = null, .bindings = &.{}, .sink = sink };
         try matcher.unify(a, b, null);
         return matcher.stop;
