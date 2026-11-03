@@ -19,8 +19,9 @@
 //! wvar a fact may bind to the part of the context it needs. A goal that
 //! still holds a share when its rules come up binds it first, to what the
 //! other shares leave of the context or to the whole context, and once the
-//! premises are proved the shares must make up the context again. A share
-//! a step binds must hold only members of its context from then on.
+//! premises are proved the shares must make up the context again, a member
+//! holding a wvar counting as any it unifies with. A share a step binds
+//! must hold only members of its context from then on.
 //!
 //! A conclusion node the match postponed with binders it left unbound
 //! (`Terms.postponed`) is checked once the premises are proved and have
@@ -1732,7 +1733,10 @@ pub const Prover = struct {
     /// The premises of `split`'s rule are proved: a share still unbound
     /// (one no premise holds) takes what the others leave, and then the
     /// shares must hold only members of the bag and every member the
-    /// template's own members did not take.
+    /// template's own members did not take. A share's member that is no
+    /// bag member as it stands is one once it unifies with one: a fact may
+    /// name the variable a step's eigenvariable in the bag becomes
+    /// (`dvd_elim`'s `k` in `y = x * k`).
     fn settle(self: *Prover, split: *const Split, next: ?*const Agenda) Error!Outcome {
         const start = self.wvars.mark();
         defer self.wvars.rollback(start);
@@ -1744,19 +1748,62 @@ pub const Prover = struct {
         const bag = split.bag;
         var members: AcuiBag.ExprBag = .{};
         for (bag.members) |member| _ = members.append(try self.terms.resolveGoal(member));
+        var strays = std.ArrayListUnmanaged(ExprId).empty;
+        defer strays.deinit(self.allocator);
         for (split.shares) |idx| {
             const value = try self.terms.resolveGoal(self.wvars.vars.items[idx].expr);
             const held = bag.combiner.flatten(self.terms.theorem, value) orelse return error.Unsupported;
             for (held.slice()) |member| {
-                if (std.mem.indexOfScalar(ExprId, members.slice(), member) == null) return .failed;
+                if (std.mem.indexOfScalar(ExprId, members.slice(), member) == null) try strays.append(self.allocator, member);
             }
         }
-        for (bag.members, 0..) |member, at| {
-            if (bag.taken & (@as(u64, 1) << @intCast(at)) != 0) continue;
-            if (!try self.shareHolds(split, member)) return .failed;
-        }
-        return self.run(next);
+        return self.placeStrays(split, strays.items, next);
     }
+
+    /// Unify each share member in `strays` with a member of `split`'s bag,
+    /// each way in turn, then check that the shares hold every member the
+    /// template's own members did not take and run `next`.
+    fn placeStrays(self: *Prover, split: *const Split, strays: []const ExprId, next: ?*const Agenda) Error!Outcome {
+        const bag = split.bag;
+        if (strays.len == 0) {
+            for (bag.members, 0..) |member, at| {
+                if (bag.taken & (@as(u64, 1) << @intCast(at)) != 0) continue;
+                if (!try self.shareHolds(split, member)) return .failed;
+            }
+            return self.run(next);
+        }
+        // An earlier placement may have made it a member already.
+        const stray = try self.terms.resolveGoal(strays[0]);
+        for (bag.members) |member| {
+            if (try self.terms.resolveGoal(member) == stray) return self.placeStrays(split, strays[1..], next);
+        }
+        const open = try self.wvars.holdsWVar(stray);
+        for (bag.members) |raw| {
+            const member = try self.terms.resolveGoal(raw);
+            // Two distinct ground members never unify.
+            if (!open and !try self.wvars.holdsWVar(member)) continue;
+            var placer = Placer{ .prover = self, .split = split, .rest = strays[1..], .next = next };
+            _ = try self.terms.unify(stray, member, Placer, &placer);
+            if (placer.outcome != .failed) return placer.outcome;
+        }
+        return .failed;
+    }
+
+    /// The unifier's sink that places the rest of a split's strays.
+    const Placer = struct {
+        prover: *Prover,
+        split: *const Split,
+        rest: []const ExprId,
+        next: ?*const Agenda,
+        outcome: Outcome = .failed,
+
+        pub const Error = ProveError;
+
+        pub fn match(self: *Placer, _: []const ?ExprId) ProveError!bool {
+            self.outcome = try self.prover.placeStrays(self.split, self.rest, self.next);
+            return self.outcome != .failed;
+        }
+    };
 
     /// Fill `entry`'s cuts in `full`: a fresh wvar for each γ, an
     /// eigenvariable introduced at `goal` for each δ. A γ cut that depends

@@ -48,10 +48,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   (`or_elim`'s `G , H , K ⊢ r`) splits the goal's context between its
   premises without enumerating splits: a hypothesis fixes the part of
   the premise it proves, and a premise proved by rules gets what the
-  other parts leave or the whole context. A context that is a sequence
-  (`martin_lof`'s, an `@acui` combiner with neither commutativity nor
-  idempotence) is matched in order, so `g , x : A` takes the last entry
-  as `x : A`. Besides the hypotheses, the core closes goals with the
+  other parts leave or the whole context. Where the context holds a
+  bound variable a rule has not named yet (`dvd_elim`'s `k` in
+  `y = x * k`), the hypothesis that proves a part names it. A context
+  that is a sequence (`martin_lof`'s, an `@acui` combiner with neither
+  commutativity nor idempotence) is matched in order, so `g , x : A`
+  takes the last entry as `x : A`. Besides the hypotheses, the core closes goals with the
   facts the `@auto forward` pass derives from them, so it reaches proofs
   through rules it cannot apply backward. An `@auto bridge` rule
   (weakening) carries a fact stated in a smaller context to the goal: its

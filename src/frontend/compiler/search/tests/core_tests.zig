@@ -791,6 +791,35 @@ test "shares never hold what the goal's context does not" {
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
+// `name_elim`'s eigenvariable `z` sits in the minor premise's context,
+// which `imp_elim_s` splits; the hypotheses closing the split's premises
+// name it `y`, and only placing their `P y` among the context's members
+// makes `z` that variable.
+test "a share's member names the eigenvariable a context member holds" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena, split_rules ++
+        \\sort obj;
+        \\term P (a: obj): wff;
+        \\term Q: wff;
+        \\term R: wff;
+        \\term S: wff;
+        \\axiom name_elim {z: obj} (g h: ctx) (c: wff): $ g ⊢ R $ > $ h , P z ⊢ c $ > $ g , h ⊢ c $;
+        \\theorem name_mp (g h: ctx) {y: obj}:
+        \\  $ g ⊢ R $ > $ h , P y ⊢ S → Q $ > $ P y ⊢ S $ > $ g , h ⊢ Q $;
+    ,
+        \\name_mp
+        \\-------
+        \\l1: $ g , h ⊢ Q $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"name_elim [#1, imp_elim_s [#2, #3]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
 // `ex_elim2`'s `z` is bound and only its premises hold it, though the
 // contexts may depend on it; its view reads back nothing. The core takes
 // `z` for an eigenvariable, which the first hypothesis names `x`.
