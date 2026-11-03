@@ -820,6 +820,40 @@ test "a share's member names the eigenvariable a context member holds" {
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
+// The share `imp_elim_s` leaves for `name_elim`'s context `h , P z` may
+// hold `P y`, which names the eigenvariable, but not `k`, which unifies with
+// no member of it.
+test "a share is not fixed to a context with a member outside the goal's" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try search(&arena, split_rules ++
+        \\sort obj;
+        \\term P (a: obj): wff;
+        \\term Q: wff;
+        \\term R: wff;
+        \\term S: wff;
+        \\term T: wff;
+        \\term U: wff;
+        \\axiom name_elim {z: obj} (g h: ctx) (c: wff): $ g ⊢ R $ > $ h , P z ⊢ c $ > $ g , h ⊢ c $;
+        \\theorem name_far (g h k: ctx) {y: obj}:
+        \\  $ g ⊢ R $ > $ k ⊢ S → Q $ > $ k ⊢ T → S $ > $ k ⊢ U → S $ > $ k ⊢ T $ > $ k ⊢ U $ >
+        \\  $ h , P y ⊢ S → Q $ > $ P y ⊢ T → S $ > $ P y ⊢ T $ > $ g , h ⊢ Q $;
+    ,
+        \\name_far
+        \\--------
+        \\l1: $ g , h ⊢ Q $ by auto?
+    , &counters, true);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"name_elim [#1, imp_elim_s [#7, imp_elim_s [#8, #9]]]"});
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+    // Without the check, `k ⊢ S → Q` and the facts under `k` each fix a share
+    // to `k` and the step's other premise is searched before settling fails
+    // (734 goals).
+    try std.testing.expect(counters.core_nodes <= 600);
+}
+
 // `ex_elim2`'s `z` is bound and only its premises hold it, though the
 // contexts may depend on it; its view reads back nothing. The core takes
 // `z` for an eigenvariable, which the first hypothesis names `x`.

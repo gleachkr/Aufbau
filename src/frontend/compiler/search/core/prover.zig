@@ -1708,7 +1708,8 @@ pub const Prover = struct {
     }
 
     /// Whether every bound share holds only members of its bag, as far as
-    /// is known: a member holding an unbound wvar may still become one.
+    /// is known: a member that is none must still unify with one (`settle`),
+    /// so it may not clash with them all (`Terms.mightEqual`).
     fn sharesFit(self: *Prover) Error!bool {
         var at = self.splits;
         while (at) |split| : (at = split.outer) {
@@ -1720,9 +1721,8 @@ pub const Prover = struct {
                     return error.Unsupported;
                 for (held.slice()) |member| {
                     if (std.mem.indexOfScalar(ExprId, members.slice(), member) != null) continue;
-                    if (try self.wvars.holdsWVar(member)) continue;
                     for (members.slice()) |other| {
-                        if (try self.wvars.holdsWVar(other)) break;
+                        if (try self.terms.mightEqual(member, other, .unfolding)) break;
                     } else return false;
                 }
             }
