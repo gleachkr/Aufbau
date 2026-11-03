@@ -510,7 +510,7 @@ pub fn generateTopLevel(
         for (try walk.of(goal_expr)) |v| try driver.root_vars.put(driver.scratch, v, {});
     }
     var applications = std.ArrayListUnmanaged(RuleApplication).empty;
-    if (options.core and goal == .concrete) try runCore(&driver, theorem, goal_expr, &applications);
+    if (options.core) try runCore(&driver, theorem, goal, &applications);
     if (applications.items.len == 0 and options.ladder) try runPhaseLadder(&driver, goal_expr, &applications, schedule);
 
     // Mirror the forward layer's meta-store activity into the bench counters.
@@ -535,13 +535,13 @@ pub fn generateTopLevel(
     return .{ .arena = arena, .applications = owned };
 }
 
-/// The search core's attempt at `goal_expr`, ahead of the ladder. A proof
-/// it finds is the call's result; when it abstains, misses, or runs out of
+/// The search core's attempt at `goal`, ahead of the ladder. A proof it
+/// finds is the call's result; when it abstains, misses, or runs out of
 /// budget or stack, the ladder runs as it would without it.
 fn runCore(
     driver: *Driver,
     theorem: *const TheoremContext,
-    goal_expr: ExprId,
+    goal: Goal,
     applications: *std.ArrayListUnmanaged(RuleApplication),
 ) !void {
     const result = core.run(.{
@@ -552,7 +552,7 @@ fn runCore(
         .pool_theorem = theorem,
         .pool = try driver.session.getReferencePool(theorem, driver.counters),
         .derived = driver.derived,
-        .goal = goal_expr,
+        .goal = goal,
         .max_depth = driver.options.max_depth,
         .stack_guard_bytes = driver.options.stack_guard_bytes,
         .budget = driver.fuel.global,

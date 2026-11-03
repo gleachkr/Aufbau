@@ -36,6 +36,12 @@
 //! A cut wvar stands for a binder of a cut rule (`imp_trans`'s `q`); the
 //! prover lets only a closure or a rule match that binds it work on a goal
 //! that holds it unbound.
+//!
+//! A hole wvar stands for a hole of a holey goal, minted before the search
+//! at the lowest level, so no eigenvariable can enter it, or for a binder
+//! a narrowing of one leaves unbound (`Terms` `Matcher.invent`). Its value
+//! is what the proof makes it, so it is no guess: rules may fix it, unlike
+//! a cut wvar's.
 
 const std = @import("std");
 const ExprModule = @import("../../../expr.zig");
@@ -114,6 +120,7 @@ pub const WVar = struct {
     /// leaf, and `fresh_in` starts empty.
     name: bool = false,
     cut: bool = false,
+    hole: bool = false,
     value: ?ExprId = null,
 };
 
@@ -323,6 +330,17 @@ pub const WVars = struct {
             .level = self.eigen_count,
             .capture = capture,
             .cut = cut,
+        });
+    }
+
+    /// A new hole wvar (see the module doc).
+    pub fn mintHole(self: *WVars, sort_name: []const u8) Error!ExprId {
+        return self.add(.{
+            .expr = undefined,
+            .sort_name = sort_name,
+            .level = self.eigen_count,
+            .capture = &.{},
+            .hole = true,
         });
     }
 

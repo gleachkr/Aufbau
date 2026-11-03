@@ -45,7 +45,9 @@
 //! narrowing that leaves binders of its node unbound gives each a cut
 //! wvar of its own (`Terms.invented`) when the rule is unsafe, a premise
 //! mentions the binder and the node holds a binder the match bound; the
-//! step passes those on too. So a rule's premises that a fact might close come first, and
+//! step passes those on too. A narrowing of a hole gives hole wvars
+//! instead, which it does not pass on: rules fix them as they fix the hole
+//! (`wvars.zig`). So a rule's premises that a fact might close come first, and
 //! an unbound wvar premise waits for a sibling that fixes it. When no fact
 //! closes that sibling, a lone such premise is still closed by a fact
 //! first, which guesses the wvar from the facts; two or more wait, since

@@ -63,7 +63,15 @@ This file records notable user-facing changes to Aufbau. The project follows
   replacement, `eq_replace`) is searched as its view: once the premises'
   proofs fix the equation and the formula to rewrite, the core works the
   context out from both sides, with a fresh variable for the hole. A
-  goal the core does not take (holes, idempotent non-commutative `@acui`
+  goal with proof holes is searched with each hole as an unknown the
+  proof fills, any way that makes the line check: where a rule gives a
+  hole structure (`t_lam`'s type `A → B`), the parts nothing fixes yet
+  are unknowns the premises' rules fix, so a typing goal `g ⊢ t : _ty`
+  gets its type; a context hole is split between a rule's contexts
+  (`iff_intro`'s `G , H`), takes whatever members the proof needs (an
+  `ax` step may put its formula there), and a part nothing fills is
+  empty. A
+  goal the core does not take (idempotent non-commutative `@acui`
   combiners) or cannot prove goes on to the existing generation search
   in what is left of the same budget, and the checker validates every
   proof either way. The core keeps MM0's dependency conditions on the

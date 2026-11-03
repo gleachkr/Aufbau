@@ -710,8 +710,11 @@ fn expectHoleyTypeInferred(stem: []const u8, theorem: []const u8, expected: []co
     const by = block + (std.mem.lastIndexOf(u8, full_proof[block..block_end], " $ by ") orelse
         return error.MissingProof) + " $ by ".len;
     const line_end = std.mem.indexOfScalarPos(u8, full_proof, by, '\n') orelse full_proof.len;
+    // The last line is searched alone: an earlier line stating the same
+    // typing would answer it (`t_weak [l1]`).
+    const line_start = if (std.mem.lastIndexOfScalar(u8, full_proof[block..by], '\n')) |at| block + at + 1 else block;
     const proof_src = try std.mem.concat(arena.allocator(), u8, &.{
-        full_proof[0..by], "auto?", full_proof[line_end..],
+        full_proof[0..block], full_proof[line_start..by], "auto?", full_proof[line_end..],
     });
 
     var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{

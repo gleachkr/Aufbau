@@ -81,7 +81,9 @@ Trimming costs checker runs per surfaced suggestion only, never search ticks
 `trim=`), and cannot change what is found.
 
 **Holey goals (type inference).** A line whose assertion has proof holes
-(`g ⊢ t : _ty`) reaches `generateTopLevel` as `Goal.holey`. It interns the
+(`g ⊢ t : _ty`) reaches `generateTopLevel` as `Goal.holey`. The search core
+takes it first: each hole is a hole wvar (`core/wvars.zig`) and close-out
+validates against the holey line. For the ladder, `generateTopLevel` interns the
 assertion with a meta per hole (`mintNumberedMeta`, stable `meta_id`s from the
 driver's counter) and every pass searches that as an open
 `implicit_whole_conclusion` hint, so the ladder runs as for an open child

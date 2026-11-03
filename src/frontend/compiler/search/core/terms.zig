@@ -36,7 +36,11 @@
 //! conclusion with binders. A sink with `mayInvent` may instead give such
 //! binders cut wvars of their own (`Matcher.invent`), for premises to fix
 //! from facts, and bound ones bound names (`wvars.zig`), while the node
-//! holds a binder the match bound.
+//! holds a binder the match bound. A narrowing of a hole, by any rule,
+//! gives them hole wvars instead, which the premises' rules may fix: the
+//! hole stands for whatever the proof makes it, so they are no guess, and
+//! a bag node splits a hole of its sort into parts even when the match
+//! bound none of them.
 //!
 //! Matching and unification are modulo definitions: where heads differ,
 //! an application of the later-declared definition unfolds one step
@@ -196,9 +200,22 @@ pub const Terms = struct {
         return if (term_id < self.bags.len) self.bags[term_id] else null;
     }
 
-    /// Whether the core can search `expr`: no placeholders or combiners
-    /// it does not read. A definition is an ordinary term here, never
-    /// unfolded. O(size of `expr`) over shared nodes.
+    /// The unit of the bag over `sort_name`, or null when no bag the core
+    /// reads has that sort or its unit does not resolve.
+    pub fn unitOf(self: *Terms, sort_name: []const u8) Error!?ExprId {
+        for (self.bags, 0..) |bag, term_id| {
+            const combiner = bag orelse continue;
+            if (combiner.head != term_id) continue;
+            if (!std.mem.eql(u8, self.context.env.terms.items[term_id].ret_sort_name, sort_name)) continue;
+            return try combiner.build(self.theorem, &.{});
+        }
+        return null;
+    }
+
+    /// Whether the core can search `expr`: no placeholders but wvars (a
+    /// holey goal's holes), and no combiners it does not read. A definition
+    /// is an ordinary term here, never unfolded. O(size of `expr`) over
+    /// shared nodes.
     pub fn supported(self: *Terms, expr: ExprId) Error!bool {
         var seen = std.AutoHashMapUnmanaged(ExprId, void).empty;
         defer seen.deinit(self.allocator);
@@ -213,7 +230,7 @@ pub const Terms = struct {
         if ((try seen.getOrPut(self.allocator, expr)).found_existing) return true;
         switch (self.theorem.interner.node(expr).*) {
             .variable => return true,
-            .placeholder => return false,
+            .placeholder => return self.wvars.of(expr) != null,
             .app => |app| {
                 if (app.term_id >= self.context.env.terms.items.len) return false;
                 if (AcuiBag.Combiner.of(self.context.registry, self.context.env, app.term_id)) |combiner| {
@@ -1017,7 +1034,9 @@ fn Matcher(comptime Sink: type) type {
         /// also holds a binder the rest of the match bound: structure made
         /// of invented binders alone is a guess. A bound binder gets a
         /// bound name instead, which is no guess: any fresh variable will
-        /// do, and its steps' bars say which.
+        /// do, and its steps' bars say which. Narrowing a hole, any rule
+        /// invents, and each gets a hole wvar, not reported; a bag node
+        /// needs no bound binder, since its parts only split the hole.
         fn invent(self: *Self, node: *const Postponed, left: ?*const Postponed) MatchError!void {
             if (!@hasDecl(Sink, "mayInvent")) return;
             const rule = self.rule orelse return;
@@ -1027,7 +1046,8 @@ fn Matcher(comptime Sink: type) type {
             for (self.bindings, 0..) |binding, idx| {
                 if (binding != null) bound |= @as(u64, 1) << @intCast(idx);
             }
-            if (held & bound == 0) return;
+            const hole = self.terms.wvars.vars.items[self.terms.wvars.of(node.goal).?].hole;
+            if (held & bound == 0 and !(hole and self.isBagTemplate(node.template))) return;
             const unbound = held & ~bound;
             var names: u64 = 0;
             var rest = unbound;
@@ -1035,7 +1055,7 @@ fn Matcher(comptime Sink: type) type {
                 const idx = @ctz(rest);
                 if (rule.args[idx].bound) {
                     names |= @as(u64, 1) << @intCast(idx);
-                } else if (!self.sink.mayInvent(idx)) return;
+                } else if (!hole and !self.sink.mayInvent(idx)) return;
             }
             // On the heap: the match stays on the stack for the rest of
             // the proof.
@@ -1056,6 +1076,10 @@ fn Matcher(comptime Sink: type) type {
             var at: usize = 0;
             while (rest != 0) : (rest &= rest - 1) {
                 const idx = @ctz(rest);
+                if (hole) {
+                    self.bindings[idx] = try self.terms.wvars.mintHole(rule.args[idx].sort_name);
+                    continue;
+                }
                 const wvar = try self.terms.wvars.mint(rule.args[idx].sort_name, &.{}, true);
                 self.bindings[idx] = wvar;
                 cells[at] = .{ .wvar = self.terms.wvars.of(wvar).?, .next = self.invented };

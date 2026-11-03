@@ -10,15 +10,17 @@
 //! refs and the ground facts forward saturation derived from them, each
 //! standing for its recipe. A γ witness or cut is a witness variable closed
 //! by unification, a δ one (or a definition's dummy) an eigenvariable whose
-//! name waits until the proof needs one (`wvars.zig`). It runs before the
-//! generation ladder (`GenerateOptions.core`, on by default), which still
-//! runs when the core abstains or misses.
+//! name waits until the proof needs one (`wvars.zig`). Each hole of a
+//! holey goal is a witness variable too, one the proof fills. It runs
+//! before the generation ladder (`GenerateOptions.core`, on by default),
+//! which still runs when the core abstains or misses.
 //!
 //! The run works in a clone of the call's theorem, discarded at the end.
 //! The proof record is rendered as one `RuleApplication` tree with every
 //! binding explicit, a witness variable or eigenvariable left unbound
 //! named from its sort's `@vars` pool, and the checker validates it once
-//! (D5): the checker stays the only authority on what the core returns.
+//! against the goal as written, holes and all (D5): the checker stays the
+//! only authority on what the core returns.
 
 const std = @import("std");
 const ArenaAllocator = @import("../../../arena_allocator.zig").ArenaAllocator;
@@ -42,6 +44,7 @@ const TermIndex = @import("./term_index.zig").TermIndex;
 const prover_mod = @import("./prover.zig");
 const Prover = prover_mod.Prover;
 const Node = prover_mod.Node;
+const SurfaceExpr = @import("../../../surface_expr.zig");
 
 pub const Request = struct {
     compiler: *CompilerContext,
@@ -55,7 +58,8 @@ pub const Request = struct {
     /// Facts forward saturation derived from the pool; those forward rules
     /// derived that hold no universal meta join the pool facts.
     derived: ?*types.DerivedPool = null,
-    goal: ExprId,
+    /// A concrete or holey goal; the core abstains on an implicit one.
+    goal: types.Goal,
     max_depth: usize,
     stack_guard_bytes: usize,
     budget: ?*types.GlobalBudget,
@@ -87,8 +91,16 @@ pub fn run(request: Request) !Result {
     defer wvars.deinit();
     var terms = try Terms.init(request.scratch, request.context, &theorem, &wvars);
     defer terms.deinit();
-    if (!try terms.supported(request.goal)) return .abstained;
-    const goal = terms.canonical(request.goal) catch |err| switch (err) {
+    const goal_expr = switch (request.goal) {
+        .concrete => |expr| expr,
+        .holey => |surface| (SurfaceExpr.internHoley(&theorem, request.context.env, surface, &wvars, mintHole) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return .abstained,
+        }) orelse return .abstained,
+        .implicit_whole_conclusion => return .abstained,
+    };
+    if (!try terms.supported(goal_expr)) return .abstained;
+    const goal = terms.canonical(goal_expr) catch |err| switch (err) {
         error.Unsupported => return .abstained,
         else => |e| return e,
     };
@@ -141,6 +153,11 @@ pub fn run(request: Request) !Result {
         }
     }
     return .missed;
+}
+
+/// A hole's wvar, minted before the search starts (`WVars.mintHole`).
+fn mintHole(wvars: *WVars, _: *TheoremContext, sort_name: []const u8) anyerror!?ExprId {
+    return try wvars.mintHole(sort_name);
 }
 
 /// The pool facts the core can close a goal with, canonical, then the
@@ -232,7 +249,7 @@ const CloseOut = struct {
             request.compiler,
             request.context,
             application,
-            .{ .concrete = request.goal },
+            request.goal,
             self.theorem,
             request.theorem_vars,
             .{ .counters = request.counters, .final_attempt = true },
@@ -397,7 +414,9 @@ const CloseOut = struct {
 
     /// Name each wvar `value` leaves unbound with the first variable of its
     /// sort's `@vars` pool it admits (`WVars.admits`), unless an earlier
-    /// binding already named it. False when one admits none.
+    /// binding already named it. False when one admits none. A hole's wvar
+    /// of a bag's sort takes the bag's unit instead: no step fixed it, so
+    /// any value does, and the unit is the least.
     fn nameLeftovers(self: *CloseOut, value: ExprId) prover_mod.Error!bool {
         const scratch = self.request.scratch;
         var leftovers = std.ArrayListUnmanaged(u32).empty;
@@ -406,6 +425,10 @@ const CloseOut = struct {
         for (leftovers.items) |idx| {
             if (self.names.contains(idx)) continue;
             const sort_name = self.wvars.vars.items[idx].sort_name;
+            if (self.wvars.vars.items[idx].hole) if (try self.prover.terms.unitOf(sort_name)) |unit| {
+                try self.names.put(scratch, idx, unit);
+                continue;
+            };
             const name = for (try self.prover.pool(sort_name)) |variable| {
                 if (self.wvars.admits(idx, variable)) break variable;
             } else return false;

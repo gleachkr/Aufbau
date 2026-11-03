@@ -174,18 +174,18 @@ test "with the search core off, the ladder alone finds the proof" {
     try std.testing.expect(!std.mem.eql(u8, "the search core", generate.phaseName(counters.gen_last_phase)));
 }
 
-/// `name: statement` searched with the core on the nd_fol bench fixture,
-/// with `extra` declarations appended to it.
+/// `name: statement` searched with the core on the nd_fol bench fixture, or
+/// another in `dir`, with `extra` declarations appended to it.
 fn ndFolSearch(
     arena: *std.heap.ArenaAllocator,
     extra: []const u8,
     comptime name: []const u8,
     comptime statement: []const u8,
     counters: *types.SearchCounters,
-    options: struct { max_depth: usize = 6, ladder: bool = true, fixture: []const u8 = "nd_fol" },
+    options: struct { max_depth: usize = 6, ladder: bool = true, fixture: []const u8 = "nd_fol", dir: []const u8 = "search_bench_cases" },
 ) !types.SourceSuggestions {
     const allocator = arena.allocator();
-    const path = try std.fmt.allocPrint(allocator, "tests/search_bench_cases/{s}.mm0", .{options.fixture});
+    const path = try std.fmt.allocPrint(allocator, "tests/{s}/{s}.mm0", .{ options.dir, options.fixture });
     const fixture = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .unlimited);
     const mm0_src = try std.mem.concat(allocator, u8, &.{ fixture, extra });
     const underline: [name.len]u8 = @splat('-');
@@ -1700,6 +1700,101 @@ test "a bound binder's variable an argument holds bound is renamed by its @fresh
     defer suggestions.deinit();
 
     try std.testing.expect(suggestions.items.len != 0);
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// A hole is a witness variable the proof fills. `t_lam`'s type `A → B`
+// narrows the hole and leaves `B` to its premise, whose rules fix it: a
+// cut there would wait for a fact, and no fact states a typing of `λ`'s
+// body.
+test "the search core fills a hole a rule's premise fixes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try ndFolSearch(
+        &arena,
+        "",
+        "infer_const",
+        "g ⊢ (λ x : a. λ y : b. x) : _ty",
+        &counters,
+        .{ .ladder = false, .fixture = "pass_holey_type_inference", .dir = "proof_cases" },
+    );
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"t_lam [t_lam [t_var []]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// A context hole takes whatever the proof needs: `ax` puts the goal's own
+// formula there, and the rest of `ax`'s context is `_` (`emp`).
+test "the search core fills a context hole with what the proof needs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try ndFolSearch(
+        &arena,
+        "theorem iff_dup (a: wff): $ emp ⊢ a ↔ (a ∧ a) $;\n",
+        "iff_dup",
+        "_ctx ⊢ a ↔ (a ∧ a)",
+        &counters,
+        .{ .ladder = false, .fixture = "pass_prawitz_holes", .dir = "proof_cases" },
+    );
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"ax (g := $ _ $)"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// No rule here puts a formula in a context, so `pair`'s `g , h` only
+// splits the context hole, and `⊤`'s proofs need nothing in either part.
+test "the search core splits a context hole and empties the parts nothing fills" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try suggestionsAtNeedle(&arena,
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\--| @hole _ctx
+        \\sort ctx;
+        \\term an (a b: wff): wff;
+        \\infixr an: $∧$ prec 35;
+        \\term top: wff;
+        \\notation top: wff = ($⊤$:max);
+        \\term ctx_eq (g h: ctx): wff;
+        \\term emp: ctx;
+        \\notation emp: ctx = ($∅$:max);
+        \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+        \\term join (g h: ctx): ctx;
+        \\infixl join: $,$ prec 5;
+        \\term nd (g: ctx) (a: wff): wff;
+        \\infixl nd: $⊢$ prec 1;
+        \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+        \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+        \\axiom ctx_trans (g h i: ctx):
+        \\  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+        \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+        \\axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+        \\axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+        \\axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+        \\axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+        \\axiom top_intro (g: ctx): $ g ⊢ ⊤ $;
+        \\axiom pair (g h: ctx) (a b: wff): $ g ⊢ a $ > $ h ⊢ b $ > $ g , h ⊢ a ∧ b $;
+        \\theorem pair_top: $ ∅ ⊢ ⊤ ∧ ⊤ $;
+        \\
+    ,
+        \\pair_top
+        \\--------
+        \\l1: $ _ctx ⊢ ⊤ ∧ ⊤ $ by auto?
+    , "auto?", .{
+        .counters = &counters,
+        .generate = .{ .enabled = true, .ladder = false },
+    });
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"pair [top_intro (g := $ ∅ $) [], top_intro (g := $ ∅ $) []]"});
     try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }

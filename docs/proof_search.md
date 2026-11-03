@@ -132,8 +132,14 @@ backward, such as an `@auto bridge`, still reaches the proof through its
 forward instances. A context that is a sequence (an `@acui` combiner with
 neither commutativity nor idempotence, as in `martin_lof`) is matched in
 order: a rule's `g , x : A` takes the last entry as `x : A` and the
-entries before it as `g`. A goal the core does not take (one with holes
-or an idempotent but non-commutative `@acui` combiner) or cannot prove
+entries before it as `g`. A goal with [proof holes](holes.md) is
+searched with each hole as an unknown the proof fills, by whatever
+proof is found first: a typing goal's type hole takes the structure the
+typing rules give it, and a context hole takes the members the proof
+needs, so `_ctx ⊢ a` may come back as `ax` with `_ctx := a`; a part of a
+context nothing fills is the empty context. Write the context out when
+the proof must use a particular one. A goal the core does not take (one with an
+idempotent but non-commutative `@acui` combiner) or cannot prove
 within the
 depth limit goes on to the generation search, in what is left of the
 same work budget.
