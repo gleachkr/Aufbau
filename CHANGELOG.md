@@ -82,7 +82,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   proofs it builds, including for theorem variables declared to depend
   on a bound variable, so the checker rejects few of them; where a rule
   declares `@freshen` for an argument that holds the bound variable, the
-  core leaves the renaming to the checker. On the bench
+  core leaves the renaming to the checker. The core does not search
+  the same goal twice at the same depth where it can tell the outcome:
+  a goal that holds part of a split context and fails is remembered with
+  what the split leaves it, and a goal whose every proof only fixed its
+  own unknowns, each rejected by the rest of the proof, keeps those
+  proofs and hands them out again in the same order (6% fewer core
+  ticks on the bench corpus, 12 more depth rows). On the bench
   corpus the core alone finds 10% more depth rows than the generation
   search alone, and 511 whole proofs to its 474. With both, 346 rows
   are new and 67 are lost, where a failed core search uses up the

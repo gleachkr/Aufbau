@@ -97,7 +97,15 @@
 //! the whole run, under the goal itself when it is ground and under its key
 //! up to renaming its witness variables (`keys.zig`) when not. A remembered
 //! proof is reused with the goal's witness variables in place of the
-//! original's and fresh copies of those the proof introduced.
+//! original's and fresh copies of those the proof introduced. A goal that
+//! holds shares is remembered under its key together with the splits whose
+//! shares it holds (`sharedKey`), which fix what its rules see.
+//!
+//! A goal holding witness variables that runs out of alternatives after
+//! reaching its marker, every proof only binding the goal's own witness
+//! variables to terms over its others, has exactly those proofs at its
+//! depth. They are memoized too (`Answers`), and a later goal with its key
+//! at that depth takes them in the order found instead of searching.
 
 const std = @import("std");
 const ExprId = @import("../../../expr.zig").ExprId;
@@ -207,6 +215,26 @@ const Frame = struct {
     /// by the prover's allocator.
     key: []const u8 = &.{},
     order: []const u32 = &.{},
+    /// The proofs of the goal reached so far, while each has only bound
+    /// the goal's wvars (`tabulable`); owned by the prover's allocator.
+    answers: std.ArrayListUnmanaged(Answer) = .empty,
+    tabulable: bool = true,
+};
+
+/// One proof of a goal holding wvars: its record with every binding
+/// resolved, and the value each of the goal's wvars took, in key order
+/// (null for one it left unbound), over the wvars it left unbound.
+const Answer = struct {
+    node: *const Node,
+    values: []const ?ExprId,
+};
+
+/// Every proof of a goal at `depth`, in the order the search found them,
+/// over the goal's wvars `positions` in key order.
+const Answers = struct {
+    depth: usize,
+    positions: []const u32,
+    answers: []const Answer,
 };
 
 const Agenda = struct {
@@ -317,10 +345,16 @@ pub const Prover = struct {
     failed: std.AutoHashMapUnmanaged(ExprId, usize) = .empty,
     /// The same per key of a goal holding wvars.
     failed_open: std.StringHashMapUnmanaged(usize) = .empty,
+    /// The same per shared key (`sharedKey`) of a goal holding shares.
+    failed_shared: std.StringHashMapUnmanaged(usize) = .empty,
     /// Per ground goal: a proof, and the depth it was found at.
     proved: std.AutoHashMapUnmanaged(ExprId, Proved) = .empty,
     /// The same per key of a goal holding wvars.
     proved_open: std.StringHashMapUnmanaged(Proved) = .empty,
+    /// Per key of a goal holding wvars (its shared key when it holds
+    /// shares): all its proofs at one depth (`Answers`).
+    answers_open: std.StringHashMapUnmanaged(Answers) = .empty,
+    answers_shared: std.StringHashMapUnmanaged(Answers) = .empty,
     /// Each sort's naming pool (`pool`).
     pools: std.StringHashMapUnmanaged([]const ExprId) = .empty,
     /// The innermost split whose premises are being proved.
@@ -339,8 +373,11 @@ pub const Prover = struct {
     pub fn deinit(self: *Prover) void {
         self.failed.deinit(self.allocator);
         self.failed_open.deinit(self.allocator);
+        self.failed_shared.deinit(self.allocator);
         self.proved.deinit(self.allocator);
         self.proved_open.deinit(self.allocator);
+        self.answers_open.deinit(self.allocator);
+        self.answers_shared.deinit(self.allocator);
         self.pools.deinit(self.allocator);
         self.* = undefined;
     }
@@ -377,6 +414,8 @@ pub const Prover = struct {
                 // Bars do not count: a proof that only barred older
                 // eigenvariables is reused with its bars (`reuse`).
                 const constrained = self.wvars.constrainedOlderSince(frame.mark, frame.wvars);
+                // Such a proof is reused whole, and cuts the goal's others.
+                if (!constrained) frame.tabulable = false;
                 if (!constrained) try self.remember(frame);
                 // A proof that left the older wvars as an earlier one did,
                 // whose continuation failed, fails the same way (W5 dedupe).
@@ -388,6 +427,7 @@ pub const Prover = struct {
                     try self.wvars.signature(self.allocator, frame.mark, frame.wvars, frame.eigens, &bytes);
                     sig = try bytes.toOwnedSlice(self.allocator);
                     if (frame.seen.contains(sig.?)) return .failed;
+                    if (frame.tabulable) try self.noteAnswer(frame);
                 }
                 const rejects = self.stats.rejects;
                 const outcome = try self.run(cell.next);
@@ -437,8 +477,16 @@ pub const Prover = struct {
         }
         var key: []const u8 = &.{};
         var order: []const u32 = &.{};
+        // The key a goal holding wvars is remembered under when it fails
+        // or runs out of proofs: a shared goal's adds the splits whose
+        // shares it holds (`sharedKey`), and is null when that cannot be
+        // told.
+        var memo_key: ?[]const u8 = null;
+        defer if (shared) if (memo_key) |owned| self.allocator.free(owned);
         defer self.allocator.free(key);
         defer self.allocator.free(order);
+        const failures = if (shared) &self.failed_shared else &self.failed_open;
+        const tables = if (shared) &self.answers_shared else &self.answers_open;
         const known = if (ground) blk: {
             if (self.failed.get(goal.expr)) |failed_at| {
                 if (failed_at >= goal.depth) return .failed;
@@ -447,7 +495,8 @@ pub const Prover = struct {
         } else blk: {
             key = try self.allocator.dupe(u8, try self.keys.key(goal.expr));
             order = try self.allocator.dupe(u32, self.keys.order.items);
-            if (!shared) if (self.failed_open.get(key)) |failed_at| {
+            memo_key = if (shared) try self.sharedKey(key, order) else key;
+            if (memo_key) |at| if (failures.get(at)) |failed_at| {
                 if (failed_at >= goal.depth) return .failed;
             };
             break :blk self.proved_open.get(key);
@@ -469,6 +518,12 @@ pub const Prover = struct {
                 return .failed;
             }
         }
+        // A goal only facts may close has not run out of proofs as the
+        // same goal closed by rules would.
+        const full = goal.bridged == null and goal.pass.len == 0;
+        if (memo_key) |at| if (full) if (tables.get(at)) |table| if (table.depth == goal.depth) {
+            return self.replay(table, goal, order, next);
+        };
         self.stats.nodes += 1;
 
         var frame = Frame{
@@ -486,19 +541,37 @@ pub const Prover = struct {
             var it = frame.seen.keyIterator();
             while (it.next()) |sig| self.allocator.free(sig.*);
             frame.seen.deinit(self.allocator);
+            frame.answers.deinit(self.allocator);
         }
         self.next_frame += 1;
         const close = Agenda{ .item = .{ .close = &frame }, .next = next };
         const level = if (goal.path) |above| above.level + 1 else 0;
         const path = PathCell{ .expr = goal.expr, .level = level, .next = goal.path };
+        var cut_off = false;
         switch (try self.expand(&frame, &close, &path)) {
             .proved => return .proved,
             .failed => {},
-            .cut => |id| if (id != frame.id) return .{ .cut = id },
+            .cut => |id| if (id == frame.id) {
+                cut_off = true;
+            } else return .{ .cut = id },
         }
-        // A goal only facts may close (a bridge's or a passing step's
-        // premise) has not failed as the same goal closed by rules would.
-        if (!frame.reached and !shared and goal.bridged == null and goal.pass.len == 0 and self.prune_floor >= level) {
+        if (!full or self.prune_floor < level) return .failed;
+        if (frame.reached) {
+            // The goal ran out of proofs after all of them: they are all it
+            // has at its depth.
+            const at = memo_key orelse return .failed;
+            if (!frame.tabulable or cut_off) return .failed;
+            const gop = try tables.getOrPut(self.allocator, at);
+            if (gop.found_existing and gop.value_ptr.depth == goal.depth) return .failed;
+            if (!gop.found_existing) gop.key_ptr.* = try self.arena.dupe(u8, at);
+            gop.value_ptr.* = .{
+                .depth = goal.depth,
+                .positions = try self.arena.dupe(u32, order),
+                .answers = try self.arena.dupe(Answer, frame.answers.items),
+            };
+            return .failed;
+        }
+        if (ground or memo_key != null) {
             // Every binding made below is undone, so the key is the
             // entry's again.
             const failed_at = if (ground) blk: {
@@ -506,7 +579,7 @@ pub const Prover = struct {
                 if (!gop.found_existing) gop.value_ptr.* = 0;
                 break :blk gop.value_ptr;
             } else blk: {
-                const gop = try self.failed_open.getOrPut(self.allocator, key);
+                const gop = try failures.getOrPut(self.allocator, memo_key.?);
                 if (!gop.found_existing) {
                     gop.key_ptr.* = try self.arena.dupe(u8, gop.key_ptr.*);
                     gop.value_ptr.* = 0;
@@ -516,6 +589,63 @@ pub const Prover = struct {
             failed_at.* = @max(failed_at.*, goal.depth);
         }
         return .failed;
+    }
+
+    /// Try `goal`, whose wvars in key order are `order`, with each of the
+    /// proofs `table` holds in turn, as its search would: each binds the
+    /// goal's wvars as it bound the original's, then the rest of the agenda
+    /// runs.
+    fn replay(self: *Prover, table: Answers, goal: Goal, order: []const u32, next: ?*const Agenda) Error!Outcome {
+        var map = std.AutoHashMapUnmanaged(u32, ExprId).empty;
+        defer map.deinit(self.allocator);
+        for (table.positions, order) |old, new| try map.put(self.allocator, old, self.wvars.vars.items[new].expr);
+        var memo = std.AutoHashMapUnmanaged(ExprId, ExprId).empty;
+        defer memo.deinit(self.allocator);
+        for (table.answers) |answer| {
+            const mark = self.wvars.mark();
+            defer self.wvars.rollback(mark);
+            const bound = for (answer.values, order) |value, idx| {
+                const made = value orelse continue;
+                if (self.wvars.vars.items[idx].value != null) break false;
+                if (!try self.wvars.bind(idx, try self.rename(made, &map, &memo))) break false;
+            } else true;
+            if (!bound) continue;
+            goal.slot.* = try self.renameNode(answer.node, &map, &memo);
+            const outcome = try self.run(next);
+            if (outcome != .failed) return outcome;
+        }
+        return .failed;
+    }
+
+    /// Add the proof of `frame`'s goal just reached to its answers, or mark
+    /// the goal untabulable when the proof did more to the older wvars than
+    /// bind the goal's to terms over its others still unbound.
+    fn noteAnswer(self: *Prover, frame: *Frame) Error!void {
+        frame.tabulable = false;
+        if (frame.ground) return;
+        for (self.wvars.log.items[frame.mark..]) |entry| switch (entry) {
+            .bound => |idx| if (idx < frame.wvars and std.mem.indexOfScalar(u32, frame.order, idx) == null) return,
+            .narrowed => |old| if (old.wvar < frame.wvars) return,
+            .barred => |old| if (old.wvar < frame.wvars) return,
+            .named => return,
+        };
+        var held = std.ArrayListUnmanaged(u32).empty;
+        defer held.deinit(self.allocator);
+        const values = try self.arena.alloc(?ExprId, frame.order.len);
+        for (frame.order, values) |idx, *out| {
+            const value = self.wvars.vars.items[idx].value orelse {
+                out.* = null;
+                continue;
+            };
+            out.* = try self.wvars.deref(value, null);
+            try self.wvars.collectUnbound(self.allocator, out.*.?, &held);
+        }
+        const node = try self.resolveNode(frame.goal.slot.*.?, &held);
+        for (held.items) |idx| {
+            if (std.mem.indexOfScalar(u32, frame.order, idx) == null) return;
+        }
+        try frame.answers.append(self.allocator, .{ .node = node, .values = values });
+        frame.tabulable = true;
     }
 
     /// Remember the proof of `frame`'s goal just reached (W9), unless one at
@@ -1655,6 +1785,56 @@ pub const Prover = struct {
             filled[arg] = true;
             try shares.append(self.arena, self.wvars.of(full[arg]).?);
         }
+    }
+
+    /// `key`, the key of a goal holding shares whose wvars in key order are
+    /// `order`, extended by each split on the chain whose unbound shares it
+    /// holds: which of the goal's wvars those are, the values of the bound
+    /// ones, the bag's members and the ones its template took. What the
+    /// goal's rules see (`expand`) and the checks its steps make
+    /// (`sharesFit`) depend on no more. Null when the shares do not fit
+    /// now, or a member or bound share of a split holds a wvar, which the
+    /// goal's search might bind.
+    fn sharedKey(self: *Prover, key: []const u8, order: []const u32) Error!?[]const u8 {
+        if (!try self.sharesFit()) return null;
+        var out = std.ArrayListUnmanaged(u8).empty;
+        errdefer out.deinit(self.allocator);
+        try out.appendSlice(self.allocator, key);
+        var at = self.splits;
+        while (at) |split| : (at = split.outer) {
+            var holds = false;
+            for (split.shares) |idx| {
+                if (self.wvars.vars.items[idx].value == null and std.mem.indexOfScalar(u32, order, idx) != null) holds = true;
+            }
+            for (split.shares) |idx| {
+                if (self.wvars.vars.items[idx].value) |value| {
+                    const resolved = try self.terms.resolveGoal(value);
+                    if (try self.wvars.holdsWVar(resolved)) {
+                        out.deinit(self.allocator);
+                        return null;
+                    }
+                    if (holds) try appendTagged(self.allocator, &out, 'v', resolved);
+                } else if (holds) {
+                    const pos: u32 = if (std.mem.indexOfScalar(u32, order, idx)) |found| @intCast(found) else std.math.maxInt(u32);
+                    try appendTagged(self.allocator, &out, 'h', pos);
+                }
+            }
+            for (split.bag.members) |member| {
+                const resolved = try self.terms.resolveGoal(member);
+                if (try self.wvars.holdsWVar(resolved)) {
+                    out.deinit(self.allocator);
+                    return null;
+                }
+                if (holds) try appendTagged(self.allocator, &out, 'm', resolved);
+            }
+            if (holds) try appendTagged(self.allocator, &out, 't', split.bag.taken);
+        }
+        return try out.toOwnedSlice(self.allocator);
+    }
+
+    fn appendTagged(allocator: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), tag: u8, value: anytype) Error!void {
+        try out.append(allocator, tag);
+        try out.appendSlice(allocator, std.mem.asBytes(&value));
     }
 
     /// The split wvar `idx` is a share of, if any.
