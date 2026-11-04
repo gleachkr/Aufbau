@@ -10,15 +10,25 @@
 //! followed by each wvar's constraints:
 //! - a γ wvar: whether it is a cut wvar, the variables it may not hold
 //!   (its capture list and the variables eigenvariables of its level or
-//!   above became) and which of the goal's eigenvariables it may hold
-//!   (older ones, and bound names);
+//!   above became) and which of the goal's wvars other than bound names
+//!   are of a lower level: the eigenvariables it may hold (W6), and the
+//!   γ wvars that would narrow it by holding it. It may hold any bound
+//!   name;
 //! - an eigenvariable: the variables it may not become, among those the
 //!   goal or a fact mentions, since no other variable can meet it; its
 //!   introduction goal bars a variable it mentions or holds a theorem
 //!   variable depending on; and which of the goal's other wvars it must
 //!   stay out of (its introduction goal, or what it is kept fresh in,
-//!   bars included, mentions them); a bound name also, which of them it
-//!   may merge with.
+//!   bars included, mentions them); a bound name also, which of them
+//!   other than bound names are of a lower level (the eigenvariables it
+//!   may merge with, the γ wvars that narrow it by holding it), and
+//!   whether a wvar holds it, which keeps it from merging with any
+//!   eigenvariable introduced later.
+//!
+//! Last come the variables already an eigenvariable's name among those
+//! the goal or a fact mentions: no eigenvariable the goal's search
+//! introduces may become one. A ground goal is remembered under its key
+//! too when there are any (`Prover.prove`).
 //!
 //! Equal keys mean goals equal up to renaming their wvars, so a failure
 //! recorded under one key holds for every goal with that key. Bag members
@@ -61,8 +71,8 @@ pub const Keys = struct {
         self.* = undefined;
     }
 
-    /// The key of the resolved, canonical `goal`, which holds a wvar. It
-    /// is valid until the next call.
+    /// The key of the resolved, canonical `goal`. It is valid until the
+    /// next call.
     pub fn key(self: *Keys, goal: ExprId) Error![]const u8 {
         self.order.clearRetainingCapacity();
         self.visited.clearRetainingCapacity();
@@ -108,13 +118,9 @@ pub const Keys = struct {
                     if (kept_out) try self.put(@intCast(pos));
                 }
                 try self.put(std.math.maxInt(u32));
-                // A bound name: the eigenvariables it may merge with.
                 if (wvar.name) {
-                    for (self.order.items, 0..) |other, pos| {
-                        const eigen = self.wvars.vars.items[other];
-                        if (eigen.introduced_at != null and !eigen.name and eigen.level < wvar.level) try self.put(@intCast(pos));
-                    }
-                    try self.put(std.math.maxInt(u32));
+                    try self.putLower(wvar.level);
+                    try self.put(@intFromBool(wvar.held()));
                 }
             } else {
                 try self.bytes.append(self.allocator, if (wvar.cut) 'c' else 'g');
@@ -124,14 +130,44 @@ pub const Keys = struct {
                     if (entry.value_ptr.* >= wvar.level) try list.append(self.allocator, entry.key_ptr.*);
                 }
                 try self.putSet(list.items);
-                for (self.order.items, 0..) |other, pos| {
-                    const eigen = self.wvars.vars.items[other];
-                    if (eigen.introduced_at != null and (eigen.name or eigen.level < wvar.level)) try self.put(@intCast(pos));
-                }
-                try self.put(std.math.maxInt(u32));
+                try self.putLower(wvar.level);
             }
         }
+        list.clearRetainingCapacity();
+        try self.taken(goal_vars, &list);
+        try self.putSet(list.items);
         return self.bytes.items;
+    }
+
+    /// The positions of the goal's wvars other than bound names whose
+    /// level is below `level`, then a terminator.
+    fn putLower(self: *Keys, level: u32) Error!void {
+        for (self.order.items, 0..) |other, pos| {
+            const lower = self.wvars.vars.items[other];
+            if (!lower.name and lower.level < level) try self.put(@intCast(pos));
+        }
+        try self.put(std.math.maxInt(u32));
+    }
+
+    /// Append to `list` the variables of `goal_vars` and the facts that are
+    /// already an eigenvariable's name.
+    fn taken(self: *Keys, goal_vars: []const ExprId, list: *std.ArrayListUnmanaged(ExprId)) Error!void {
+        if (self.wvars.eigens.count() == 0) return;
+        for ([_][]const ExprId{ goal_vars, self.fact_vars }) |reachable| {
+            for (reachable) |variable| {
+                if (self.wvars.eigens.contains(variable)) try list.append(self.allocator, variable);
+            }
+        }
+    }
+
+    /// Whether a variable `goal` or a fact mentions is already an
+    /// eigenvariable's name, which puts it in `goal`'s key.
+    pub fn seesTaken(self: *Keys, goal: ExprId) Error!bool {
+        if (self.wvars.eigens.count() == 0) return false;
+        var list = std.ArrayListUnmanaged(ExprId).empty;
+        defer list.deinit(self.allocator);
+        try self.taken(try self.variables(goal), &list);
+        return list.items.len != 0;
     }
 
     fn put(self: *Keys, value: u32) Error!void {

@@ -246,7 +246,8 @@ pub const Terms = struct {
 
     /// `expr`, an application of a definition with a body, unfolded one
     /// step: the body with the arguments in place and each dummy a fresh
-    /// eigenvariable introduced at the unfolding. Such a dummy may become
+    /// eigenvariable introduced at the unfolding, or a bound name kept out
+    /// of it when `expr` is ground (`wvars.zig`). Such a dummy may become
     /// only a variable the unfolding does not otherwise mention, which is
     /// MM0's condition on an unfolding: disjoint from the arguments, and
     /// distinct from its siblings. An expression unfolds with the same
@@ -272,8 +273,12 @@ pub const Terms = struct {
         defer self.allocator.free(values);
         @memcpy(values[0..app.args.len], app.args);
         const first = self.wvars.count();
+        const ground = !try self.wvars.holdsWVar(expr);
         for (def.dummy_args, values[app.args.len..]) |dummy, *value| {
-            value.* = try self.wvars.introduce(dummy.sort_name, expr, null);
+            value.* = if (ground)
+                try self.wvars.introduceName(dummy.sort_name, expr)
+            else
+                try self.wvars.introduce(dummy.sort_name, expr, null);
         }
         const result = self.instantiate(def.body.?, values) catch |err| switch (err) {
             error.Unsupported => {
@@ -291,11 +296,13 @@ pub const Terms = struct {
         return result;
     }
 
-    /// Whether no step has bound, barred or narrowed a dummy of `cell`.
+    /// Whether no step has bound, barred or narrowed a dummy of `cell`, nor
+    /// put one that is a bound name into a wvar.
     fn untouched(self: *const Terms, cell: *const Unfolded) bool {
         for (cell.dummies..cell.dummies + cell.count) |idx| {
             const wvar = self.wvars.vars.items[idx];
             if (wvar.value != null or wvar.fresh_in != null or wvar.capture.len != 0) return false;
+            if (wvar.name and wvar.held()) return false;
         }
         return true;
     }
@@ -1070,7 +1077,7 @@ fn Matcher(comptime Sink: type) type {
             rest = names;
             while (rest != 0) : (rest &= rest - 1) {
                 const idx = @ctz(rest);
-                self.bindings[idx] = try self.terms.wvars.introduceName(rule.args[idx].sort_name);
+                self.bindings[idx] = try self.terms.wvars.introduceName(rule.args[idx].sort_name, null);
             }
             rest = unbound & ~names;
             var at: usize = 0;

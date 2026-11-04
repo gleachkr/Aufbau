@@ -480,7 +480,7 @@ test "auto solves the nested forward-instantiation flagship (Stage 7)" {
     // unused bound vars (a, b).
     try expectOffered(suggestions.items, &.{
         "all_elim [all_elim (t := $ u $, " ++
-            "p := $ ∀ b (pair f a = pair f b → a = b) $) [#1]]",
+            "p := $ ∀ a (pair f b = pair f a → b = a) $) [#1]]",
     });
     try std.testing.expect(counters.derived_ref_count > 0);
     try std.testing.expect(counters.universal_metas_created > 0);

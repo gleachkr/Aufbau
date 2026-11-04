@@ -1844,7 +1844,7 @@ test "a definition's dummy takes a theorem's bound variable when its sort has no
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{
-        "all_elim [all_elim (t := $ u $, p := $ ∀ b (pair f a = pair f b → a = b) $) [#1]]",
+        "all_elim [all_elim (t := $ u $, p := $ ∀ a (pair f b = pair f a → b = a) $) [#1]]",
     });
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }

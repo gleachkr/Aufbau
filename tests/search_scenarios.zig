@@ -882,8 +882,8 @@ pub const scenarios = [_]Scenario{
         .mm0_path = "tests/search_bench_cases/all_elim_forward.mm0",
         .proof_path = "tests/search_bench_cases/all_elim_forward.auf",
         .marker = "auto?",
-        .expected_replacement = "all_elim [all_elim (t := $ u $, p := $ ∀ b (pair f a = pair f " ++
-            "b → a = b) $) [#1]]",
+        .expected_replacement = "all_elim [all_elim (t := $ u $, p := $ ∀ a (pair f b = pair f " ++
+            "a → b = a) $) [#1]]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
@@ -911,8 +911,8 @@ pub const scenarios = [_]Scenario{
         .mm0_path = "tests/search_bench_cases/all_elim_forward.mm0",
         .proof_path = "tests/search_bench_cases/all_elim_forward.auf",
         .marker = "auto?",
-        .expected_replacement = "all_elim [all_elim (t := $ u $, p := $ ∀ b (pair f a = pair f " ++
-            "b → a = b) $) [#1]]",
+        .expected_replacement = "all_elim [all_elim (t := $ u $, p := $ ∀ a (pair f b = pair f " ++
+            "a → b = a) $) [#1]]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{

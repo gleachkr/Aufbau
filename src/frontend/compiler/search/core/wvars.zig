@@ -27,7 +27,11 @@
 //! steps bar it from. Narrowing puts it into an older wvar, so W6, which
 //! keeps an eigenvariable out of what existed before it, does not apply;
 //! instead the name's level is the lowest of the wvars holding it, and it
-//! merges with an eigenvariable only below that level.
+//! merges with an eigenvariable only below that level. A dummy of the
+//! unfolding of a ground expression is a bound name too, kept out of the
+//! unfolding: an expression is unfolded once for the run while no step
+//! has used its dummies (`Terms.unfold`), so as an eigenvariable the
+//! dummy's level would say when that was, not where it is used.
 //!
 //! A wvar also carries the variables bound inside the formula it was swapped
 //! into: holding one of those, or a theorem variable that depends on one,
@@ -116,12 +120,18 @@ pub const WVar = struct {
     /// occur nowhere in its introduction goal. A later step whose bound
     /// binder it is adds its own such arguments (`bar`).
     fresh_in: ?[]const ExprId = null,
-    /// A bound name (see the module doc). Its introduction goal is its own
-    /// leaf, and `fresh_in` starts empty.
+    /// A bound name (see the module doc). A narrowing's is introduced at
+    /// its own leaf, with `fresh_in` empty; an unfolding's dummy at the
+    /// unfolding.
     name: bool = false,
     cut: bool = false,
     hole: bool = false,
     value: ?ExprId = null,
+
+    /// For a bound name, whether a wvar holds it, which set its level.
+    pub fn held(self: WVar) bool {
+        return self.level != std.math.maxInt(u32);
+    }
 };
 
 const Entry = union(enum) {
@@ -359,18 +369,19 @@ pub const WVars = struct {
         return expr;
     }
 
-    /// A new bound name (`WVar.name`), which no wvar holds yet.
-    pub fn introduceName(self: *WVars, sort_name: []const u8) Error!ExprId {
+    /// A new bound name (`WVar.name`), which no wvar holds yet, kept out of
+    /// `goal`, or of nothing until a step bars it when that is null.
+    pub fn introduceName(self: *WVars, sort_name: []const u8, goal: ?ExprId) Error!ExprId {
         const expr = try self.add(.{
             .expr = undefined,
             .sort_name = sort_name,
             .level = std.math.maxInt(u32),
             .capture = &.{},
-            .introduced_at = undefined,
-            .fresh_in = &.{},
+            .introduced_at = goal,
+            .fresh_in = if (goal == null) &.{} else null,
             .name = true,
         });
-        self.vars.items[self.count() - 1].introduced_at = expr;
+        if (goal == null) self.vars.items[self.count() - 1].introduced_at = expr;
         return expr;
     }
 
