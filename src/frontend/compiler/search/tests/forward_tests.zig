@@ -412,7 +412,8 @@ test "derived ref with universal meta matches a later concrete goal" {
         fwd_universal_mm0,
         proof_src,
         "auto?",
-        .{ .counters = &counters, .generate = .{ .enabled = true } },
+        // The ladder alone: the search core proves it first, by `all_elim` backward.
+        .{ .counters = &counters, .generate = .{ .enabled = true, .core = false } },
     );
     defer suggestions.deinit();
 
@@ -627,7 +628,8 @@ test "derived recipe through a binder def names its hidden variables from the @v
         fwd_pool_mm0,
         proof_src,
         "auto?",
-        .{ .generate = .{ .enabled = true } },
+        // The ladder alone: the search core proves it first, by `all_elim` backward.
+        .{ .generate = .{ .enabled = true, .core = false } },
     );
     defer suggestions.deinit();
 
@@ -677,7 +679,8 @@ test "derived recipe names a hidden variable apart from a sibling binding" {
         fwd_sibling_mm0,
         proof_src,
         "auto?",
-        .{ .counters = &counters, .generate = .{ .enabled = true } },
+        // The ladder alone: the search core proves it first, by `all_elim` backward.
+        .{ .counters = &counters, .generate = .{ .enabled = true, .core = false } },
     );
     defer suggestions.deinit();
     try std.testing.expectEqual(types.SearchStatus.found, suggestions.status);

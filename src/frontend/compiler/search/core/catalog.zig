@@ -28,7 +28,10 @@
 //!   known, by its normal form (`terms.zig`).
 //!
 //! A rule whose conclusion is a bare binder (`mp`'s `b`) applies to every
-//! goal of that binder's sort; its other binders are cuts.
+//! goal of that binder's sort; its other binders are cuts. So does one
+//! whose conclusion is headed by a term some `@rewrite` rule rewrites
+//! (`ax_inst`'s `[x/t] p`): its normal form may have any head, so it meets
+//! every goal of its sort, postponed until its premises bind its cuts.
 //!
 //! A rule whose view abstracts a binder (`@abstract`, `eq_replace`'s `p`
 //! read off `q` and `r`) is searched as its view: the core matches the
@@ -154,12 +157,14 @@ pub fn readsLaw(law: AcuiBag.Law) bool {
     return law != .idempotent_sequence;
 }
 
-/// The head the rules with a bare-binder conclusion are listed under.
+/// The head the rules whose conclusion is a bare binder or headed by a
+/// rewritten term are listed under.
 pub const bare_head = std.math.maxInt(u32);
 
 pub const Catalog = struct {
     allocator: std.mem.Allocator,
-    /// Admitted rules by conclusion head (`bare_head` for a bare binder):
+    /// Admitted rules by conclusion head (`bare_head` for a bare binder or
+    /// a rewritten head):
     /// closers, then safe rules by priority, then unsafe rules, each in
     /// declaration order.
     by_head: std.AutoHashMapUnmanaged(u32, []const Rule) = .empty,
@@ -213,7 +218,7 @@ pub fn build(allocator: std.mem.Allocator, context: *const Context, terms: *cons
             entry.priority = priority;
         }
         const head = switch (concl) {
-            .app => |app| app.term_id,
+            .app => |app| if (terms.isRewritten(app.term_id)) bare_head else app.term_id,
             .binder => bare_head,
         };
         const gop = try lists.getOrPut(allocator, head);

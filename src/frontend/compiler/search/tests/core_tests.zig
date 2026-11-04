@@ -1798,3 +1798,53 @@ test "the search core splits a context hole and empties the parts nothing fills"
     try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
+
+fn benchSearch(
+    arena: *std.heap.ArenaAllocator,
+    comptime mm0_name: []const u8,
+    comptime proof: []const u8,
+    counters: *types.SearchCounters,
+) !types.SourceSuggestions {
+    const mm0 = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/" ++ mm0_name, arena.allocator(), .unlimited);
+    return suggestionsAtNeedle(arena, mm0, proof, "auto?", .{
+        .counters = counters,
+        .generate = .{ .enabled = true, .ladder = false },
+    });
+}
+
+test "a rule whose conclusion is a substitution meets a goal of another head" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `all_elim`'s conclusion `[x/t] p` is headed by `sb_f`, which a
+    // `@rewrite` rule rewrites: it meets `Q K` once `#1` fixes `p`.
+    var suggestions = try benchSearch(&arena, "forward_backward_compose.mm0",
+        \\fwd_bwd_minor_in_pool
+        \\---------------------
+        \\l1: $ Q K $ by auto?
+    , &counters);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"mp [all_elim [#1], #2]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "a definition's dummy takes a theorem's bound variable when its sort has no pool" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `mono f` unfolds to `∀ a ∀ b (…)` over hidden `.a .b`; with no `@vars`
+    // pool for `obj`, the theorem's unused bound `a`, `b` name them.
+    var suggestions = try benchSearch(&arena, "all_elim_forward.mm0",
+        \\all_elim_forward_inst
+        \\---------------------
+        \\l1: $ (pair f u = pair f v) → (u = v) $ by auto?
+    , &counters);
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{
+        "all_elim [all_elim (t := $ u $, p := $ ∀ b (pair f a = pair f b → a = b) $) [#1]]",
+    });
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}

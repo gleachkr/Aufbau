@@ -18,7 +18,8 @@
 //! The run works in a clone of the call's theorem, discarded at the end.
 //! The proof record is rendered as one `RuleApplication` tree with every
 //! binding explicit, a witness variable or eigenvariable left unbound
-//! named from its sort's `@vars` pool, and the checker validates it once
+//! named from its sort's `@vars` pool or the theorem's bound variables
+//! (`Prover.pool`), and the checker validates it once
 //! against the goal as written, holes and all (D5): the checker stays the
 //! only authority on what the core returns.
 
@@ -217,7 +218,7 @@ const CloseOut = struct {
     request: Request,
     theorem: *TheoremContext,
     wvars: *WVars,
-    /// Set once the prover exists; names come from its `@vars` pools.
+    /// Set once the prover exists; names come from its naming pools.
     prover: *Prover = undefined,
     /// Names of the wvars left unbound, by wvar index, during one render.
     names: std.AutoHashMapUnmanaged(u32, ExprId) = .empty,
@@ -301,7 +302,7 @@ const CloseOut = struct {
     }
 
     /// Name every eigenvariable the proof leaves unbound, oldest first, with
-    /// the first variable of its sort's `@vars` pool that, as named so far,
+    /// the first variable of its sort's naming pool that, as named so far,
     /// none of its introduction goal, those of the eigenvariables bound to
     /// it, and the other arguments not depending on it of each step whose
     /// bound binder it is (MM0's condition) mention. Two eigenvariables may
@@ -413,7 +414,7 @@ const CloseOut = struct {
     }
 
     /// Name each wvar `value` leaves unbound with the first variable of its
-    /// sort's `@vars` pool it admits (`WVars.admits`), unless an earlier
+    /// sort's naming pool it admits (`WVars.admits`), unless an earlier
     /// binding already named it. False when one admits none. A hole's wvar
     /// of a bag's sort takes the bag's unit instead: no step fixed it, so
     /// any value does, and the unit is the least.

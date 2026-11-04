@@ -301,7 +301,7 @@ pub const Prover = struct {
     terms: *Terms,
     wvars: *WVars,
     keys: *Keys,
-    /// Names the `@vars` pools, for close-out.
+    /// Names the naming pools' variables, for close-out.
     theorem_vars: *const NameExprMap,
     catalog: *const Catalog,
     facts: []const Fact,
@@ -321,7 +321,7 @@ pub const Prover = struct {
     proved: std.AutoHashMapUnmanaged(ExprId, Proved) = .empty,
     /// The same per key of a goal holding wvars.
     proved_open: std.StringHashMapUnmanaged(Proved) = .empty,
-    /// Each sort's `@vars` pool variables, in pool order.
+    /// Each sort's naming pool (`pool`).
     pools: std.StringHashMapUnmanaged([]const ExprId) = .empty,
     /// The innermost split whose premises are being proved.
     splits: ?*const Split = null,
@@ -824,9 +824,10 @@ pub const Prover = struct {
                 .rules = if (head) |id| self.catalog.forHead(id) else &.{},
                 .picks = if (index) |found| found.query(self.terms, target, scratch) else null,
             };
-            // A bare-binder conclusion matches the goal as it stands.
+            // A bare-binder or rewritten-head conclusion matches the goal as
+            // it stands.
             const bare = Picked{ .rules = if (at == 0) self.catalog.forHead(catalog_mod.bare_head) else &.{} };
-            for ([_]Picked{ by_head, bare }) |picked| {
+            for ([_]Picked{ by_head, bare }, [_]bool{ false, true }) |picked, from_bare| {
                 var rules = picked;
                 while (rules.next()) |entry| {
                     switch (entry.role) {
@@ -835,9 +836,9 @@ pub const Prover = struct {
                         .unsafe => if (goal.depth == 0 or any_safe) break,
                     }
                     const rule = entry.statement(self.context);
-                    // A bare-binder conclusion matches only goals of its sort.
+                    // Such a conclusion matches only goals of its sort.
                     switch (rule.concl) {
-                        .app => {},
+                        .app => |app| if (from_bare and !std.mem.eql(u8, self.context.env.terms.items[app.term_id].ret_sort_name, goal_sort orelse break)) continue,
                         .binder => |idx| if (!std.mem.eql(u8, rule.args[idx].sort_name, goal_sort orelse break)) continue,
                     }
                     if (entry.role == .unsafe) {
@@ -1857,6 +1858,9 @@ pub const Prover = struct {
         };
     }
 
+    /// The variables that may name a wvar of `sort_name` left unbound: its
+    /// `@vars` pool in pool order, then the theorem's own bound variables of
+    /// the sort by name (the ladder's `forward.Namer` takes them too).
     pub fn pool(self: *Prover, sort_name: []const u8) Error![]const ExprId {
         if (self.pools.get(sort_name)) |known| return known;
         var vars = try PoolVars.init(
@@ -1874,6 +1878,33 @@ pub const Prover = struct {
                 else => break,
             } orelse break;
             try out.append(self.arena, pool_var.expr);
+        }
+        const theorem = self.terms.theorem;
+        var names = std.ArrayListUnmanaged([]const u8).empty;
+        defer names.deinit(self.allocator);
+        var it = self.theorem_vars.iterator();
+        while (it.next()) |entry| {
+            const var_id = theorem.parser_vars.get(entry.value_ptr.*) orelse continue;
+            const idx = switch (var_id) {
+                .theorem_var => |idx| idx,
+                else => continue,
+            };
+            if (idx >= theorem.arg_infos.len) continue;
+            const info = theorem.arg_infos[idx];
+            if (!info.bound or !std.mem.eql(u8, info.sort_name, sort_name)) continue;
+            try names.append(self.allocator, entry.key_ptr.*);
+        }
+        std.mem.sort([]const u8, names.items, {}, struct {
+            fn lt(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.order(u8, a, b) == .lt;
+            }
+        }.lt);
+        for (names.items) |name| {
+            const expr = theorem.internParsedExpr(self.theorem_vars.get(name).?) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => continue,
+            };
+            if (std.mem.indexOfScalar(ExprId, out.items, expr) == null) try out.append(self.arena, expr);
         }
         try self.pools.put(self.allocator, sort_name, out.items);
         return out.items;

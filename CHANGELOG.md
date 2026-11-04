@@ -30,7 +30,8 @@ This file records notable user-facing changes to Aufbau. The project follows
   `f` of `λ f. f · p · q` in a definition's equation stated as a
   rule). The core unfolds a definition in a goal or hypothesis where a
   rule needs what the definition stands for, with the definition's
-  hidden bound variables named once the proof needs them, and named
+  hidden bound variables named once the proof needs them (from the
+  sort's `@vars` pool, then the theorem's own bound variables), and named
   apart where two uses of the definition need different ones (a Church
   numeral's type at two instances), and tries a goal in its `@rewrite` normal form too, so an
   induction rule's premise stated as a substitution meets the facts for
@@ -41,7 +42,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   proof, as for modus ponens. A substitution of a witness still unknown
   (`all_elim`'s `[x/t] p`) meets the goal in the form it reduces to with
   the witness as a fresh variable, which fixes the witness where the
-  goal says what it is. A rule's conclusion gives an unknown the
+  goal says what it is. A rule whose conclusion is nothing but such a
+  substitution (a Hilbert-style `ax_inst`, `∀ x p > [x/t] p`) is tried
+  on every goal of its sort, since what it reduces to may have any head.
+  A rule's conclusion gives an unknown the
   structure the rest of the conclusion fixes (`R a (f a)` against
   `R C ?t` makes the witness `f C`), and never structure nothing fixes.
   A rule joining several contexts

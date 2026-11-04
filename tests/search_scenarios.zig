@@ -927,7 +927,8 @@ pub const scenarios = [_]Scenario{
         .marker = "auto?",
         .expected_replacement = "all_elim [all_elim (t := $ v $) [all_elim (t := $ u $, p := $ " ++
             "∀ a ∀ b (pair (pair g c) a = pair a b → c = b) $) [#1]]]",
-        .generate = .{ .enabled = true, .max_depth = 6 },
+        // The search core proves it too, by `all_elim` backward.
+        .generate = .{ .enabled = true, .max_depth = 6, .core = false },
     },
     .{
         // STAGE 8 realistic two-layer chain in the full euclid theory: the
