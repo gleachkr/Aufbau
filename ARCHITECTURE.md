@@ -939,7 +939,8 @@ deterministic and may use:
 
 - recursive representative rebuilding
 - canonicalization by the `Canonicalizer` (`normalizer.zig`)
-- compression back to a def-headed form when possible
+- compression back to a def-headed form when possible (an expression
+  already headed by a def keeps it)
 
 That split matters because derived-binding logic such as `@recover` and
 `@abstract` needs the materialized structure, while semantic comparison
@@ -952,7 +953,10 @@ The symbolic layer is strictly internal.
 
 After a successful rule match, finalization returns an ordinary concrete
 `[]const ExprId` binding list. Only after that do the usual sort,
-boundness, and dependency checks run.
+boundness, and dependency checks run. A binding read off the line
+finalizes to the expression it was matched at, canonicalized, not to its
+representative: the representative also folds it into definitions, which
+the line may never mention.
 
 Hidden-dummy witnesses may materialize as main-theorem dummy vars at two
 proof-producing seams: rule-match finalization and conclusion normalization
@@ -1123,8 +1127,9 @@ member normalized where it stands, so a member that rewrites costs its own
 rewrite and the moves rather than a sort of both bags. When the attempt
 fails, its lines are rolled back and the normalizer's cache, which may hold
 proofs among them, is cleared before the normal forms are built. def_ops
-finalization uses it too, keeping a binding's matched spelling over its
-sorted representative when the two differ only that way. Where the rule
+finalization uses it too, for a binding that holds placeholders, keeping
+its matched spelling over its sorted representative when the two differ
+only that way. Where the rule
 states a binding under a term with no `@congr`, the checker then takes the
 spelling the line has there (`pinUncongruentBindings` in
 `compiler/check/bindings.zig`), since no conversion reaches inside.

@@ -461,7 +461,7 @@ test "def conversion plan unfolds to an exact target" {
     }
 }
 
-test "semantic seeds finalize to representatives while exact seeds stay raw" {
+test "semantic seeds finalize to their own expression, not a def it folds into" {
     const src =
         \\delimiter $ ( ) $;
         \\provable sort wff;
@@ -522,7 +522,8 @@ test "semantic seeds finalize to representatives while exact seeds stay raw" {
     defer semantic_session.deinit();
     const semantic_bindings = try semantic_session.finalizeConcreteBindings();
     try std.testing.expectEqual(@as(usize, 1), semantic_bindings.len);
-    try std.testing.expectEqual(folded, semantic_bindings[0]);
+    try std.testing.expectEqual(raw, semantic_bindings[0]);
+    try std.testing.expect(folded != semantic_bindings[0]);
 
     var exact_session = try def_ops.beginRuleMatch(
         rule.args,
@@ -599,13 +600,15 @@ test "semantic seeds reuse representative-aware matches" {
     try std.testing.expect(
         try semantic_session.matchTransparent(rule.concl, actual),
     );
+    // The seed matched `double a` through the def and keeps its own
+    // spelling: finalization does not fold it into `double` (#586).
     const semantic_bindings = try semantic_session.finalizeConcreteBindings();
     try std.testing.expectEqual(@as(usize, 1), semantic_bindings.len);
-    try std.testing.expectEqual(folded, semantic_bindings[0]);
+    try std.testing.expectEqual(raw, semantic_bindings[0]);
+    try std.testing.expect(folded != semantic_bindings[0]);
 
-    // Exact seeds still match transparently (matching unfolds defs either
-    // way); exactness governs finalization, which keeps the raw seed value
-    // instead of the representative-folded form.
+    // Exact seeds match transparently too (matching unfolds defs either
+    // way) and finalize to the raw seed value.
     var exact_session = try def_ops.beginRuleMatch(
         rule.args,
         &.{DefOps.BindingSeed{ .exact = raw }},
@@ -1426,7 +1429,7 @@ test "compression preserves distinct hidden binders" {
     try expectRepresentative(src, "backward", "backward");
 }
 
-test "compression still folds alpha equivalent hidden binders" {
+test "compression folds into a def with alpha-renamed hidden binders" {
     const src =
         \\sort obj;
         \\provable sort wff;
@@ -1435,7 +1438,9 @@ test "compression still folds alpha equivalent hidden binders" {
         \\def renamed (.u .v: obj): wff = $ shape u v u v $;
         \\theorem host {x y: obj}: $ renamed $;
     ;
-    try expectRepresentative(src, "renamed", "forward");
+    // A def-headed expression keeps its def rather than trading it for an
+    // alpha-equivalent one declared earlier (#586).
+    try expectRepresentative(src, "renamed", "renamed");
     try expectRepresentative(src, "shape x y x y", "forward");
 }
 

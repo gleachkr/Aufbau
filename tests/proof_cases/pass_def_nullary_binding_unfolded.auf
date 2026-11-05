@@ -1,0 +1,4 @@
+pass_def_nullary_binding_unfolded
+---------------------------------
+l1: $ ty (cons (bvar (s z)) (cons (bvar z) G)) (bvar (s z)) (bvar (s (s z))) $
+  by bv [lookup_s [lookup_z [lift1 []], lift1 []]]

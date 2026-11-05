@@ -251,6 +251,17 @@ This file records notable user-facing changes to Aufbau. The project follows
   It now remembers the failure for the part of the state the comparison
   can reach. A set-theory library whose lines took up to minutes each
   now compiles in under a second.
+- A definition could be read as another one with the same body: `d2 f`
+  became `d1 f` when an alpha-equivalent `d1`, or a proof-local
+  definition with the same body, was declared first. Converting back
+  then needed a fresh `@vars` name ("hidden def witness needed a fresh
+  @vars token") or a `@congr` rule for the other definition. An
+  expression headed by a definition now keeps it.
+- A rule variable read off a line now takes the expression the line has
+  there, in its `@rewrite` normal form, not that expression folded into a
+  definition with the same body. With a 0-ary
+  `def n1: nat = $ s z $`, `s z` came back as `n1`, and an inline
+  sub-proof written for `s z` could not infer its variables.
 - A suggestion could keep every binding it was found with when the
   checker, left to infer one, chose the binding's `@rewrite` normal form
   and could not convert the line back. Trimming now counts an inferred

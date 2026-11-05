@@ -348,6 +348,20 @@ pub fn finalizeBoundValue(
 ) anyerror!ExprId {
     return switch (bound) {
         .concrete => |concrete| {
+            // The matched expression in normal form, not its
+            // representative: def compression folds `s z` into a 0-ary
+            // `n1 := s z` the line never mentions, and a reader matching the
+            // exported value structurally (an inline hint) cannot see
+            // through it (#586). Placeholders still need their witnesses.
+            if (concrete.mode != .exact and
+                self.shared.exprIsPlaceholderFree(concrete.raw))
+            {
+                const normal = if (self.shared.registry != null)
+                    try self.shared.canonicalize(concrete.raw)
+                else
+                    concrete.raw;
+                return try self.shared.keepMatchedOrder(concrete.raw, normal);
+            }
             const representative = (try concreteBindingMatchExpr(
                 self,
                 concrete,

@@ -252,6 +252,13 @@ pub fn compressRepresentativeToDef(
     else
         .symbolic;
 
+    // A def-headed expression keeps its def. Its own def matches it, and
+    // comes before any def wrapping it, so the first fold could only trade
+    // it for a look-alike declared earlier (an alpha-equivalent copy, or a
+    // proof-local def with the same body), which its readers then have to
+    // unfold back (#586).
+    if (isDefHeaded(self, symbolic)) return null;
+
     const candidates = try self.shared.defCompressionCandidates(sort_name);
     term_loop: for (candidates) |term_id| {
         const term = self.shared.env.terms.items[term_id];
@@ -363,6 +370,18 @@ pub fn compressRepresentativeToDef(
         } });
     }
     return null;
+}
+
+fn isDefHeaded(self: anytype, symbolic: *const SymbolicExpr) bool {
+    const head = switch (symbolic.*) {
+        .app => |app| app.term_id,
+        .fixed => |expr_id| switch (self.shared.theorem.interner.node(expr_id).*) {
+            .app => |app| app.term_id,
+            .variable, .placeholder => return false,
+        },
+        .binder, .dummy => return false,
+    };
+    return self.shared.env.terms.items[head].is_def;
 }
 
 const MatchTarget = union(enum) {

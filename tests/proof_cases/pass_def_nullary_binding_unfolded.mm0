@@ -1,0 +1,22 @@
+-- A 0-ary def must not swallow the binding an inline sub-proof's rule
+-- reads off the line: `s z` stays `s z`, not `n1`.
+delimiter $ ( ) $;
+strict free sort nat;
+term z: nat;
+term s: nat > nat;
+def n1: nat = $ s z $;
+strict free sort expr;
+term bvar: nat > expr;
+strict free sort ctx;
+term cons: expr > ctx > ctx;
+provable sort wff;
+term lift: expr > expr > wff;
+term lookup: ctx > nat > expr > wff;
+term tyeq: ctx > expr > expr > expr > wff;
+def ty (G: ctx) (e A: expr): wff = $ tyeq G e e A $;
+axiom lift1 (i: nat): $ lift (bvar i) (bvar (s i)) $;
+axiom lookup_z (A A2: expr) (G: ctx): $ lift A A2 $ > $ lookup (cons A G) z A2 $;
+axiom lookup_s (A B B2: expr) (G: ctx) (n: nat):
+  $ lookup G n B $ > $ lift B B2 $ > $ lookup (cons A G) (s n) B2 $;
+axiom bv (G: ctx) (i: nat) (A: expr): $ lookup G i A $ > $ tyeq G (bvar i) (bvar i) A $;
+theorem pass_def_nullary_binding_unfolded (G: ctx): $ ty (cons (bvar (s z)) (cons (bvar z) G)) (bvar (s z)) (bvar (s (s z))) $;

@@ -85,6 +85,13 @@ const proof_cases = [_]ProofCase{
     // compression targets; folding into one used to recurse until the
     // stack overflowed.
     .{ .stem = "pass_def_projection", .outcome = .pass },
+    // Def compression folded a def-headed context member into an earlier
+    // alpha-equivalent def, and folding back needed a fresh @vars name the
+    // theorem had used up (#586).
+    .{ .stem = "pass_def_keeps_own_def", .outcome = .pass },
+    // An inferred binding came back folded into a 0-ary def (`s z` as `n1`),
+    // which an inline sub-proof's rule could not match (#586).
+    .{ .stem = "pass_def_nullary_binding_unfolded", .outcome = .pass },
     .{ .stem = "pass_keep", .outcome = .pass },
     .{ .stem = "pass_label", .outcome = .pass },
     .{ .stem = "pass_chained_alpha", .outcome = .pass },

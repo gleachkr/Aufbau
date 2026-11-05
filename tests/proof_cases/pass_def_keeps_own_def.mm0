@@ -1,0 +1,24 @@
+delimiter $ { } | $;
+import "lib/nd.mm0";
+
+--| @vars x y z u v w a b c f g i j k
+sort set;
+strict sort class;
+term cv (a: set): class;
+coercion cv: set > class;
+term cab {x: set} (p: wff x): class;
+notation cab {x: set} (p: wff x): class = (${$:max) x ($|$:0) p ($}$:0);
+term welc (a: set) (A: class): wff;
+infixl welc: $∊$ prec 50;
+
+axiom weaken (G H: ctx) (p: wff): $ G ⊢ p $ > $ G , H ⊢ p $;
+
+--| Two alpha-equivalent defs; `d1` comes first.
+def d1 (A: class) (.y: set): class = $ {y | y ∊ A} $;
+def d2 (A: class) (.z: set): class = $ {z | z ∊ A} $;
+
+--| The context mentions `d2` and the theorem takes every @vars name, so
+--| folding `d2 f` into the look-alike `d1 f` would need a fresh name to
+--| convert back.
+theorem pass_def_keeps_own_def (G: ctx) (a b c f g i j k u v w x y z: set):
+  $ G ⊢ a ∊ b $ > $ G , c ∊ d2 f , g ∊ i , j ∊ k , u ∊ v , w ∊ x , y ∊ z ⊢ a ∊ b $;
