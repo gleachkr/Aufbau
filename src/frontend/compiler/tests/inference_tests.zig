@@ -1294,7 +1294,9 @@ test "compiler warns on unused theorem parameters" {
     }
 }
 
-test "dependency-only theorem parameter use suppresses warning" {
+test "theorem parameter named only in a dependency list is unused" {
+    // No hypothesis or conclusion mentions `x`, so inference can never
+    // determine it: every citation would have to name it.
     const mm0_src =
         \\delimiter $ ( ) $;
         \\sort obj;
@@ -1304,10 +1306,16 @@ test "dependency-only theorem parameter use suppresses warning" {
 
     var compiler = Compiler.init(std.testing.allocator, mm0_src);
     try compiler.check();
-    try std.testing.expectEqual(
-        @as(usize, 0),
-        compiler.warningDiagnostics().len,
-    );
+
+    const warnings = compiler.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), warnings.len);
+    try std.testing.expectEqual(.unused_theorem_parameter, warnings[0].kind);
+    switch (warnings[0].detail) {
+        .unused_parameter => |detail| {
+            try std.testing.expectEqualStrings("x", detail.parameter_name);
+        },
+        else => return error.ExpectedUnusedParameterDetail,
+    }
 }
 
 test "compiler warns on unused proof-local theorem parameters" {

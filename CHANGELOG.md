@@ -130,6 +130,11 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Changed
 
+- A theorem's or axiom's bound variable named only in dependency lists
+  (`{k: set} (G: hyps k)` with no `k` in any hypothesis or the
+  conclusion) is now reported as an unused parameter. Such a variable is
+  idle, and inference can never determine it, so every use had to name
+  it.
 - The `nd_fol` bench fixture decomposes a negated assumption on the left,
   with one eager rule per connective (`¬ ¬`, `¬ ∨`, `¬ →`, `¬ ∧`, `¬ ↔`, and
   `¬ ∀` and `¬ ∃` turned into `∃ ¬` and `∀ ¬`) and `contra_left` to close
@@ -242,6 +247,17 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- An inference failure named the first rule variable the line did not
+  give, often one the statement determines: `first unsolved binder: u`
+  for a lemma whose `k` occurs nowhere in its statement. When every
+  reading of the line leaves a variable open, the error now names that
+  variable (`missing binder: k`) with the bindings the readings agree
+  on, and a failure where no reading matches names none.
+- An inference failure on a rule whose premise holds a term with
+  `@rewrite` rules (`G ⇒ [x/t] p`) said that no way of filling in the
+  rule's variables makes them match. Inference reads such a premise in
+  one rewritten form only, so that was not shown; the error now says
+  that a `@view` annotation may be required to infer the variables.
 - A line that compares expressions through definitions could take
   minutes, or never finish, when the comparison failed
   (`⟦ x / t ⟧ (cgr y (nmul y A)) ≐ cgr y (nmul y A)`). The matcher

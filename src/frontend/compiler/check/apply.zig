@@ -1479,7 +1479,21 @@ const NodeInference = struct {
             setup.use_advanced_inference,
             setup.has_omitted_structural,
             setup.prefer_structural_solver,
-        );
+        ) catch |err| {
+            if (setup.maybe_view == null) {
+                if (n.self.diagnostics.getDiagnostic()) |pending| {
+                    var diag = pending;
+                    Inference.addRewritePremiseHint(
+                        &diag,
+                        n.context.env,
+                        n.context.registry,
+                        n.rule,
+                    );
+                    n.self.diagnostics.restoreDiagnostic(diag);
+                }
+            }
+            return err;
+        };
     }
 
     /// `infer` on a withheld application (`BindingOracle`): with nothing

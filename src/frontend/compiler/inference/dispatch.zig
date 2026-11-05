@@ -701,32 +701,15 @@ pub fn inferBindings(
             ref_exprs,
             line_expr,
         ) catch |err| {
-            try traceInferenceFailure(
-                self.debug,
-                allocator,
-                theorem,
-                env,
-                rule,
-                .structural_solver,
+            try Strategies.reportStructuralSolverFailure(
+                self,
+                context,
+                line,
+                &solver,
                 err,
                 partial_bindings,
                 solver_bindings,
-            );
-            self.setProof(
-                try buildInferenceFailureDiagnostic(
-                    allocator,
-                    env,
-                    theorem,
-                    assertion,
-                    rule,
-                    line,
-                    .structural_solver,
-                    err,
-                    partial_bindings,
-                    solver_bindings,
-                    fresh_context,
-                    Strategies.solverFailureMismatch(&solver),
-                ),
+                fresh_context,
             );
             return err;
         };

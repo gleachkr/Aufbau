@@ -219,9 +219,6 @@ axiom sb_ty_shadow {x: tm} (u v: tm) (A: ty x):
   $ [x/u] [x/v] A ~ [x/v] A $;
 
 --| @rewrite
-axiom sb_ty_other {x y: tm} (u: tm x) (A: ty y): $ [x/u] A ~ A $;
-
---| @rewrite
 axiom sb_ty_free {x: tm} (u: tm x) (A: ty): $ [x/u] A ~ A $;
 
 --| @rewrite

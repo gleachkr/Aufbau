@@ -1211,6 +1211,150 @@ test "compiler reports which binder assignment is missing" {
     );
 }
 
+test "structural inference names the binder no reading solves" {
+    // `k` occurs nowhere in `leftover`'s statement, so every reading of the
+    // context leaves it open; `u`, which the user did not give either, is
+    // solved.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort fml;
+        \\sort obj;
+        \\sort hyps;
+        \\term emp: hyps;
+        \\--| @acui hyps_assoc hyps_comm emp hyps_idem
+        \\term join (G H: hyps): hyps;
+        \\infixl join: $,$ prec 5;
+        \\term hyps_eq (G H: hyps): wff;
+        \\--| @relation hyps hyps_eq hyps_refl hyps_trans hyps_sym _
+        \\axiom hyps_refl (G: hyps): $ hyps_eq G G $;
+        \\axiom hyps_trans (G H K: hyps): $ hyps_eq G H $ > $ hyps_eq H K $ > $ hyps_eq G K $;
+        \\axiom hyps_sym (G H: hyps): $ hyps_eq G H $ > $ hyps_eq H G $;
+        \\axiom hyps_assoc (G H K: hyps): $ hyps_eq ((G , H) , K) (G , (H , K)) $;
+        \\axiom hyps_comm (G H: hyps): $ hyps_eq (G , H) (H , G) $;
+        \\axiom hyps_idem (G: hyps): $ hyps_eq (G , G) G $;
+        \\axiom hyps_unit (G: hyps): $ hyps_eq (emp , G) G $;
+        \\term nd (G: hyps) (p: fml): wff;
+        \\infixl nd: $|-$ prec 0;
+        \\term ex {x: obj} (p: fml x): fml;
+        \\term P (a: obj): fml;
+        \\axiom leftover {u k: obj} (G: hyps) (a: obj): $ G |- ex u (P a) $ > $ G |- ex u (P a) $;
+        \\theorem use {u: obj} (G: hyps) (a: obj): $ G |- ex u (P a) $ > $ G |- ex u (P a) $;
+    ;
+    const proof_src =
+        \\use
+        \\---
+        \\l1: $ G |- ex u (P a) $ by leftover [#1]
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.MissingBinderAssignment,
+        compiler.compileMmb(std.testing.allocator),
+    );
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(.missing_binder_assignment, diag.kind);
+    try std.testing.expectEqualStrings("k", diag.name.?);
+    switch (diag.detail) {
+        .missing_binder_assignment => |detail| {
+            try std.testing.expectEqualStrings("k", detail.binder_name);
+            try std.testing.expectEqual(.structural_solver, detail.path);
+        },
+        else => return error.ExpectedMissingBinderDetail,
+    }
+    try std.testing.expectEqual(@as(usize, 1), diag.noteSlice().len);
+    try expectNoteText(
+        "inferred bindings before failure: u = u; G = G; a = a",
+        diag.noteSlice()[0],
+    );
+}
+
+test "inference on a @rewrite premise points at a @view" {
+    // The structural solver reads `[x/t] p` by `sb_vac`, binding `p` to the
+    // whole premise, so the conclusion fails although `t := y` fits: the
+    // failure is not "no filling matches", and a @view is the fix.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort obj;
+        \\sort ctx;
+        \\term ctx_eq (g h: ctx): wff;
+        \\term emp: ctx;
+        \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+        \\term join (g h: ctx): ctx;
+        \\infixl join: $,$ prec 5;
+        \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+        \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+        \\axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+        \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+        \\axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+        \\axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+        \\axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+        \\axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+        \\term iff (a b: wff): wff;
+        \\--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+        \\axiom iff_refl (a: wff): $ iff a a $;
+        \\axiom iff_trans (a b c: wff): $ iff a b $ > $ iff b c $ > $ iff a c $;
+        \\axiom iff_sym (a b: wff): $ iff a b $ > $ iff b a $;
+        \\axiom iff_mp (a b: wff): $ iff a b $ > $ a $ > $ b $;
+        \\term nd (g: ctx) (a: wff): wff;
+        \\infixl nd: $|-$ prec 0;
+        \\--| @congr
+        \\axiom nd_congr (g h: ctx) (a b: wff): $ ctx_eq g h $ > $ iff a b $ > $ iff (g |- a) (h |- b) $;
+        \\term P (a: obj): wff;
+        \\term ex {x: obj} (p: wff x): wff;
+        \\term sb {x: obj} (t: obj x) (p: wff x): wff;
+        \\--| @rewrite
+        \\axiom sb_vac {x: obj} (t: obj x) (p: wff): $ iff (sb x t p) p $;
+        \\--| @rewrite
+        \\axiom sb_P {x: obj} (t: obj x): $ iff (sb x t (P x)) (P t) $;
+        \\axiom ex_intro_raw {x: obj} (g: ctx x) (t: obj x) (p: wff x):
+        \\  $ g |- sb x t p $ > $ g |- ex x p $;
+        \\theorem exists_wit {x: obj} (g: ctx) (y: obj): $ g |- P y $ > $ g |- ex x (P x) $;
+    ;
+    const proof_src =
+        \\exists_wit
+        \\----------
+        \\l1: $ g |- ex x (P x) $ by ex_intro_raw [#1]
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.UnifyMismatch,
+        compiler.compileMmb(std.testing.allocator),
+    );
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(.inference_failed, diag.kind);
+    switch (diag.detail) {
+        .inference_failure => |detail| {
+            try std.testing.expectEqual(.structural_solver, detail.path);
+            try std.testing.expect(detail.first_unsolved_binder_name == null);
+        },
+        else => return error.ExpectedInferenceFailureDetail,
+    }
+    try std.testing.expectEqual(@as(usize, 2), diag.noteSlice().len);
+    try expectNoteText(
+        "the statement does not match the rule's conclusion",
+        diag.noteSlice()[0],
+    );
+    try expectNoteText(
+        "hypothesis 1 of the rule holds a term with @rewrite rules (sb); " ++
+            "a @view annotation may be required to help infer the rule's " ++
+            "variables",
+        diag.noteSlice()[1],
+    );
+}
+
 test "compiler names the binder an inline minor's refs leave open" {
     // `q` fixes `or_l`'s `a`; the hole hides `b`, which nothing determines.
     const mm0_src =

@@ -1225,7 +1225,7 @@ fn conclusionMismatch() ReplayMismatch {
 
 /// Translate the structural solver's recorded constraint failure into the
 /// shared clash-site shape used by inference diagnostics.
-pub fn solverFailureMismatch(solver: *const InferenceSolver) ?ReplayMismatch {
+fn solverFailureMismatch(solver: *const InferenceSolver) ?ReplayMismatch {
     const failure = solver.getFailure() orelse return null;
     return switch (failure.region) {
         .conclusion => conclusionMismatch(),
@@ -1273,37 +1273,97 @@ pub fn tryConcreteStructuralSolver(
         ref_exprs,
         line_expr,
     ) catch |err| {
-        try traceInferenceFailure(
-            self.debug,
-            allocator,
-            theorem,
-            env,
-            rule,
-            .structural_solver,
+        try reportStructuralSolverFailure(
+            self,
+            context,
+            line,
+            &solver,
             err,
             partial_bindings,
             partial_bindings,
-        );
-        self.setProof(
-            try buildInferenceFailureDiagnostic(
-                allocator,
-                env,
-                theorem,
-                assertion,
-                rule,
-                line,
-                .structural_solver,
-                err,
-                partial_bindings,
-                partial_bindings,
-                fresh_context,
-                solverFailureMismatch(&solver),
-            ),
+            fresh_context,
         );
         return err;
     };
     maybeAddStructuralAmbiguityWarning(self, assertion, line, &solver);
     return bindings;
+}
+
+/// Report a failed structural solve. When every reading left a rule binder
+/// unsolved, name the one none of them solved, with the bindings they
+/// agree on, rather than the first binder the line does not give.
+pub fn reportStructuralSolverFailure(
+    self: *CompilerContext,
+    context: *const RuleInferenceContext,
+    line: anytype,
+    solver: *const InferenceSolver,
+    err: anyerror,
+    partial_bindings: []const ?ExprId,
+    solver_bindings: []const ?ExprId,
+    fresh_context: ?HiddenWitnessFreshContext,
+) !void {
+    const allocator = context.allocator;
+    const env = context.env;
+    const theorem = context.theorem;
+    const rule = context.rule;
+    if (err == error.MissingBinderAssignment) {
+        if (solver.undetermined) |undetermined| {
+            try traceInferenceFailure(
+                self.debug,
+                allocator,
+                theorem,
+                env,
+                rule,
+                .structural_solver,
+                err,
+                partial_bindings,
+                undetermined.bindings,
+            );
+            self.setProof(try buildMissingBinderDiagnostic(
+                allocator,
+                env,
+                theorem,
+                context.assertion,
+                rule,
+                line,
+                .structural_solver,
+                partial_bindings,
+                undetermined.bindings,
+                undetermined.missing,
+                fresh_context,
+            ));
+            return;
+        }
+    }
+    try traceInferenceFailure(
+        self.debug,
+        allocator,
+        theorem,
+        env,
+        rule,
+        .structural_solver,
+        err,
+        partial_bindings,
+        solver_bindings,
+    );
+    var diag = try buildInferenceFailureDiagnostic(
+        allocator,
+        env,
+        theorem,
+        context.assertion,
+        rule,
+        line,
+        .structural_solver,
+        err,
+        partial_bindings,
+        solver_bindings,
+        fresh_context,
+        solverFailureMismatch(solver),
+    );
+    // No reading survived to leave a binder unsolved: the first binder the
+    // line does not give is not the cause.
+    diag.detail.inference_failure.first_unsolved_binder_name = null;
+    self.setProof(diag);
 }
 
 pub fn tryConcreteRuleMatchSessionFallback(

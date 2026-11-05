@@ -28,6 +28,7 @@ pub const validateBindingExpr = Validation.validateBindingExpr;
 pub const exprInfo = @import("../binding_validation.zig").exprInfo;
 pub const buildMissingBinderDiagnostic =
     Diagnostics.buildMissingBinderDiagnostic;
+pub const addRewritePremiseHint = Diagnostics.addRewritePremiseHint;
 
 pub const canConvertTransparent = Strategies.canConvertTransparent;
 pub const inferBindingsTransparent = Strategies.inferBindingsTransparent;

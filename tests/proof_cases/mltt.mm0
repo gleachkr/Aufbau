@@ -268,10 +268,6 @@ axiom sb_ty_swap {x y: tm} (A: ty y):
   $ ty_raw_eq ([x/y] [y/x] A) A $;
 
 --| @rewrite
-axiom sb_ty_other {x y: tm} (u: tm x) (A: ty y):
-  $ ty_raw_eq ([x/u] A) A $;
-
---| @rewrite
 axiom sb_ty_free {x: tm} (u: tm x) (A: ty):
   $ ty_raw_eq ([x/u] A) A $;
 

@@ -71,6 +71,19 @@ pub const SolveFailure = struct {
     };
 };
 
+/// Recorded when every reading of a solve matched yet left a rule binder
+/// unsolved (`error.MissingBinderAssignment`), so a diagnostic can name the
+/// binder the application really leaves open rather than the first one
+/// the user did not write.
+pub const Undetermined = struct {
+    /// The bindings every reading agrees on; null where a reading left
+    /// the binder unsolved or two readings disagree.
+    bindings: []?ExprId,
+    /// The first binder no reading solved; failing that, the first null
+    /// in `bindings`.
+    missing: usize,
+};
+
 pub const Solver = struct {
     // During `solveOnce`, `allocator` is repointed at `state_arena`
     // so the throwaway BranchState generations (each solve fans out into many
@@ -96,6 +109,8 @@ pub const Solver = struct {
     ambiguity_warning: bool = false,
     ambiguity_report: AmbiguityReport = .{},
     failure: ?SolveFailure = null,
+    /// Owned by `real_allocator`.
+    undetermined: ?Undetermined = null,
     /// Largest branch population any single constraint left behind during
     /// this solve. Observability only: an `InferenceStatsSink` reads it so a
     /// test can pin that a premise extends the population instead of
@@ -188,6 +203,7 @@ pub const Solver = struct {
         if (self.ambiguity_report.alternative_bindings) |summary| {
             self.real_allocator.free(summary);
         }
+        self.clearUndetermined();
         self.member_order.deinit(self.real_allocator);
         self.canonicalizer.deinit();
         if (self.def_ops_ctx) |*ctx| ctx.deinit();
@@ -262,6 +278,13 @@ pub const Solver = struct {
         return self.failure;
     }
 
+    pub fn clearUndetermined(self: *Solver) void {
+        if (self.undetermined) |undetermined| {
+            self.real_allocator.free(undetermined.bindings);
+        }
+        self.undetermined = null;
+    }
+
     /// Abort the solve if the installed search budget is spent.
     pub fn checkBudget(self: *const Solver) error{SearchBudgetExhausted}!void {
         if (self.budget) |budget| try budget.check();
@@ -316,12 +339,18 @@ pub const Solver = struct {
             if (err == error.OutOfMemory or err == error.SearchBudgetExhausted or
                 !self.saw_def_member) return err;
             const failure = self.failure;
+            var undetermined = self.undetermined;
+            self.undetermined = null;
+            defer if (undetermined) |first| self.real_allocator.free(first.bindings);
             self.open_def_members = true;
             defer self.open_def_members = false;
             return self.solveOnce(partial_bindings, ref_exprs, conclusion) catch |retry_err| {
                 if (retry_err == error.OutOfMemory or
                     retry_err == error.SearchBudgetExhausted) return retry_err;
                 self.failure = failure;
+                self.clearUndetermined();
+                self.undetermined = undetermined;
+                undetermined = null;
                 return err;
             };
         };
@@ -344,6 +373,7 @@ pub const Solver = struct {
         self.allocator = self.state_arena.allocator();
         errdefer self.allocator = self.real_allocator;
         self.failure = null;
+        self.clearUndetermined();
         self.member_order.clear();
 
         var states = try self.initialStates(partial_bindings);

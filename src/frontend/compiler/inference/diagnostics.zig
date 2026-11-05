@@ -3,6 +3,8 @@ const ExprId = @import("../../expr.zig").ExprId;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
 const RuleDecl = @import("../../env.zig").RuleDecl;
+const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
+const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 const AssertionStmt = @import("../../parse_recovery.zig").AssertionStmt;
 const CompilerDiag = @import("../../diag.zig");
 const ViewTrace = @import("../../view_trace.zig");
@@ -341,6 +343,56 @@ pub fn addAmbiguityWarningNotes(
     addInferenceNote(diag, .{ .distinct_solutions_considered = .{
         .count = report.distinct_solution_count,
     } });
+}
+
+/// A rule without a `@view` failed inference, and one of its hypotheses
+/// holds a term with `@rewrite` rules (`[x/t] p`). Inference reads such a
+/// premise in one rewritten form, so the failure does not show that no
+/// binding fits: point at a `@view` (docs/view_recover.md) in place of the
+/// no-completion note.
+pub fn addRewritePremiseHint(
+    diag: *Diagnostic,
+    env: *const GlobalEnv,
+    registry: *const RewriteRegistry,
+    rule: *const RuleDecl,
+) void {
+    switch (diag.kind) {
+        .inference_failed, .missing_binder_assignment => {},
+        else => return,
+    }
+    for (diag.noteSlice()) |note| {
+        if (note.message == .rewrite_premise_view) return;
+    }
+    for (rule.hyps, 0..) |hyp, idx| {
+        const term_id = rewriteHead(registry, hyp) orelse continue;
+        var kept: u8 = 0;
+        for (diag.noteSlice()) |note| {
+            if (note.message == .no_rule_var_completion) continue;
+            diag.notes[kept] = note;
+            kept += 1;
+        }
+        diag.note_count = kept;
+        addInferenceNote(diag, .{ .rewrite_premise_view = .{
+            .number = idx + 1,
+            .term_name = env.terms.items[term_id].name,
+        } });
+        return;
+    }
+}
+
+fn rewriteHead(
+    registry: *const RewriteRegistry,
+    expr: TemplateExpr,
+) ?u32 {
+    const app = switch (expr) {
+        .binder => return null,
+        .app => |app| app,
+    };
+    if (registry.getRewriteRules(app.term_id).len != 0) return app.term_id;
+    for (app.args) |arg| {
+        if (rewriteHead(registry, arg)) |term_id| return term_id;
+    }
+    return null;
 }
 
 pub fn addInferenceNote(

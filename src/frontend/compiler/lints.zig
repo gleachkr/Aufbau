@@ -33,13 +33,9 @@ pub fn lintUnusedTheoremParameters(
         markTemplateExprUses(state, hyp, rule.args.len);
     }
     markTemplateExprUses(state, rule.concl, rule.args.len);
-    try propagateDependencyOnlyUses(
-        allocator,
-        used_args,
-        rule.args,
-        &.{},
-        &.{},
-    );
+    // Unlike a definition's, a theorem's bound variable named only in
+    // dependency lists is unused: no hypothesis or conclusion determines
+    // it, so every citation must name it, and the theorem holds without it.
 
     for (rule.arg_names, 0..) |arg_name, idx| {
         if (used_args[idx]) continue;

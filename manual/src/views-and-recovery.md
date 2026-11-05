@@ -36,7 +36,7 @@ l2: $ P y ⊢ ∃ x (P x) $ by ex_intro_raw [l1]
 
 ```
 the statement and cited premises could not be matched against this rule
-first unsolved binder: x
+note: hypothesis 1 of the rule holds a term with @rewrite rules (sb); a @view annotation may be required to help infer the rule's variables
 ```
 
 The goal determines `p := P x`. But the witness `t` occurs inside `[x := t] p`, 

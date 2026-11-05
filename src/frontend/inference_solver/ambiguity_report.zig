@@ -64,7 +64,10 @@ pub fn pickUniqueSolution(
         }
     }
 
-    if (distinct_idxs.items.len == 0) return error.MissingBinderAssignment;
+    if (distinct_idxs.items.len == 0) {
+        try recordUndetermined(self, states);
+        return error.MissingBinderAssignment;
+    }
 
     const chosen_distinct_idx = try chooseDistinctSolution(
         self,
@@ -99,6 +102,35 @@ pub fn pickUniqueSolution(
         result[idx] = binding.?;
     }
     return result;
+}
+
+/// Every reading left a rule binder unsolved: keep what they agree on and
+/// the binder none of them solved (`Solver.undetermined`).
+fn recordUndetermined(self: anytype, states: []const BranchState) !void {
+    const bindings = try self.real_allocator.dupe(?ExprId, states[0].rule_bindings);
+    errdefer self.real_allocator.free(bindings);
+    var missing: ?usize = null;
+    var first_null: ?usize = null;
+    for (bindings, 0..) |*binding, idx| {
+        var solved = binding.* != null;
+        for (states[1..]) |state| {
+            const other = state.rule_bindings[idx] orelse {
+                binding.* = null;
+                continue;
+            };
+            solved = true;
+            if (binding.*) |value| {
+                if (value != other) binding.* = null;
+            }
+        }
+        if (missing == null and !solved) missing = idx;
+        if (first_null == null and binding.* == null) first_null = idx;
+    }
+    self.clearUndetermined();
+    self.undetermined = .{
+        .bindings = bindings,
+        .missing = missing orelse first_null.?,
+    };
 }
 
 fn chooseDistinctSolution(

@@ -287,6 +287,12 @@ pub const NoteMessage = union(enum) {
     premise_hypothesis_mismatch: struct {
         number: usize,
     },
+    /// Rule hypothesis `number` (1-based) holds a term with `@rewrite`
+    /// rules.
+    rewrite_premise_view: struct {
+        number: usize,
+        term_name: []const u8,
+    },
     cited_premise_proves: struct {
         text: []const u8,
     },
@@ -1893,6 +1899,7 @@ pub fn renderNoteMessage(writer: anytype, message: NoteMessage) !void {
         .assignment_parses_as_sort => |info| try printT(writer, "note_assignment_parses_as_sort", .{ info.actual_sort, info.expected_sort }),
         .statement_not_provable_sort => |info| try printT(writer, "note_statement_not_provable_sort", .{info.actual_sort}),
         .premise_hypothesis_mismatch => |info| try printT(writer, "note_premise_hypothesis_mismatch", .{info.number}),
+        .rewrite_premise_view => |info| try printT(writer, "note_rewrite_premise_view", .{ info.number, info.term_name }),
         .cited_premise_proves => |info| try printT(writer, "note_cited_premise_proves", .{info.text}),
         .holey_unsolved_binder => |info| try printT(writer, "note_holey_unsolved_binder", .{info.binder_name}),
         .local_notation_token => |info| try printT(writer, "note_local_notation_token", .{ info.token, info.term_name }),
