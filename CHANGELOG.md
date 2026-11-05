@@ -242,6 +242,15 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- A line that compares expressions through definitions could take
+  minutes, or never finish, when the comparison failed
+  (`⟦ x / t ⟧ (cgr y (nmul y A)) ≐ cgr y (nmul y A)`). The matcher
+  remembered a failed comparison only for the exact match state it
+  failed in, and every definition it unfolded added hidden variables to
+  that state, so it repeated the same comparisons exponentially often.
+  It now remembers the failure for the part of the state the comparison
+  can reach. A set-theory library whose lines took up to minutes each
+  now compiles in under a second.
 - A suggestion could keep every binding it was found with when the
   checker, left to infer one, chose the binding's `@rewrite` normal form
   and could not convert the line back. Trimming now counts an inferred

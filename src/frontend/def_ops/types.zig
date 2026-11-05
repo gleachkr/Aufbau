@@ -54,8 +54,63 @@ pub const SymbolicExpr = union(enum) {
         /// reads instead of O(tree-size) walks — the dominant worst-case
         /// `auto?` latency lever on def-unfold-heavy theories (church, etc.).
         hash: u64 = 0,
+        /// What this subtree mentions, populated with `hash`
+        /// (`computeAppMentions`).
+        mentions: Mentions = .{},
     };
 };
+
+/// The binders and dummy slots a subtree mentions, over-approximated: bit
+/// `idx % 64` of `binders` for each binder, and one slot range
+/// `[dummy_lo, dummy_hi)` covering every dummy (empty when the bounds are
+/// equal). The transparent matcher's failure memo keys on the session state
+/// these reach (`hashMatchSessionReachable`).
+pub const Mentions = struct {
+    binders: u64 = 0,
+    dummy_lo: u32 = 0,
+    dummy_hi: u32 = 0,
+
+    pub fn join(a: Mentions, b: Mentions) Mentions {
+        if (a.dummy_lo == a.dummy_hi) return .{
+            .binders = a.binders | b.binders,
+            .dummy_lo = b.dummy_lo,
+            .dummy_hi = b.dummy_hi,
+        };
+        if (b.dummy_lo == b.dummy_hi) return .{
+            .binders = a.binders | b.binders,
+            .dummy_lo = a.dummy_lo,
+            .dummy_hi = a.dummy_hi,
+        };
+        return .{
+            .binders = a.binders | b.binders,
+            .dummy_lo = @min(a.dummy_lo, b.dummy_lo),
+            .dummy_hi = @max(a.dummy_hi, b.dummy_hi),
+        };
+    }
+};
+
+pub fn binderBit(idx: usize) u64 {
+    return @as(u64, 1) << @intCast(idx % 64);
+}
+
+/// O(1): leaves inline, an `app` its cached `mentions`.
+pub fn mentions(node: *const SymbolicExpr) Mentions {
+    return switch (node.*) {
+        .binder => |idx| .{ .binders = binderBit(idx) },
+        .fixed => .{},
+        .dummy => |slot| .{
+            .dummy_lo = @intCast(slot),
+            .dummy_hi = @intCast(slot + 1),
+        },
+        .app => |app| app.mentions,
+    };
+}
+
+pub fn computeAppMentions(args: []const *const SymbolicExpr) Mentions {
+    var out: Mentions = .{};
+    for (args) |arg| out = out.join(mentions(arg));
+    return out;
+}
 
 /// Cheap integer hash mix (splitmix64-style finalize). No streaming-hasher
 /// init/finalize overhead, which matters because this runs per node and, via
@@ -270,6 +325,7 @@ pub fn cloneSymbolicExpr(
                 .term_id = app.term_id,
                 .args = args,
                 .hash = app.hash,
+                .mentions = app.mentions,
             } };
         },
     }

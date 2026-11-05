@@ -1091,10 +1091,12 @@ pub fn matchSymbolicToSymbolicState(
 ) anyerror!bool {
     // Negative memo: this inner matcher does an unbudgeted bidirectional
     // def-unfold and is invoked at every node of the outer semantic search,
-    // so it re-explores structurally-identical (lhs, rhs) pairs under the same
-    // state exponentially. The verdict is pure in (lhs, rhs, state); we cache
-    // only failures (success mutates `state` and cannot be replayed from a
-    // key). Rollback-safe because the key includes the state hash.
+    // so it re-explores structurally-identical (lhs, rhs) pairs exponentially.
+    // The verdict is pure in (lhs, rhs) and the state they reach
+    // (`hashMatchSessionReachable`); we cache only failures (success mutates
+    // `state` and cannot be replayed from a key). Rollback-safe because the
+    // key includes that state. Keying on the whole session would miss every
+    // revisit after a sibling or an expansion minted unrelated dummies (#587).
     //
     // Consulted at every depth. The per-call key cost is two structural
     // hashes (lhs, rhs) plus a state hash; structural hashing dominates for the
@@ -1105,7 +1107,7 @@ pub fn matchSymbolicToSymbolicState(
     const key = blk: {
         const lh = SemanticSearch.hashSymbolicForSearch(self, lhs);
         const rh = SemanticSearch.hashSymbolicForSearch(self, rhs);
-        const sh = try SemanticSearch.hashMatchSessionForSearch(self, state);
+        const sh = try SemanticSearch.hashMatchSessionReachable(self, state, lhs, rhs);
         var h = Types.mixHash(0xa1b2c3d4e5f60718, lh);
         h = Types.mixHash(h, rh);
         // A line hole matches anything only under the flag: keep those

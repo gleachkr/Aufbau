@@ -445,6 +445,7 @@ pub const Context = struct {
 pub const Testing = struct {
     pub const MatchSession = MatchState.MatchSession;
     pub const SymbolicExpr = Types.SymbolicExpr;
+    pub const SymbolicDummyInfo = Types.SymbolicDummyInfo;
 
     pub fn expandConcreteDef(
         ctx: *Context,
@@ -551,5 +552,15 @@ pub const Testing = struct {
         symbolic: Types.SymbolicExpr,
     ) anyerror!*const Types.SymbolicExpr {
         return try ctx.allocSymbolic(symbolic);
+    }
+
+    pub fn hashMatchSessionReachable(
+        ctx: *Context,
+        state: *MatchState.MatchSession,
+        lhs: *const Types.SymbolicExpr,
+        rhs: *const Types.SymbolicExpr,
+    ) anyerror!u64 {
+        var symbolic_engine = ctx.symbolicEngine();
+        return try symbolic_engine.hashMatchSessionReachable(state, lhs, rhs);
     }
 };

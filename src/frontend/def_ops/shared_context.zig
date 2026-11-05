@@ -314,7 +314,12 @@ pub const SharedContext = struct {
         if (gop.found_existing) return gop.key_ptr.*;
         const owned = try self.scratch().dupe(*const SymbolicExpr, args);
         const node = try self.scratch().create(SymbolicExpr);
-        node.* = .{ .app = .{ .term_id = term_id, .args = owned, .hash = hash } };
+        node.* = .{ .app = .{
+            .term_id = term_id,
+            .args = owned,
+            .hash = hash,
+            .mentions = Types.computeAppMentions(args),
+        } };
         gop.key_ptr.* = node;
         gop.value_ptr.* = null;
         return node;

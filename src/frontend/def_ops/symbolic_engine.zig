@@ -37,6 +37,8 @@ pub const SymbolicEngine = struct {
     pub const tryMatchTemplateStateDirect =
         TransparentMatch.tryMatchTemplateStateDirect;
     pub const matchTemplateSemantic = SemanticSearch.matchTemplateSemantic;
+    pub const hashMatchSessionReachable =
+        SemanticSearch.hashMatchSessionReachable;
     pub const collectSemanticStepCandidatesExpr =
         SemanticSearch.collectSemanticStepCandidatesExpr;
     pub const collectSemanticStepCandidatesSymbolic =
@@ -108,7 +110,10 @@ pub const SymbolicEngine = struct {
         // (children are already cached, so this is O(arity)).
         var value = symbolic;
         switch (value) {
-            .app => |*app| app.hash = Types.computeAppHash(app.term_id, app.args),
+            .app => |*app| {
+                app.hash = Types.computeAppHash(app.term_id, app.args);
+                app.mentions = Types.computeAppMentions(app.args);
+            },
             else => {},
         }
         // Hash-cons: structurally identical nodes share one scratch-arena

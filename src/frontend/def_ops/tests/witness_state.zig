@@ -840,3 +840,68 @@ test "hidden dummy distinctness survives seed export and witness alignment" {
         &restored.state,
     ));
 }
+
+test "the transparent matcher's failure memo keys on the state its pair reaches" {
+    var fixture = try SessionWitnessFixture.init();
+    defer fixture.deinit();
+    const allocator = fixture.arena.allocator();
+
+    var ctx = Context.init(allocator, &fixture.theorem, &fixture.env);
+    defer ctx.deinit();
+
+    var state = try MatchSession.init(allocator, 3);
+    defer state.deinit(allocator);
+    const mor: Testing.SymbolicDummyInfo = .{ .sort_name = "mor", .bound = true };
+    _ = try state.addDummyInfo(allocator, mor);
+    const comp = fixture.env.term_names.get("comp").?;
+    const lhs = try Testing.allocSymbolic(&ctx, .{ .app = .{
+        .term_id = comp,
+        .args = &.{
+            try Testing.allocSymbolic(&ctx, .{ .binder = 0 }),
+            try Testing.allocSymbolic(&ctx, .{ .dummy = 0 }),
+        },
+    } });
+    const rhs = try Testing.allocSymbolic(&ctx, .{ .fixed = fixture.actual });
+    const base = try Testing.hashMatchSessionReachable(&ctx, &state, lhs, rhs);
+
+    // Another expansion's dummy, and a binding the pair cannot reach, stay out.
+    const other = try state.addDummyInfo(allocator, .{
+        .sort_name = "mor",
+        .bound = true,
+        .distinct_group = 1,
+    });
+    const other_dummy = try Testing.allocSymbolic(&ctx, .{ .dummy = other });
+    try state.setBinding(allocator, 1, .{ .symbolic = .{
+        .expr = other_dummy,
+        .mode = .transparent,
+    } });
+    try std.testing.expectEqual(
+        base,
+        try Testing.hashMatchSessionReachable(&ctx, &state, lhs, rhs),
+    );
+
+    // Aliasing that dummy into the pair's class brings it in.
+    try state.putDummyAlias(allocator, other, 0);
+    const aliased = try Testing.hashMatchSessionReachable(&ctx, &state, lhs, rhs);
+    try std.testing.expect(aliased != base);
+    try state.putWitness(allocator, other, fixture.raw);
+    try std.testing.expect(
+        try Testing.hashMatchSessionReachable(&ctx, &state, lhs, rhs) != aliased,
+    );
+
+    // So does binding the pair's own binder.
+    var fresh = try MatchSession.init(allocator, 3);
+    defer fresh.deinit(allocator);
+    _ = try fresh.addDummyInfo(allocator, mor);
+    try std.testing.expectEqual(
+        base,
+        try Testing.hashMatchSessionReachable(&ctx, &fresh, lhs, rhs),
+    );
+    try fresh.setBinding(allocator, 0, .{ .symbolic = .{
+        .expr = try Testing.allocSymbolic(&ctx, .{ .dummy = 0 }),
+        .mode = .transparent,
+    } });
+    try std.testing.expect(
+        try Testing.hashMatchSessionReachable(&ctx, &fresh, lhs, rhs) != base,
+    );
+}

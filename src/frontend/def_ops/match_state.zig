@@ -43,13 +43,18 @@ pub const MatchSession = struct {
     normalized_representatives: Types.RepresentativeCache = .empty,
     symbolic_dummy_infos: std.ArrayListUnmanaged(Types.SymbolicDummyInfo) = .empty,
     /// Negative memo for `matchSymbolicToSymbolicState`: combined hash of
-    /// (lhs, rhs, session state) for pairs already proven NOT to match under
-    /// the current state. Mirrors the semantic-search `visited` dedup but for
-    /// the inner unbudgeted bidirectional unfold matcher, which otherwise
-    /// re-explores structurally-identical pairs exponentially. Rollback-safe:
-    /// the key includes the state hash, so a restored state re-derives the
-    /// same key and the cached "fails" verdict remains valid.
+    /// (lhs, rhs, the session state they reach) for pairs already proven NOT
+    /// to match under that state (`hashMatchSessionReachable`). Mirrors the
+    /// semantic-search `visited` dedup but for the inner unbudgeted
+    /// bidirectional unfold matcher, which otherwise re-explores
+    /// structurally-identical pairs exponentially. Rollback-safe: the key
+    /// includes the state hash, so a restored state re-derives the same key
+    /// and the cached "fails" verdict remains valid.
     sym_match_neg: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    /// Scratch for that memo's key (`hashMatchSessionReachable`): per-slot
+    /// marks and union-find roots, kept to reuse their capacity.
+    memo_key_marks: std.ArrayListUnmanaged(u8) = .empty,
+    memo_key_roots: std.ArrayListUnmanaged(usize) = .empty,
     /// Undo log enabling O(1) snapshots. Every mutation that can happen
     /// while a `MatchSnapshot` is live MUST go through the trailed helpers
     /// below; only the initial seeding of a fresh session (before any
@@ -106,6 +111,8 @@ pub const MatchSession = struct {
         self.normalized_representatives.deinit(allocator);
         self.symbolic_dummy_infos.deinit(allocator);
         self.sym_match_neg.deinit(allocator);
+        self.memo_key_marks.deinit(allocator);
+        self.memo_key_roots.deinit(allocator);
         self.trail.deinit(allocator);
         self.deferred.deinit(allocator);
     }
