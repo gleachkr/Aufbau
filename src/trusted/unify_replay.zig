@@ -14,10 +14,10 @@ const Proof = @import("./proof.zig");
 // - `uopHyp()`
 pub fn run(
     file_bytes: []const u8,
-    start_pos: u32,
+    start_pos: usize,
     context: anytype,
 ) !void {
-    var pos: usize = start_pos;
+    var pos = start_pos;
     while (true) {
         const cmd = try Proof.Cmd.read(file_bytes, pos, file_bytes.len);
         pos += cmd.size;

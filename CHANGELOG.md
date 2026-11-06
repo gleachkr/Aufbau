@@ -247,6 +247,11 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- `mm0-zig` rejected a certificate whose proof stream runs past 4 GiB,
+  usually with `TruncatedCommand`, though the format allows it and `mm0-c`
+  accepts it. Positions in the proof and unify streams are now 64-bit on
+  64-bit hosts. The header and the term and theorem tables still hold 32-bit
+  pointers, as the format requires, so table data has to start below 4 GiB.
 - A name followed by a character no name can hold reported a duplicate
   name when the part before that character was already declared
   (`theorem ax1'` in a file with `ax1`). It now reports the unexpected

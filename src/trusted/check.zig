@@ -187,7 +187,7 @@ pub const CrossChecker = struct {
     fn matchUnifyStream(
         self: *CrossChecker,
         file_bytes: []const u8,
-        start_pos: u32,
+        start_pos: usize,
         mode: UnifyMode,
         args: []const *const Expr,
         hyps: []const *const Expr,

@@ -135,8 +135,8 @@ pub const Verifier = struct {
     fn verifyThm(
         self: *Verifier,
         thm: Theorem,
-        proof_pos: u32,
-        proof_end: u32,
+        proof_pos: usize,
+        proof_end: usize,
         available_sorts: usize,
         available_terms: usize,
         available_thms: usize,
@@ -181,8 +181,8 @@ pub const Verifier = struct {
     fn verifyDef(
         self: *Verifier,
         term: Term,
-        proof_pos: u32,
-        proof_end: u32,
+        proof_pos: usize,
+        proof_end: usize,
         available_sorts: usize,
         available_terms: usize,
         available_thms: usize,
@@ -222,8 +222,8 @@ pub const Verifier = struct {
     fn verifyAxiom(
         self: *Verifier,
         thm: Theorem,
-        proof_pos: u32,
-        proof_end: u32,
+        proof_pos: usize,
+        proof_end: usize,
         available_sorts: usize,
         available_terms: usize,
         available_thms: usize,
@@ -265,9 +265,8 @@ pub const Verifier = struct {
         return self.sorry_thms[0..self.sorry_report_len];
     }
 
-    fn runProofStream(self: *Verifier, start_pos: u32, end_pos: u32) !void {
-        var pos: usize = start_pos;
-        const limit: usize = end_pos;
+    fn runProofStream(self: *Verifier, start_pos: usize, limit: usize) !void {
+        var pos = start_pos;
         while (true) {
             const cmd = try Cmd.read(self.file_bytes, pos, limit);
             pos += cmd.size;
@@ -429,8 +428,8 @@ pub const Verifier = struct {
                     if (term.ret_sort.is_def) {
                         try self.verifyDef(
                             term,
-                            @intCast(pos),
-                            @intCast(stmt_end),
+                            pos,
+                            stmt_end,
                             sort_count,
                             term_count,
                             thm_count,
@@ -454,8 +453,8 @@ pub const Verifier = struct {
                     try checker.checkAssertion(.axiom, theorem, self.file_bytes);
                     try self.verifyAxiom(
                         theorem,
-                        @intCast(pos),
-                        @intCast(stmt_end),
+                        pos,
+                        stmt_end,
                         sort_count,
                         term_count,
                         thm_count,
@@ -475,8 +474,8 @@ pub const Verifier = struct {
                     try checker.checkAssertion(.theorem, theorem, self.file_bytes);
                     try self.verifyThm(
                         theorem,
-                        @intCast(pos),
-                        @intCast(stmt_end),
+                        pos,
+                        stmt_end,
                         sort_count,
                         term_count,
                         thm_count,
@@ -496,8 +495,8 @@ pub const Verifier = struct {
                         return error.PureSort;
                     try self.verifyDef(
                         self.term_table[term_count],
-                        @intCast(pos),
-                        @intCast(stmt_end),
+                        pos,
+                        stmt_end,
                         sort_count,
                         term_count,
                         thm_count,
@@ -515,8 +514,8 @@ pub const Verifier = struct {
                     );
                     try self.verifyThm(
                         self.thm_table[thm_count],
-                        @intCast(pos),
-                        @intCast(stmt_end),
+                        pos,
+                        stmt_end,
                         sort_count,
                         term_count,
                         thm_count,
@@ -1109,7 +1108,7 @@ pub const Verifier = struct {
 
     fn runUnifyStreamRaw(
         self: *Verifier,
-        start_pos: u32,
+        start_pos: usize,
         context: UnifyContext,
     ) !void {
         const prev_context = self.unify_context;
@@ -1124,7 +1123,7 @@ pub const Verifier = struct {
 
     fn runUnifyStream(
         self: *Verifier,
-        start_pos: u32,
+        start_pos: usize,
         concl: *const Expr,
         context: UnifyContext,
     ) !void {

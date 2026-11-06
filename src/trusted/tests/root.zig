@@ -1636,7 +1636,7 @@ test "term and theorem accessors read packed argument tables" {
     const ret_arg = term.getRetArg(bytes[0..]);
     try std.testing.expectEqual(@as(u7, 5), ret_arg.sort);
     try std.testing.expectEqual(
-        @as(u32, @intCast(p_data + 3 * @sizeOf(Arg))),
+        p_data + 3 * @sizeOf(Arg),
         term.getUnifyPtr(bytes[0..]).?,
     );
 
@@ -1649,7 +1649,7 @@ test "term and theorem accessors read packed argument tables" {
     const thm_args = theorem.getArgs(bytes[0..]);
     try std.testing.expectEqual(@as(usize, 2), thm_args.len);
     try std.testing.expectEqual(
-        @as(u32, @intCast(p_data + 2 * @sizeOf(Arg))),
+        p_data + 2 * @sizeOf(Arg),
         theorem.getUnifyPtr(bytes[0..]),
     );
 }
@@ -2389,6 +2389,100 @@ test "Verifier accepts a theorem whose proof matches its declaration" {
     // Ref b; Hyp; Ref a; Hyp; Ref (|- a)
     const body = [_]u8{ 0x52, 0x01, 0x16, 0x52, 0x00, 0x16, 0x52, 0x03 };
     try runStatementFixture(stmt_theorem, &args, &unify, &body);
+}
+
+// A stream position past 4 GiB needs a file that long. Only the pages a test
+// touches get memory, so a sparse anonymous mapping costs next to nothing.
+const u32_line: usize = 1 << 32;
+
+fn runStatementFixturePastLine(
+    mm0_src: []const u8,
+    proof_start: u32,
+    p_data: u32,
+    args: []const Arg,
+    unify: []const u8,
+    body: []const u8,
+) !void {
+    if (@bitSizeOf(usize) < 64) return error.SkipZigTest;
+    const file = std.posix.mmap(
+        null,
+        u32_line + 4096,
+        .{ .READ = true, .WRITE = true },
+        .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
+        -1,
+        0,
+    ) catch return error.SkipZigTest;
+    defer std.posix.munmap(file);
+
+    const proof = buildSingleStmtProof(1, stmt_theorem, body);
+    @memcpy(file[proof_start..][0..proof.len], proof[0..]);
+    for (args, 0..) |arg, i| {
+        writeArg(file, p_data + i * @sizeOf(Arg), arg);
+    }
+    @memcpy(file[p_data + args.len * @sizeOf(Arg) ..][0..unify.len], unify);
+
+    const sorts = [_]Sort{.{ .provable = true }};
+    const theorems = [_]Theorem{.{
+        .num_args = @intCast(args.len),
+        .reserved = 0,
+        .p_data = p_data,
+    }};
+    const verifier = try Verifier.init(
+        std.testing.allocator,
+        file,
+        &sorts,
+        &.{},
+        &theorems,
+        null,
+    );
+    defer verifier.deinit(std.testing.allocator);
+    const checker = try CrossChecker.init(mm0_src, std.testing.allocator);
+    defer checker.deinit(std.testing.allocator);
+    try verifier.verifyProofStream(proof_start, checker);
+}
+
+// theorem (a b: wff) (h1: b) (h2: a): a, as in the fixture above.
+const past_line_mm0 = "provable sort wff; theorem t (a b: wff): $ b $ > $ a $ > $ a $;";
+const past_line_args = [_]Arg{ wff_arg, wff_arg };
+const past_line_unify = [_]u8{ 0x72, 0x00, 0x36, 0x72, 0x00, 0x36, 0x72, 0x01, 0x00 };
+const past_line_body = [_]u8{ 0x52, 0x01, 0x16, 0x52, 0x00, 0x16, 0x52, 0x03 };
+
+test "Verifier reads a statement that crosses 4 GiB and a proof past it" {
+    // The Sort statement ends one byte before the line, so the theorem's
+    // two-byte command straddles it and its proof lies wholly past it.
+    try runStatementFixturePastLine(
+        past_line_mm0,
+        @intCast(u32_line - 3),
+        64,
+        &past_line_args,
+        &past_line_unify,
+        &past_line_body,
+    );
+}
+
+test "Verifier reads a unify stream past 4 GiB" {
+    // The table pointer is 32-bit, but the argument array runs over the line.
+    try runStatementFixturePastLine(
+        past_line_mm0,
+        4096,
+        @intCast(u32_line - @sizeOf(Arg)),
+        &past_line_args,
+        &past_line_unify,
+        &past_line_body,
+    );
+}
+
+test "Verifier rejects a wrong proof past 4 GiB" {
+    // Hypotheses in the wrong order: the proof is read, and it doesn't match.
+    const body = [_]u8{ 0x52, 0x00, 0x16, 0x52, 0x01, 0x16, 0x52, 0x03 };
+    try std.testing.expectError(error.UnifyMismatch, runStatementFixturePastLine(
+        past_line_mm0,
+        @intCast(u32_line - 3),
+        64,
+        &past_line_args,
+        &past_line_unify,
+        &body,
+    ));
 }
 
 test "Verifier rejects a theorem proving the wrong conclusion" {

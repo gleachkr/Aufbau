@@ -56,11 +56,11 @@ pub const Term = extern struct {
         ).*;
     }
 
-    pub fn getUnifyPtr(self: Term, file_bytes: []const u8) ?u32 {
+    pub fn getUnifyPtr(self: Term, file_bytes: []const u8) ?usize {
         return self.getUnifyPtrChecked(file_bytes) catch unreachable;
     }
 
-    pub fn getUnifyPtrChecked(self: Term, file_bytes: []const u8) !?u32 {
+    pub fn getUnifyPtrChecked(self: Term, file_bytes: []const u8) !?usize {
         if (!self.ret_sort.is_def) return null;
 
         const offset = try std.math.add(
@@ -69,7 +69,7 @@ pub const Term = extern struct {
             try std.math.mul(usize, @as(usize, self.num_args) + 1, @sizeOf(Arg)),
         );
         if (offset > file_bytes.len) return error.ShortTermData;
-        return std.math.cast(u32, offset) orelse error.ShortTermData;
+        return offset;
     }
 };
 

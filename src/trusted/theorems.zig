@@ -32,17 +32,17 @@ pub const Theorem = extern struct {
         return args_ptr[0..self.num_args];
     }
 
-    pub fn getUnifyPtr(self: Theorem, file_bytes: []const u8) u32 {
+    pub fn getUnifyPtr(self: Theorem, file_bytes: []const u8) usize {
         return self.getUnifyPtrChecked(file_bytes) catch unreachable;
     }
 
-    pub fn getUnifyPtrChecked(self: Theorem, file_bytes: []const u8) !u32 {
+    pub fn getUnifyPtrChecked(self: Theorem, file_bytes: []const u8) !usize {
         const offset = try std.math.add(
             usize,
             self.p_data,
             try std.math.mul(usize, self.num_args, @sizeOf(Arg)),
         );
         if (offset > file_bytes.len) return error.ShortTheoremData;
-        return std.math.cast(u32, offset) orelse error.ShortTheoremData;
+        return offset;
     }
 };
