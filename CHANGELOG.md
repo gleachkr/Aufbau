@@ -252,6 +252,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   accepts it. Positions in the proof and unify streams are now 64-bit on
   64-bit hosts. The header and the term and theorem tables still hold 32-bit
   pointers, as the format requires, so table data has to start below 4 GiB.
+- `mm0-zig` accepted a certificate whose proof stream ended on a command
+  with a data field, where the format wants the single byte `0x00` and
+  `mm0-c` rejects it. It now reports `UnknownStatement`.
 - A name followed by a character no name can hold reported a duplicate
   name when the part before that character was already declared
   (`theorem ax1'` in a file with `ax1`). It now reports the unexpected

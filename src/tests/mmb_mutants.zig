@@ -15,7 +15,8 @@ const mm0 = @import("../lib.zig");
 // its binders at 0x78 and return slot at 0x88; theorem 6 (`a1i`, a local
 // theorem) has its binders at 0x1f0. Statements: `wff` 0x340, `imp` 0x342,
 // `ax_1` 0x346, `id` 0x37f, `and` 0x3b6, `or_right` 0x3ca, `or_left` 0x524
-// (its proof ends `Conv Cong Refl Ref 5 Unfold Refl` at 0x53a).
+// (its proof ends `Conv Cong Refl Ref 5 Unfold Refl` at 0x53a), and the
+// stream ends at 0x542.
 //
 // The tutorial has no def with a dummy, so dummy_def.mmb (compiled by abc
 // from dummy_def.mm0) supplies one: `any_top`'s unify stream is
@@ -141,6 +142,12 @@ const mutants = [_]Mutant{
     .{
         .name = "unknown statement command",
         .patches = &.{.{ .at = 0x524, .bytes = &.{0x4f} }},
+        .expected = error.UnknownStatement,
+        .mm0c = "bad statement command",
+    },
+    .{
+        .name = "stream end with a data field",
+        .patches = &.{.{ .at = 0x542, .bytes = &.{0x40} }},
         .expected = error.UnknownStatement,
         .mm0c = "bad statement command",
     },

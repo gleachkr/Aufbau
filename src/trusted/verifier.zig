@@ -383,12 +383,16 @@ pub const Verifier = struct {
         var thm_count: usize = 0;
 
         while (true) {
+            self.current_statement = .none;
             const stmt_start = pos;
             const cmd = try Cmd.read(self.file_bytes, pos, self.file_bytes.len);
             pos += cmd.size;
 
             switch (@as(StmtCmd, @fromBackingInt(@intCast(cmd.op)))) {
-                .End => break,
+                .End => {
+                    if (cmd.size != 1) return error.UnknownStatement;
+                    break;
+                },
                 .Sort => {
                     const stmt_end = try self.beginStatement(
                         .sort,
@@ -527,7 +531,6 @@ pub const Verifier = struct {
             }
         }
 
-        self.current_statement = .none;
         if (sort_count != self.sort_table.len) return error.SortCountMismatch;
         if (term_count != self.term_table.len) return error.TermCountMismatch;
         if (thm_count != self.thm_table.len) return error.TheoremCountMismatch;
