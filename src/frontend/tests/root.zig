@@ -1768,7 +1768,6 @@ test "theorem clones share representatives that name their root's nodes" {
         .expr = v0,
         .normalized = false,
         .has_registry = false,
-        .line_holes_match_anything = false,
     };
     const env: usize = 0x1000;
 
@@ -1788,7 +1787,6 @@ test "theorem clones share representatives that name their root's nodes" {
         .expr = own,
         .normalized = false,
         .has_registry = false,
-        .line_holes_match_anything = false,
     };
     try std.testing.expect(!try first.sharedPureReprPut(own_key, own, env, 0));
     try std.testing.expect(!try first.sharedPureReprPut(key, own, env, 0));
@@ -1816,7 +1814,6 @@ test "a flattened clone does not share ids its base went on to mint" {
         .expr = v0,
         .normalized = false,
         .has_registry = false,
-        .line_holes_match_anything = false,
     };
     const env: usize = 0x1000;
 
@@ -1845,7 +1842,6 @@ test "a promoted clone shares its own nodes once it holds the memo alone" {
         .expr = v0,
         .normalized = false,
         .has_registry = false,
-        .line_holes_match_anything = false,
     };
 
     var successor = try theorem.clone();

@@ -1321,9 +1321,9 @@ fn matchHoleyViewConclusion(
         return true;
     }
 
-    const saved = session.shared.line_holes_match_anything;
-    session.shared.line_holes_match_anything = true;
-    defer session.shared.line_holes_match_anything = saved;
+    const saved = session.shared.holes_match_anything;
+    session.shared.holes_match_anything = true;
+    defer session.shared.holes_match_anything = saved;
     var comparison = try session.beginNormalizedComparison(view.concl, holey);
     defer comparison.deinit();
     return try comparison.finish(

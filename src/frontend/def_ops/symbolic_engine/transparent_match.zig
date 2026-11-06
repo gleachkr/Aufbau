@@ -20,21 +20,21 @@ const MatchSession = MatchState.MatchSession;
 const MatchSnapshot = MatchState.MatchSnapshot;
 const semantic_match_budget: usize = 8;
 
-/// Under `line_holes_match_anything`, an actual expression holding a line
-/// hole is only partly known: it fixes no binder, dummy or fixed subterm it
-/// faces, and only its visible structure is matched (below the hole-free
-/// heads). The line's final check compares it with the instantiated rule.
+/// Under `holes_match_anything`, an actual expression holding a meta is
+/// only partly known: it fixes no binder, dummy or fixed subterm it faces,
+/// and only its visible structure is matched (below the hole-free heads). A
+/// holey line's final check compares it with the instantiated rule.
 fn holeyActual(self: anytype, actual: ExprId) bool {
-    if (!self.shared.line_holes_match_anything) return false;
-    return self.shared.theorem.containsLineHole(actual);
+    if (!self.shared.holes_match_anything) return false;
+    return self.shared.theorem.containsMetaLeaf(actual);
 }
 
-/// `holeyActual` for the actual side of a symbolic match: a line hole in
-/// any of its fixed subterms.
+/// `holeyActual` for the actual side of a symbolic match: a meta in any of
+/// its fixed subterms.
 fn holeySymbolicActual(self: anytype, actual: *const SymbolicExpr) bool {
-    if (!self.shared.line_holes_match_anything) return false;
+    if (!self.shared.holes_match_anything) return false;
     return switch (actual.*) {
-        .fixed => |expr_id| self.shared.theorem.containsLineHole(expr_id),
+        .fixed => |expr_id| holeyActual(self, expr_id),
         .binder, .dummy => false,
         .app => |app| for (app.args) |arg| {
             if (holeySymbolicActual(self, arg)) break true;
@@ -84,7 +84,7 @@ pub fn instantiateDefTowardAcuiItem(
         .item_expr = item_expr,
         .head_term_id = head_term_id,
         .has_registry = self.shared.registry != null,
-        .line_holes_match_anything = self.shared.line_holes_match_anything,
+        .holes_match_anything = holeyActual(self, def_expr) or holeyActual(self, item_expr),
     };
     if (self.shared.theorem.instantiate_acui_cache.get(key)) |cached| {
         return cached;
@@ -211,7 +211,7 @@ pub fn compareTransparent(
         .def_expr = lhs,
         .target_expr = rhs,
         .has_registry = self.shared.registry != null,
-        .line_holes_match_anything = self.shared.line_holes_match_anything,
+        .holes_match_anything = holeyActual(self, lhs) or holeyActual(self, rhs),
     };
     if (self.shared.theorem.compare_transparent_neg.contains(key)) {
         return null;
@@ -335,7 +335,7 @@ pub fn instantiateDefTowardExpr(
         .def_expr = def_expr,
         .target_expr = target_expr,
         .has_registry = self.shared.registry != null,
-        .line_holes_match_anything = self.shared.line_holes_match_anything,
+        .holes_match_anything = holeyActual(self, def_expr) or holeyActual(self, target_expr),
     };
     if (self.shared.theorem.instantiate_def_cache.get(key)) |cached| {
         return cached;
@@ -1110,9 +1110,9 @@ pub fn matchSymbolicToSymbolicState(
         const sh = try SemanticSearch.hashMatchSessionReachable(self, state, lhs, rhs);
         var h = Types.mixHash(0xa1b2c3d4e5f60718, lh);
         h = Types.mixHash(h, rh);
-        // A line hole matches anything only under the flag: keep those
+        // A meta matches anything only under the flag: keep those
         // verdicts apart (`DefCacheKey`).
-        if (self.shared.line_holes_match_anything) h = Types.mixHash(h, 1);
+        if (self.shared.holes_match_anything) h = Types.mixHash(h, 1);
         break :blk Types.mixHash(h, sh);
     };
     if (state.sym_match_neg.contains(key)) {

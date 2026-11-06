@@ -599,7 +599,7 @@ fn matchDefBody(
 
     var def_ops = DefOps.Context.init(allocator, theorem, env);
     defer def_ops.deinit();
-    def_ops.shared.line_holes_match_anything = true;
+    def_ops.shared.holes_match_anything = true;
     var session = try def_ops.beginRuleMatch(arg_infos, seeds);
     defer session.deinit();
     // A fill is a fallback on the way to a diagnosed mismatch: a match

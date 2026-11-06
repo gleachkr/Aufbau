@@ -495,7 +495,7 @@ pub fn fillHoleyInlineHints(
         minor.* = inlineMinorWantsHoleyHint(context.env, context.registry, ref);
         want.* = minor.* or parent_acui_rest;
     }
-    try fillRuleHoleyInlineHints(
+    const goal_bindings = try fillRuleHoleyInlineHints(
         self,
         context,
         application,
@@ -510,6 +510,7 @@ pub fn fillHoleyInlineHints(
         expected_refs,
         wants,
     );
+    defer if (goal_bindings) |bindings| allocator.free(bindings);
     try fillViewInlineHints(
         context,
         line_assertion,
@@ -523,17 +524,11 @@ pub fn fillHoleyInlineHints(
     );
     // Last: the view pass fills only null hints, and a view rule's literal
     // premise (`g ⊢ [x/‹hole›] p`) would hide the view premise it reads.
-    try fillHintsFromGoal(
-        context,
-        line_assertion,
-        expected_conclusion_hint,
-        rule,
-        theorem,
-        partial_bindings,
-        expected_refs,
-        wants,
-        .concrete,
-    );
+    // The bindings are the probe's, read through definitions (`s n` against
+    // a line's `n1`), with a parent's holes in the goal matching anything.
+    if (goal_bindings) |bindings| {
+        try fillHintsFromBindings(context, rule, theorem, bindings, expected_refs, wants);
+    }
 }
 
 fn fillRuleHoleyInlineHints(
@@ -550,8 +545,8 @@ fn fillRuleHoleyInlineHints(
     partial_bindings: []const ?ExprId,
     expected_refs: []?ExprId,
     wants: []const bool,
-) !void {
-    if (!anyMissing(expected_refs, wants)) return;
+) !?[]const ?ExprId {
+    if (!anyMissing(expected_refs, wants)) return null;
 
     const allocator = context.allocator;
     const probe = try inferExpectedRefsForInlineApplicationProbe(
@@ -568,7 +563,7 @@ fn fillRuleHoleyInlineHints(
         partial_bindings,
         .holey,
     );
-    defer allocator.free(probe.contextual_bindings);
+    errdefer allocator.free(probe.contextual_bindings);
     defer allocator.free(probe.expected_refs);
 
     var still_missing = false;
@@ -578,14 +573,13 @@ fn fillRuleHoleyInlineHints(
             if (holey == null) still_missing = true;
         }
     }
-    if (!still_missing) return;
+    if (!still_missing) return probe.contextual_bindings;
 
     // The goal itself is holey (a holey line, or a hint with holes from the
-    // parent), so neither pass above could match the conclusion. Match
-    // it with holes as wildcards instead: a binder facing a holey subterm
-    // takes that subterm, placeholders and all, so the minor still sees the
-    // visible part (`Q` in `Q ∨ P ‹hole›`).
-    try fillHintsFromGoal(
+    // parent). Match it structurally with holes as wildcards: a binder facing
+    // a holey subterm takes that subterm, placeholders and all, so the minor
+    // still sees the visible part (`Q` in `Q ∨ P ‹hole›`).
+    try fillHintsFromHoleyGoal(
         context,
         line_assertion,
         expected_conclusion_hint,
@@ -594,18 +588,13 @@ fn fillRuleHoleyInlineHints(
         partial_bindings,
         expected_refs,
         wants,
-        .holey,
     );
+    return probe.contextual_bindings;
 }
 
-const GoalKind = enum { holey, concrete };
-
-/// Fill each still-missing hint a minor wants from `rule`'s bindings against
-/// the goal, an open binder becoming a line hole. `.holey` reads a holey goal
-/// with its holes as wildcards; `.concrete` reads a concrete goal, so a minor
-/// whose own refs cannot pin it still sees the parts the goal fixes
-/// (`‹hole› → y ∈ image f X B` for `mp`'s first premise).
-fn fillHintsFromGoal(
+/// Fill each still-missing hint a minor wants from a holey goal: a holey
+/// line, or a hint with line holes.
+fn fillHintsFromHoleyGoal(
     context: *const RuleApplyContext,
     line_assertion: LineAssertion,
     expected_conclusion_hint: ?ExprId,
@@ -614,19 +603,32 @@ fn fillHintsFromGoal(
     partial_bindings: []const ?ExprId,
     expected_refs: []?ExprId,
     wants: []const bool,
-    kind: GoalKind,
 ) !void {
     if (!anyMissing(expected_refs, wants)) return;
-    const bindings = try goalBindings(
-        context,
-        rule,
-        theorem,
-        line_assertion,
-        expected_conclusion_hint,
-        partial_bindings,
-        kind,
-    ) orelse return;
+    const goal = switch (LineGoal.of(expected_conclusion_hint, line_assertion) orelse
+        return) {
+        .expr => |expr| if (isHoleyGoalHint(theorem, expr)) expr else return,
+        .holey => |holey| try holey.internedIn(theorem, context.env),
+    };
+    const bindings = try context.allocator.dupe(?ExprId, partial_bindings);
     defer context.allocator.free(bindings);
+    if (!try matchTemplateHoley(theorem, context.registry, rule.concl, goal, bindings, .bind)) return;
+    demoteAcuiSpineBindingsInTemplate(context.registry, rule.concl, false, partial_bindings, bindings);
+    try fillHintsFromBindings(context, rule, theorem, bindings, expected_refs, wants);
+}
+
+/// Fill each still-missing hint a minor wants from `rule`'s bindings, an open
+/// binder becoming a line hole, so a minor whose own refs cannot pin it still
+/// sees the parts the goal fixes (`‹hole› → y ∈ image f X B` for `mp`'s first
+/// premise).
+fn fillHintsFromBindings(
+    context: *const RuleApplyContext,
+    rule: *const RuleDecl,
+    theorem: *TheoremContext,
+    bindings: []const ?ExprId,
+    expected_refs: []?ExprId,
+    wants: []const bool,
+) !void {
     for (expected_refs, rule.hyps, wants) |*hint, hyp, want| {
         if (hint.* != null or !want) continue;
         const holey = try OpenTerms.instantiateTemplateHoley(
@@ -658,39 +660,6 @@ fn mintHintHole(
     _: OpenTerms.MetaKind,
 ) anyerror!ExprId {
     return theorem.addLineHolePlaceholder(sort_name);
-}
-
-/// `rule`'s bindings from a goal of `kind`, or null when the goal is of the
-/// other kind or its visible structure does not match the conclusion. Caller
-/// owns the result.
-fn goalBindings(
-    context: *const RuleApplyContext,
-    rule: *const RuleDecl,
-    theorem: *TheoremContext,
-    line_assertion: LineAssertion,
-    expected_conclusion_hint: ?ExprId,
-    partial_bindings: []const ?ExprId,
-    kind: GoalKind,
-) !?[]?ExprId {
-    const goal = switch (LineGoal.of(expected_conclusion_hint, line_assertion) orelse
-        return null) {
-        .expr => |expr| if (isHoleyGoalHint(theorem, expr) == (kind == .holey))
-            expr
-        else
-            return null,
-        .holey => |holey| if (kind == .holey)
-            try holey.internedIn(theorem, context.env)
-        else
-            return null,
-    };
-    const bindings = try context.allocator.dupe(?ExprId, partial_bindings);
-    errdefer context.allocator.free(bindings);
-    if (!try matchTemplateHoley(theorem, context.registry, rule.concl, goal, bindings, .bind)) {
-        context.allocator.free(bindings);
-        return null;
-    }
-    demoteAcuiSpineBindingsInTemplate(context.registry, rule.concl, false, partial_bindings, bindings);
-    return bindings;
 }
 
 /// True when some inline application among `refs` has no hint yet.
@@ -972,9 +941,16 @@ fn semanticExpectationBindingsForLineExpr(
         prefer_structural_solver,
     ) catch |err| switch (err) {
         error.OutOfMemory => return err,
+        // Inference found no reading of the goal. A hint needs only what the
+        // goal fixes, through definitions and past a parent's holes.
         else => blk: {
             restoreDiagnostic(self, saved_diag);
-            break :blk try allocator.dupe(?ExprId, partial_bindings);
+            break :blk try Inference.inferPartialBindingsTransparent(
+                &inference_context,
+                partial_bindings,
+                ref_exprs,
+                line_expr,
+            ) orelse try allocator.dupe(?ExprId, partial_bindings);
         },
     };
     restoreDiagnostic(self, saved_diag);

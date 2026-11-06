@@ -43,9 +43,9 @@ pub const OptionalBindingSnapshot = struct {
 const NormalizedPlaceholderTarget = union(enum) {
     binder: usize,
     symbolic_slot: usize,
-    /// A line hole (`addLineHolePlaceholder`) under
-    /// `line_holes_match_anything`: it matches anything and fixes nothing.
-    line_hole: []const u8,
+    /// A meta under `holes_match_anything`: it matches anything and fixes
+    /// nothing.
+    hole: []const u8,
 };
 
 const NormalizedView = struct {
@@ -59,7 +59,7 @@ const NormalizedView = struct {
     mirror_binders: []ExprId,
     binder_status: []u8,
     symbolic_slot_values: []?ExprId,
-    line_holes_match_anything: bool,
+    holes_match_anything: bool,
 
     fn isPlaceholder(
         self: *const NormalizedView,
@@ -80,9 +80,9 @@ const NormalizedView = struct {
             .variable, .app => return null,
         };
         if (self.placeholder_targets.get(expr_id)) |target| return target;
-        if (!self.line_holes_match_anything) return null;
+        if (!self.holes_match_anything) return null;
         const info = self.mirror.theorem.placeholderInfo(idx) orelse return null;
-        return if (info.line_hole) .{ .line_hole = info.sort_name } else null;
+        return if (info.class == .meta) .{ .hole = info.sort_name } else null;
     }
 
     fn sourceExprForMirror(
@@ -146,7 +146,7 @@ const NormalizedView = struct {
             .mirror_binders = mirror_binders,
             .binder_status = binder_status,
             .symbolic_slot_values = symbolic_slot_values,
-            .line_holes_match_anything = session.shared.line_holes_match_anything,
+            .holes_match_anything = session.shared.holes_match_anything,
         };
     }
 
@@ -969,11 +969,11 @@ pub const RuleMatchSession = struct {
         actual_expr: ExprId,
     ) anyerror!bool {
         if (view.placeholderTarget(pattern_expr)) |target| {
-            if (target == .line_hole) return true;
+            if (target == .hole) return true;
             return try self.assignNormalizedTarget(target, actual_expr, view);
         }
         if (view.placeholderTarget(actual_expr)) |target| {
-            if (target == .line_hole) return true;
+            if (target == .hole) return true;
         }
 
         var symbolic_engine = self.engine();
@@ -1039,16 +1039,16 @@ pub const RuleMatchSession = struct {
         if (view.placeholderTarget(actual_expr)) |actual_target| {
             if (samePlaceholderTarget(target, actual_target)) return true;
         }
-        // An actual holding a line hole, at its root or deeper, is only
-        // partly known, so it fixes nothing; the line's final check compares
-        // it with the instantiated rule (as in transparent_match.holeyActual).
-        if (view.line_holes_match_anything and
-            view.mirror.theorem.containsLineHole(actual_expr)) return true;
+        // An actual holding a meta, at its root or deeper, is only partly
+        // known, so it fixes nothing; a holey line's final check compares it
+        // with the instantiated rule (as in transparent_match.holeyActual).
+        if (view.holes_match_anything and
+            view.mirror.theorem.containsMetaLeaf(actual_expr)) return true;
 
         var symbolic_engine = self.engine();
         const translated = try self.mirrorExprToBoundValue(actual_expr, view);
         return switch (target) {
-            .line_hole => true,
+            .hole => true,
             .binder => |idx| blk: {
                 if (translated == .symbolic and
                     self.symbolicContainsBinder(translated.symbolic.expr, idx))
@@ -1207,7 +1207,7 @@ pub const RuleMatchSession = struct {
                     .symbolic_slot => |slot| try symbolic_engine.allocSymbolic(
                         .{ .dummy = slot },
                     ),
-                    .line_hole => return error.LineHoleNotSymbolic,
+                    .hole => return error.HoleNotSymbolic,
                 }
             else if (view.sourceExprForMirror(expr_id)) |source_expr|
                 try symbolic_engine.allocSymbolic(.{ .fixed = source_expr })
@@ -1312,15 +1312,15 @@ fn samePlaceholderTarget(
     return switch (lhs) {
         .binder => |idx| switch (rhs) {
             .binder => |rhs_idx| idx == rhs_idx,
-            .symbolic_slot, .line_hole => false,
+            .symbolic_slot, .hole => false,
         },
         .symbolic_slot => |idx| switch (rhs) {
-            .binder, .line_hole => false,
+            .binder, .hole => false,
             .symbolic_slot => |rhs_idx| idx == rhs_idx,
         },
-        .line_hole => |sort_name| switch (rhs) {
+        .hole => |sort_name| switch (rhs) {
             .binder, .symbolic_slot => false,
-            .line_hole => |rhs_sort| std.mem.eql(
+            .hole => |rhs_sort| std.mem.eql(
                 u8,
                 sort_name,
                 rhs_sort,

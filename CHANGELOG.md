@@ -247,6 +247,13 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- An inline sub-proof got no expected goal from its parent when the
+  parent's conclusion matched the line only with a definition unfolded:
+  with `def n1: nat = $ s z $`, `lookup_s [lookup_z [lift1 []], lift1 []]`
+  over a line that writes `n1` where `lookup_s` has `s n` failed with
+  "missing binder: i". The parent's goal is now read through
+  definitions, and the holes a parent leaves in its children's goals
+  (for the variables it cannot fix) match anything.
 - An inference failure named the first rule variable the line did not
   give, often one the statement determines: `first unsolved binder: u`
   for a lemma whose `k` occurs nowhere in its statement. When every

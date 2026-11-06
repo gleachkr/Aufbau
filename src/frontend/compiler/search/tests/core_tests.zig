@@ -349,7 +349,8 @@ test "a definition's dummy is a variable the proof names" {
     var counters = types.SearchCounters{};
     // `some_p` unfolds to `∃ y P y` with `y` a dummy; `ex_intro` takes the
     // witness `C` from the context, and the dummy, which the printed proof
-    // leaves to the checker, is named at close-out.
+    // leaves to the checker, is named at close-out. The checker reads
+    // `ax`'s `a` through `some_p`, so the suggestion leaves it out.
     var suggestions = try ndFolSearch(
         &arena,
         "def some_p {.y: obj}: wff = $ ∃ y P y $;\n" ++
@@ -361,7 +362,7 @@ test "a definition's dummy is a variable the proof names" {
     );
     defer suggestions.deinit();
 
-    try expectOffered(suggestions.items, &.{"ex_intro [ax (g := $ ∅ $, a := $ P C $) []]"});
+    try expectOffered(suggestions.items, &.{"ex_intro [ax (g := $ ∅ $) []]"});
     try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }

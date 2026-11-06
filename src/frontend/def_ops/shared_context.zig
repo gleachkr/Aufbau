@@ -170,10 +170,11 @@ pub const SharedContext = struct {
         std.ArrayListUnmanaged(u32),
     ) = .empty,
     def_compression_index_built: bool = false,
-    /// Holey proof lines: a line hole in an actual expression matches any
-    /// template part and fixes nothing (`transparent_match.holeyActual`).
-    /// Off everywhere else, so search's metas keep their meaning.
-    line_holes_match_anything: bool = false,
+    /// A meta in an actual expression matches any template part and fixes
+    /// nothing (`transparent_match.holeyActual`): for a holey proof line, and
+    /// for a goal read for the hints it gives inline minors. Off everywhere
+    /// else, so search's metas keep their meaning.
+    holes_match_anything: bool = false,
     /// One canonicalizer for every representative this context rebuilds,
     /// so the normal form of a subterm found under one ancestor serves the
     /// next. Created on first use; see `canonicalize`.
@@ -427,7 +428,6 @@ pub const SharedContext = struct {
                 .normalized => true,
             },
             .has_registry = self.registry != null,
-            .line_holes_match_anything = self.line_holes_match_anything,
         };
     }
 

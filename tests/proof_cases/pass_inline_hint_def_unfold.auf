@@ -1,0 +1,4 @@
+lookup_n1
+---------
+l1: $ lookup (cons (bvar (s z)) (cons (bvar z) G)) n1 (bvar (s (s z))) $
+  by lookup_s [lookup_z [lift1 []], lift1 []]

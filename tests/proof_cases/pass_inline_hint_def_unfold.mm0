@@ -1,0 +1,25 @@
+-- The line writes `n1` where `lookup_s` has `s n`, so its conclusion
+-- matches the goal only with `n1` unfolded. The inline children's hints
+-- come from that match: `lookup_z`'s is `lookup (cons (bvar z) G) z _`,
+-- which gives its own `lift1` the `bvar z` it needs, and the second
+-- `lift1`'s is `lift _ (bvar (s (s z)))`. (Reduced from Lean0's
+-- de Bruijn lookups.)
+
+delimiter $ ( ) $;
+strict free sort nat;
+term z: nat;
+term s: nat > nat;
+def n1: nat = $ s z $;
+strict free sort expr;
+term bvar: nat > expr;
+strict free sort ctx;
+term cons: expr > ctx > ctx;
+provable sort wff;
+term lift: expr > expr > wff;
+term lookup: ctx > nat > expr > wff;
+axiom lift1 (i: nat): $ lift (bvar i) (bvar (s i)) $;
+axiom lookup_z (A A2: expr) (G: ctx): $ lift A A2 $ > $ lookup (cons A G) z A2 $;
+axiom lookup_s (A B B2: expr) (G: ctx) (n: nat):
+  $ lookup G n B $ > $ lift B B2 $ > $ lookup (cons A G) (s n) B2 $;
+theorem lookup_n1 (G: ctx):
+  $ lookup (cons (bvar (s z)) (cons (bvar z) G)) n1 (bvar (s (s z))) $;

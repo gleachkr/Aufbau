@@ -397,13 +397,14 @@ pub const ExprInterner = struct {
 };
 
 /// The theorem-lifetime def_ops verdict memos key on the match mode as well
-/// as the exprs: under `line_holes_match_anything` a line hole matches
-/// anything, so a pair holding one has a different verdict there.
+/// as the exprs: under `holes_match_anything` a meta matches anything, so a
+/// pair holding one has a different verdict there. A pair holding none has
+/// the same verdict in both modes and keys on `false`.
 pub const DefCacheKey = struct {
     def_expr: ExprId,
     target_expr: ExprId,
     has_registry: bool,
-    line_holes_match_anything: bool,
+    holes_match_anything: bool,
 };
 
 pub const AcuiCacheKey = struct {
@@ -411,16 +412,15 @@ pub const AcuiCacheKey = struct {
     item_expr: ExprId,
     head_term_id: u32,
     has_registry: bool,
-    line_holes_match_anything: bool,
+    holes_match_anything: bool,
 };
 
 /// Key for `TheoremContext.pure_reprs`. A representative also depends on the
-/// match mode and on the registry, which canonicalizes it when present.
+/// binding mode and on the registry, which canonicalizes it when present.
 pub const PureReprKey = struct {
     expr: ExprId,
     normalized: bool,
     has_registry: bool,
-    line_holes_match_anything: bool,
 };
 
 /// Pure memos a theorem shares with its copy-on-write clones. The checker

@@ -333,18 +333,25 @@ fn inferBindingsTransparentWithSeeds(
     var session = try def_ops.beginRuleMatch(rule.args, seeds);
     defer session.deinit();
 
-    for (rule.hyps, ref_exprs) |hyp, ref_expr| {
-        if (!try session.matchTransparent(hyp, ref_expr)) {
-            return error.UnifyMismatch;
-        }
-    }
-    if (!try session.matchTransparent(rule.concl, line_expr)) {
+    if (!try matchPartsTransparent(&session, rule, ref_exprs, line_expr)) {
         return error.UnifyMismatch;
     }
     // Use strict finalization here. This path is only for transparent
     // matching of ordinary theorem binders; hidden witnesses still fall
     // through to the structural solver.
     return try session.finalizeConcreteBindings();
+}
+
+fn matchPartsTransparent(
+    session: *DefOps.RuleMatchSession,
+    rule: *const RuleDecl,
+    ref_exprs: []const ExprId,
+    line_expr: ExprId,
+) !bool {
+    for (rule.hyps, ref_exprs) |hyp, ref_expr| {
+        if (!try session.matchTransparent(hyp, ref_expr)) return false;
+    }
+    return try session.matchTransparent(rule.concl, line_expr);
 }
 
 pub fn inferBindingsTransparent(
@@ -418,6 +425,35 @@ pub fn inferBindingsTransparentFromStrictFailure(
         ref_exprs,
         line_expr,
     );
+}
+
+/// The bindings a transparent match of every part fixes; null on a mismatch.
+/// A binder no part determines stays null. The metas of an actual (the holes
+/// of a hint a parent left partly open, search's metas) match anything and
+/// fix nothing, so the visible part still fixes what it determines.
+pub fn inferPartialBindingsTransparent(
+    context: *const RuleInferenceContext,
+    partial_bindings: []const ?ExprId,
+    ref_exprs: []const ExprId,
+    line_expr: ExprId,
+) !?[]?ExprId {
+    const allocator = context.allocator;
+    const seeds = try DefOps.BindingSeed.fromOptionalBindings(
+        allocator,
+        partial_bindings,
+    );
+    defer allocator.free(seeds);
+
+    var def_ops = DefOps.Context.init(allocator, context.theorem, context.env);
+    defer def_ops.deinit();
+    def_ops.shared.holes_match_anything = true;
+    var session = try def_ops.beginRuleMatch(context.rule.args, seeds);
+    defer session.deinit();
+
+    if (!try matchPartsTransparent(&session, context.rule, ref_exprs, line_expr)) {
+        return null;
+    }
+    return try session.materializeOptionalBindings();
 }
 
 fn matchRulePartNormalized(
@@ -713,7 +749,7 @@ fn runRuleMatchSession(
     line_expr: ExprId,
     explicit_bindings: []const ?ExprId,
     rewrite_fuel_exhausted: ?*bool,
-    line_holes_match_anything: bool,
+    holes_match_anything: bool,
 ) !RuleMatchResult {
     var def_ops = DefOps.Context.initWithRegistry(
         context.allocator,
@@ -722,7 +758,7 @@ fn runRuleMatchSession(
         context.registry,
     );
     defer def_ops.deinit();
-    def_ops.shared.line_holes_match_anything = line_holes_match_anything;
+    def_ops.shared.holes_match_anything = holes_match_anything;
 
     var session = try def_ops.beginRuleMatch(context.rule.args, seeds);
     defer session.deinit();
@@ -740,7 +776,7 @@ fn runRuleMatchSession(
 
 /// Infer an inline minor's bindings from its refs and a hint with line
 /// holes by transparent rule matching, the holes matching anything
-/// (`line_holes_match_anything`). This reaches what the structural solver
+/// (`holes_match_anything`). This reaches what the structural solver
 /// cannot: a hint whose visible part needs a definition unfolded, whose
 /// hidden variable then takes a fresh variable. Null when no concrete
 /// solution comes out.
@@ -820,7 +856,7 @@ pub fn inferBindingsByMatchSeedState(
 }
 
 /// Match a holey line's conclusion with its holes interned as line holes
-/// that match anything (`line_holes_match_anything`): first with both sides
+/// that match anything (`holes_match_anything`): first with both sides
 /// normalized, then by transparent rule matching, which reaches a hole under
 /// a definition the rule has unfolded: `img f _set` against `sep x A p`.
 fn matchRulePartHoleyInterned(
@@ -832,9 +868,9 @@ fn matchRulePartHoleyInterned(
     template: TemplateExpr,
     holey_id: ExprId,
 ) !bool {
-    const saved = session.shared.line_holes_match_anything;
-    session.shared.line_holes_match_anything = true;
-    defer session.shared.line_holes_match_anything = saved;
+    const saved = session.shared.holes_match_anything;
+    session.shared.holes_match_anything = true;
+    defer session.shared.holes_match_anything = saved;
     if (try matchRulePartNormalized(
         allocator,
         env,
