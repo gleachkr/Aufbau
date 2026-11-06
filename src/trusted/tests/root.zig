@@ -789,6 +789,16 @@ test "MM0 parser declares each name once per namespace" {
         error.DuplicateAssertionName,
         parseAllStatements("provable sort wff;\nterm t: wff;\naxiom a: $ t $;\ntheorem a: $ t $;\n"),
     );
+    // `t'` is not a repeat of `t`: the name ends at a character no statement
+    // allows there.
+    try std.testing.expectError(
+        error.UnexpectedChar,
+        parseAllStatements("provable sort wff;\nterm t: wff;\nterm t': wff;\n"),
+    );
+    try std.testing.expectError(
+        error.UnexpectedChar,
+        parseAllStatements("provable sort wff;\nterm t: wff;\naxiom a: $ t $;\naxiom a': $ t $;\n"),
+    );
 }
 
 test "MM0 parser rejects unknown sorts in term signatures" {

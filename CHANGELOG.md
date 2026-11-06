@@ -247,6 +247,10 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- A name followed by a character no name can hold reported a duplicate
+  name when the part before that character was already declared
+  (`theorem ax1'` in a file with `ax1`). It now reports the unexpected
+  character, as it does for a name not yet declared.
 - An inline sub-proof got no expected goal from its parent when the
   parent's conclusion matched the line only with a definition unfolded:
   with `def n1: nat = $ s z $`, `lookup_s [lookup_z [lift1 []], lift1 []]`

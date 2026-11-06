@@ -768,18 +768,18 @@ pub const MM0Parser = struct {
             self.last_error_span = name_info.span;
             return error.HoleTokenNameCollision;
         }
-        // Sorts, terms and assertions are separate namespaces; the formal
-        // spec (examples/mm0.mm0, `TermOk`) wants a term or def name unused.
-        if (self.term_names.contains(name_info.text)) {
-            self.last_error_span = name_info.span;
-            return error.DuplicateTermName;
-        }
 
         var ctx = BinderContext.init(self.allocator);
         self.skipWhitespaceAndComments();
         try self.parseBinders(&ctx, if (is_def) .def else .term);
 
         try self.expect(':');
+        // Sorts, terms and assertions are separate namespaces; the formal
+        // spec (examples/mm0.mm0, `TermOk`) wants a term or def name unused.
+        if (self.term_names.contains(name_info.text)) {
+            self.last_error_span = name_info.span;
+            return error.DuplicateTermName;
+        }
         const ret_info = try self.parseTermType(&ctx);
         const ret_sort_name = ret_info.sort_name;
         const ret_sort = try self.lookupSortId(ret_sort_name);
@@ -852,12 +852,6 @@ pub const MM0Parser = struct {
         _ = self.consumeIdent();
         const name_info = try self.consumeRequiredIdentInfo();
         self.recordNameContext(name_info);
-        // The formal spec keeps no assertion names, but mm0-c and mm0-rs
-        // reject a repeated one, and a verifier may accept less.
-        if (!is_local and self.assertion_names.contains(name_info.text)) {
-            self.last_error_span = name_info.span;
-            return error.DuplicateAssertionName;
-        }
 
         var ctx = BinderContext.init(self.allocator);
         var hyps_rev: std.ArrayListUnmanaged(*const Expr) = .empty;
@@ -866,6 +860,12 @@ pub const MM0Parser = struct {
         try self.parseBindersWithHyps(&ctx, &hyps_rev, &hyp_names_rev, .assertion);
 
         try self.expect(':');
+        // The formal spec keeps no assertion names, but mm0-c and mm0-rs
+        // reject a repeated one, and a verifier may accept less.
+        if (!is_local and self.assertion_names.contains(name_info.text)) {
+            self.last_error_span = name_info.span;
+            return error.DuplicateAssertionName;
+        }
         const concl = try self.parseAssertionTail(&ctx, &hyps_rev, &hyp_names_rev);
 
         self.skipWhitespaceAndComments();
