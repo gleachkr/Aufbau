@@ -579,6 +579,20 @@ The same operational limits apply here:
 - It does not allocate theorem-local dummies merely to expose hidden witness
   structure.
 
+A rule over a substitution term also needs a composition law in the theory.
+With `@fresh` on the hole, a line in the rule's literal shape, such as
+`[z/a] p` to `[z/b] p` with `p` schematic, abstracts at the plugs: the hole is
+a fresh `x` and the context is `[z/x] p`. The rule's premise is then
+`[x/a] [z/x] p`, which meets the cited `[z/a] p` only through a rewrite like
+
+```
+--| @rewrite
+axiom sb_f_comp {x y: set} (t: set x y) (p: wff x):
+  $ [y/t] ([x/y] p) ↔ [x/t] p $;
+```
+
+Without one, the line must bind the hole explicitly (`z := $ z $`).
+
 ### Example
 ```
 term imp (a b: wff): wff; infixr imp: $->$ prec 25;

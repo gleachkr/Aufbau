@@ -472,6 +472,10 @@ axiom sb_f_ex {x y: set} (t: set x) (p: wff x y):
 axiom sb_f_id {x: set} (p: wff x): $ [x/x] p ↔ p $;
 
 --| @rewrite
+axiom sb_f_comp {x y: set} (t: set x y) (p: wff x):
+  $ [y/t] ([x/y] p) ↔ [x/t] p $;
+
+--| @rewrite
 axiom sb_f_maps {x: set} (t f a b: set x):
   $ [x/t] (maps f a b) ↔
     maps (⟦ x / t ⟧ f) (⟦ x / t ⟧ a) (⟦ x / t ⟧ b) $;
