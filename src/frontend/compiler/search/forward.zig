@@ -658,6 +658,10 @@ const Saturator = struct {
             }
         }
 
+        // A step that breaks MM0's dependency condition can never validate,
+        // nor can a fact derived from it.
+        if (try self.breaksBound(rule_id, rule, binding_list.items)) return null;
+
         // Every meta the recipe needs solved at use time — this layer's
         // binding values plus every derived source's, recursively — must
         // occur in the shape: the use-time solve assigns exactly the metas
@@ -739,6 +743,66 @@ const Saturator = struct {
             .has_universal_meta = shape_metas.items.len != 0,
             .source_depth = depth,
         };
+    }
+
+    /// Whether a bound binder of the step is a variable that an argument not
+    /// depending on the binder holds, where `@freshen` could not rename it
+    /// out. An open meta holds nothing yet.
+    fn breaksBound(self: *Saturator, rule_id: u32, rule: *const RuleDecl, bindings: []const DerivedRefBinding) !bool {
+        const decls = self.context.freshen_bindings.get(rule_id) orelse &.{};
+        var visited = std.AutoHashMapUnmanaged(ExprId, void).empty;
+        defer visited.deinit(self.scratch);
+        for (bindings) |blocker| {
+            const arg = rule.args[blocker.arg_index];
+            if (!arg.bound or self.theorem.interner.node(blocker.value).* != .variable) continue;
+            const deps = (try BindingValidation.exprInfo(self.context.env, self.theorem, blocker.value)).deps;
+            for (bindings) |other| {
+                if (other.arg_index == blocker.arg_index or rule.args[other.arg_index].deps & arg.deps != 0) continue;
+                const renames = for (decls) |decl| {
+                    if (decl.target_arg_idx == other.arg_index and decl.blocker_arg_idx == blocker.arg_index) break true;
+                } else false;
+                visited.clearRetainingCapacity();
+                if (try self.holdsStuck(other.value, blocker.value, deps, renames, &visited)) return true;
+            }
+        }
+        return false;
+    }
+
+    /// Whether `expr` holds a variable with a dependency in `deps`, other than
+    /// under the binder `blocker` of a head with an `@alpha` rule when
+    /// `renames` (what `alpha_rewrite.freshenExpr` can rename away). `visited`
+    /// holds the shared subterms already found free of it.
+    fn holdsStuck(
+        self: *Saturator,
+        expr: ExprId,
+        blocker: ExprId,
+        deps: u55,
+        renames: bool,
+        visited: *std.AutoHashMapUnmanaged(ExprId, void),
+    ) !bool {
+        const info = try BindingValidation.exprInfo(self.context.env, self.theorem, expr);
+        if (info.deps & deps == 0) return false;
+        if ((try visited.getOrPut(self.scratch, expr)).found_existing) return false;
+        switch (self.theorem.interner.node(expr).*) {
+            .placeholder => return false,
+            .variable => return true,
+            .app => |app| {
+                if (renames) for (self.context.registry.getAlphaRules(app.term_id)) |rule| {
+                    const lhs = switch (rule.lhs) {
+                        .app => |lhs| lhs,
+                        else => continue,
+                    };
+                    for (lhs.args, app.args) |template, arg| switch (template) {
+                        .binder => |binder| if (binder == rule.old_idx and arg == blocker) return false,
+                        else => {},
+                    };
+                };
+                for (app.args) |arg| {
+                    if (try self.holdsStuck(arg, blocker, deps, renames, visited)) return true;
+                }
+                return false;
+            },
+        }
     }
 
     /// Defer each still-unresolved non-bound binder occurring in the

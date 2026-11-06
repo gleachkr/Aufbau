@@ -67,7 +67,9 @@ pub const ExprFlags = struct {
         self.states.deinit(allocator);
     }
 
-    pub fn get(self: *const ExprFlags, expr: ExprId) ?bool {
+    /// Inline: these lookups are the core's hottest path, and a `?bool`
+    /// returned through memory stalls the load that reads it back.
+    pub inline fn get(self: *const ExprFlags, expr: ExprId) ?bool {
         if (expr >= self.states.items.len) return null;
         const state = self.states.items[expr];
         return if (state == 0) null else state == 2;
@@ -424,8 +426,13 @@ pub const WVars = struct {
         return at;
     }
 
-    pub fn holdsWVar(self: *WVars, expr: ExprId) Error!bool {
+    /// Inline for the memo hit, as `ExprFlags.get`.
+    pub inline fn holdsWVar(self: *WVars, expr: ExprId) Error!bool {
         if (self.holds.get(expr)) |known| return known;
+        return self.holdsWalk(expr);
+    }
+
+    fn holdsWalk(self: *WVars, expr: ExprId) Error!bool {
         const result = switch (self.theorem.interner.node(expr).*) {
             .variable => false,
             .placeholder => self.of(expr) != null,

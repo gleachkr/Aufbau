@@ -932,6 +932,75 @@ test "two-layer derived ref solves a shared hole in both recipe layers" {
     try std.testing.expectEqual(@as(usize, 2), counters.universal_metas_created);
 }
 
+// Each rule binds `x` beside a `c`, joined with any hypothesis. `plain` and
+// `renames` take a `c` that does not depend on `x`, so `x` may not occur in
+// it; `dependent` takes one that may hold it.
+const fwd_bound_mm0 =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\--| @vars y
+    \\sort obj;
+    \\term P (x: obj): wff;
+    \\term R: wff;
+    \\term R2: wff;
+    \\term R3 (x: obj): wff;
+    \\term bind {x: obj}: wff;
+    \\term iff (p q: wff): wff;
+    \\term all {x: obj} (p: wff x): wff;
+    \\term sb {x: obj} (y: obj) (p: wff x): wff;
+    \\--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+    \\axiom iff_refl (p: wff): $ iff p p $;
+    \\axiom iff_trans (p q r: wff): $ iff p q $ > $ iff q r $ > $ iff p r $;
+    \\axiom iff_sym (p q: wff): $ iff p q $ > $ iff q p $;
+    \\axiom iff_mp (p q: wff): $ iff p q $ > $ p $ > $ q $;
+    \\--| @alpha x y
+    \\axiom all_alpha {x y: obj} (p: wff x): $ iff (all x p) (all y (sb x y p)) $;
+    \\--| @congr
+    \\axiom all_congr {x: obj} (p q: wff x): $ iff p q $ > $ iff (all x p) (all x q) $;
+    \\--| @rewrite
+    \\axiom sb_P {x: obj} (y: obj): $ iff (sb x y (P x)) (P y) $;
+    \\--| @auto forward
+    \\axiom plain {x: obj} (c: wff): $ bind x $ > $ c $ > $ R $;
+    \\--| @auto forward
+    \\--| @freshen c x
+    \\axiom renames {x: obj} (c: wff): $ bind x $ > $ c $ > $ R2 $;
+    \\--| @auto forward
+    \\axiom dependent {x: obj} (c: wff x): $ bind x $ > $ c $ > $ R3 x $;
+    \\theorem plain_free {x: obj}: $ bind x $ > $ P x $ > $ R $;
+    \\theorem plain_other {x z: obj}: $ bind x $ > $ P z $ > $ R $;
+    \\theorem renames_free {x: obj}: $ bind x $ > $ P x $ > $ R2 $;
+    \\theorem renames_bound {x: obj}: $ bind x $ > $ all x (P x) $ > $ R2 $;
+    \\theorem held {x: obj}: $ bind x $ > $ P x $ > $ R3 x $;
+;
+
+fn expectFound(comptime theorem: []const u8, comptime goal: []const u8, expected: bool) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
+        fwd_bound_mm0,
+        theorem ++ "\n----\nl1: $ " ++ goal ++ " $ by auto?",
+        "auto?",
+        .{ .counters = &counters, .generate = .{ .enabled = true } },
+    );
+    defer suggestions.deinit();
+    try std.testing.expectEqual(expected, suggestions.items.len != 0);
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "forward drops a step whose bound variable an independent argument holds" {
+    try expectFound("plain_free", "R", false);
+    try expectFound("renames_free", "R2", false);
+}
+
+test "forward keeps a step whose bound variable nothing stuck holds" {
+    try expectFound("plain_other", "R", true);
+    try expectFound("held", "R3 x", true);
+    // `@freshen` renames the `x` that `all` binds through `@alpha`.
+    try expectFound("renames_bound", "R2", true);
+}
+
 // ---------------------------------------------------------------------------
 // `@auto trigger` seeding. The fixture is the guarded bench theory
 // (tests/search_bench_cases/nd_minimal.*): the pure repro of the

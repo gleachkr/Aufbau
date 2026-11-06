@@ -247,6 +247,11 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- `auto?` forward chaining kept a fact from a rule whose bound variable an
+  independent argument holds, which no proof can use. A search could close its
+  goal with that fact over and over, have the checker reject each proof, and
+  run out of budget; one such miss took 22 seconds and is now found in about 1.
+  A variable `@freshen` can rename out through `@alpha` still counts.
 - `mm0-zig` rejected a certificate whose proof stream runs past 4 GiB,
   usually with `TruncatedCommand`, though the format allows it and `mm0-c`
   accepts it. Positions in the proof and unify streams are now 64-bit on

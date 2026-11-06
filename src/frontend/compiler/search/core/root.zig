@@ -251,7 +251,9 @@ const CloseOut = struct {
             request.context,
             application,
             request.goal,
-            self.theorem,
+            // The caller's theorem: the text holds no wvar, and each probe
+            // clones what it is given, here free of the run's placeholders.
+            request.theorem,
             request.theorem_vars,
             .{ .counters = request.counters, .final_attempt = true },
         ) catch |err| switch (err) {
@@ -328,11 +330,22 @@ const CloseOut = struct {
             avoid.deinit(scratch);
         }
         for (eigens.items) |idx| try avoid.put(scratch, idx, .empty);
-        for (wvars.vars.items) |wvar| {
-            const goal = wvar.introduced_at orelse continue;
-            const list = avoid.getPtr(wvars.of(wvars.resolve(wvar.expr)) orelse continue) orelse continue;
-            try list.append(scratch, goal);
+        // An eigenvariable bound to one of them is in the log; the wvars of
+        // the branches the search left are not, and may be many.
+        for (avoid.keys(), avoid.values()) |idx, *list| {
+            const wvar = wvars.vars.items[idx];
+            try list.append(scratch, wvar.introduced_at.?);
             try list.appendSlice(scratch, wvar.capture);
+        }
+        for (wvars.log.items) |entry| {
+            const bound = switch (entry) {
+                .bound => |bound| wvars.vars.items[bound],
+                else => continue,
+            };
+            const goal = bound.introduced_at orelse continue;
+            const list = avoid.getPtr(wvars.of(wvars.resolve(bound.expr)) orelse continue) orelse continue;
+            try list.append(scratch, goal);
+            try list.appendSlice(scratch, bound.capture);
         }
         if (!try self.collectBoundArgs(root, &avoid)) return false;
         var shared = std.AutoHashMapUnmanaged(ExprId, void).empty;

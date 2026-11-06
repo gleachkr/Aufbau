@@ -340,7 +340,9 @@ pub const Terms = struct {
     }
 
     /// Whether `expr` holds an application of a definition `unfold` opens.
-    pub fn holdsDef(self: *Terms, expr: ExprId) Error!bool {
+    /// Inline for the memo hit, as `ExprFlags.get`.
+    pub inline fn holdsDef(self: *Terms, expr: ExprId) Error!bool {
+        if (self.defs.get(expr)) |known| return known;
         return self.holdsHead(&self.defs, expr, opensDef);
     }
 
