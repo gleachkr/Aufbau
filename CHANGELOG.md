@@ -251,6 +251,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   name when the part before that character was already declared
   (`theorem ax1'` in a file with `ax1`). It now reports the unexpected
   character, as it does for a name not yet declared.
+- `@freshen`'s failure notes named the blocker by the rule's formal name,
+  which the chosen replacement can share ("blocker binder: x", "replacement
+  binder: x"). They now name the variable the blocker was assigned, and
+  show the rewritten target, where the step the theory could not take is
+  visible (`∃ x (x ∊ u ∧ (⟦ v / x ⟧ ⟨ u , v ⟩) ∈ A)`).
 - An inline sub-proof got no expected goal from its parent when the
   parent's conclusion matched the line only with a definition unfolded:
   with `def n1: nat = $ s z $`, `lookup_s [lookup_z [lift1 []], lift1 []]`

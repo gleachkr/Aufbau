@@ -369,6 +369,9 @@ pub const NoteMessage = union(enum) {
     freshen_no_longer_depends_on_blocker: struct {
         binder_name: []const u8,
     },
+    freshen_rewritten_target: struct {
+        text: []const u8,
+    },
     theorem_concludes: struct {
         text: []const u8,
     },
@@ -1923,6 +1926,7 @@ pub fn renderNoteMessage(writer: anytype, message: NoteMessage) !void {
         .freshen_replacement => |info| try printT(writer, "note_freshen_replacement", .{info.binder_name}),
         .freshen_still_depends_on_blocker => |info| try printT(writer, "note_freshen_still_depends_on_blocker", .{info.binder_name}),
         .freshen_no_longer_depends_on_blocker => |info| try printT(writer, "note_freshen_no_longer_depends_on_blocker", .{info.binder_name}),
+        .freshen_rewritten_target => |info| try printT(writer, "note_freshen_rewritten_target", .{info.text}),
         .theorem_concludes => |info| try printT(writer, "note_theorem_concludes", .{info.text}),
         .last_line_proves => |info| try printT(writer, "note_last_line_proves", .{info.text}),
         .explicit_bindings => |info| try printT(writer, "note_explicit_bindings", .{info.summary}),

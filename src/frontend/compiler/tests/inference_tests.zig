@@ -206,13 +206,14 @@ test "compiler reports freshen attempt notes on failure" {
         mm0.CompilerDiagnosticPhase.theorem_application,
         diag.phase.?,
     );
-    try std.testing.expectEqual(@as(usize, 4), diag.noteSlice().len);
+    try std.testing.expectEqual(@as(usize, 5), diag.noteSlice().len);
     try expectNoteText(
         "attempted @freshen for target binder g",
         diag.noteSlice()[0],
     );
+    // The blocker by its theorem name `a`, not the rule's formal `x`.
     try expectNoteText(
-        "freshen blocker binder: x",
+        "freshen blocker binder: a",
         diag.noteSlice()[1],
     );
     try expectNoteStartsWith(
@@ -220,8 +221,12 @@ test "compiler reports freshen attempt notes on failure" {
         diag.noteSlice()[2],
     );
     try expectNoteText(
-        "rewritten target still depends on blocker binder x",
+        "rewritten target still depends on blocker binder a",
         diag.noteSlice()[3],
+    );
+    try expectNoteText(
+        "rewritten target: ∀ z sb z a p",
+        diag.noteSlice()[4],
     );
 }
 

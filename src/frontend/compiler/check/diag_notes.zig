@@ -496,14 +496,36 @@ fn truncateSnapshot(text: []const u8) []const u8 {
 }
 
 pub fn addFreshenAttemptNotes(
+    allocator: std.mem.Allocator,
     diag: *Diagnostic,
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+    parser: *const MM0Parser,
+    theorem_vars: *const std.StringHashMap(*const Expr),
     rule: *const RuleDecl,
     report: AlphaRewrite.FreshenAttemptReport,
 ) void {
     if (!report.attempted) return;
 
+    var names = ViewTrace.OptionalDiagNames.build(
+        allocator,
+        theorem,
+        parser,
+        theorem_vars,
+    );
+    defer names.deinit(allocator);
+    const names_ptr = names.ptr();
+
     const target_name = rule.arg_names[report.target_arg_idx] orelse "_";
-    const blocker_name = rule.arg_names[report.blocker_arg_idx] orelse "_";
+    // The blocker by its theorem name: the replacement comes from the same
+    // pool as the rule's formal, and may well share its name.
+    const blocker_name = formatNoteExpr(
+        allocator,
+        theorem,
+        env,
+        names_ptr,
+        report.blocker_expr,
+    ) catch return;
     addProofNote(diag, .{ .freshen_attempted_for_target = .{
         .binder_name = target_name,
     } });
@@ -527,6 +549,16 @@ pub fn addFreshenAttemptNotes(
                 },
             });
         }
+    }
+    if (report.rewritten_target) |rewritten| {
+        const text = formatNoteExpr(
+            allocator,
+            theorem,
+            env,
+            names_ptr,
+            rewritten,
+        ) catch return;
+        addProofNote(diag, .{ .freshen_rewritten_target = .{ .text = text } });
     }
 }
 

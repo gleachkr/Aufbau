@@ -949,7 +949,16 @@ noinline fn finishCandidate(
                     .span = application.ruleApplicationSpan(),
                     .detail = .{ .dep_violation = dep_detail },
                 }, .theorem_application);
-                addFreshenAttemptNotes(&diag, rule, freshen_report);
+                addFreshenAttemptNotes(
+                    allocator,
+                    &diag,
+                    theorem,
+                    env,
+                    parser,
+                    theorem_vars,
+                    rule,
+                    freshen_report,
+                );
                 self.setProof(diag);
                 return fresh_err;
             } orelse {
@@ -965,7 +974,16 @@ noinline fn finishCandidate(
                     .span = application.ruleApplicationSpan(),
                     .detail = .{ .dep_violation = dep_detail },
                 }, .theorem_application);
-                addFreshenAttemptNotes(&diag, rule, freshen_report);
+                addFreshenAttemptNotes(
+                    allocator,
+                    &diag,
+                    theorem,
+                    env,
+                    parser,
+                    theorem_vars,
+                    rule,
+                    freshen_report,
+                );
                 self.setProof(diag);
                 return error.AlphaRewriteSearchFailed;
             };
@@ -999,7 +1017,16 @@ noinline fn finishCandidate(
                     .span = application.ruleApplicationSpan(),
                     .detail = .{ .dep_violation = dep_detail },
                 }, .theorem_application);
-                addFreshenAttemptNotes(&diag, rule, freshen_report);
+                addFreshenAttemptNotes(
+                    allocator,
+                    &diag,
+                    theorem,
+                    env,
+                    parser,
+                    theorem_vars,
+                    rule,
+                    freshen_report,
+                );
                 self.setProof(diag);
                 return error.AlphaRewriteSearchFailed;
             }

@@ -38,9 +38,11 @@ pub const FreshenResult = struct {
 pub const FreshenAttemptReport = struct {
     attempted: bool = false,
     target_arg_idx: usize = 0,
-    blocker_arg_idx: usize = 0,
+    blocker_expr: ExprId = undefined,
     replacement_name: ?[]const u8 = null,
     blocker_dependency_remaining: ?bool = null,
+    /// The last rewriting of the target that kept the blocker.
+    rewritten_target: ?ExprId = null,
 };
 
 const NormalizeResult = @import("../normalizer/types.zig").NormalizeResult;
@@ -72,7 +74,7 @@ pub fn tryFreshenBindings(
     report.* = .{
         .attempted = true,
         .target_arg_idx = decl.target_arg_idx,
-        .blocker_arg_idx = decl.blocker_arg_idx,
+        .blocker_expr = bindings[decl.blocker_arg_idx],
     };
     DebugTrace.traceFreshen(
         debug,
@@ -129,6 +131,7 @@ pub fn tryFreshenBindings(
         bindings[decl.target_arg_idx],
         blocker_expr,
         selection.expr_id,
+        report,
     ) catch |err| {
         if (err == error.AlphaRewriteSearchFailed) {
             report.blocker_dependency_remaining = true;
@@ -330,6 +333,7 @@ fn freshenExpr(
     expr_id: ExprId,
     blocker_expr: ExprId,
     fresh_expr: ExprId,
+    report: *FreshenAttemptReport,
 ) !?NormalizeResult {
     const blocker_deps = (try Inference.exprInfo(
         normalizer.env,
@@ -380,11 +384,13 @@ fn freshenExpr(
                 .conv_line_idx = combined_conv,
             };
         }
+        report.rewritten_target = normalized.result_expr;
         if (try freshenExpr(
             normalizer,
             normalized.result_expr,
             blocker_expr,
             fresh_expr,
+            report,
         )) |next| {
             return .{
                 .result_expr = next.result_expr,
@@ -424,6 +430,7 @@ fn freshenExpr(
             arg,
             blocker_expr,
             fresh_expr,
+            report,
         ) orelse continue;
         new_args[idx] = child_result.result_expr;
         child_proofs[idx] = child_result.conv_line_idx;
