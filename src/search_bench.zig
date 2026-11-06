@@ -723,6 +723,7 @@ const RunTicks = struct {
     sym: u64 = 0,
     shape: u64 = 0,
     candidates: u64 = 0,
+    core: u64 = 0,
 
     fn of(counters: *const Search.SearchCounters) RunTicks {
         return .{
@@ -730,6 +731,7 @@ const RunTicks = struct {
             .sym = counters.gen_sym_ticks,
             .shape = counters.gen_walk_ticks,
             .candidates = counters.full_try_candidate_calls,
+            .core = counters.gen_core_ticks,
         };
     }
 
@@ -739,6 +741,7 @@ const RunTicks = struct {
             self.sym,
             self.shape,
             self.candidates,
+            self.core,
         );
     }
 };

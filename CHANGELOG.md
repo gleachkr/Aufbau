@@ -130,6 +130,11 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Changed
 
+- A search stops after about 3 seconds at the default budget, down from about
+  22. The work budget now also counts the search core's matching, comparing
+  and term walks, which it used to miss, and its default is 2.3 units instead
+  of 6.3. A few proofs that took longer now miss at the default, and the miss
+  report suggests the `budget:` to retry with.
 - A theorem's or axiom's bound variable named only in dependency lists
   (`{k: set} (G: hyps k)` with no `k` in any hypothesis or the
   conclusion) is now reported as an unused parameter. Such a variable is

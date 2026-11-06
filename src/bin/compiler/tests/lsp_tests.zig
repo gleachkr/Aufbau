@@ -1105,10 +1105,10 @@ test "LSP code action offers a retry with raised limits after an auto? miss" {
     const action = codeActionWithReplacement(
         actions,
         proof_uri,
-        "auto? (depth: 3, budget: 14)",
+        "auto? (depth: 3, budget: 6)",
     ) orelse return error.MissingRetryCodeAction;
     try std.testing.expectEqualStrings(
-        "Retry with depth: 3, budget: 14",
+        "Retry with depth: 3, budget: 6",
         action.title,
     );
     const edit = codeActionSingleEdit(action, proof_uri) orelse {

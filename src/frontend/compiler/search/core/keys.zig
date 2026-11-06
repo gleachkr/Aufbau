@@ -38,9 +38,11 @@
 //! get different keys, which costs a memo hit but never soundness.
 
 const std = @import("std");
-const ExprId = @import("../../../expr.zig").ExprId;
+const expr_mod = @import("../../../expr.zig");
+const ExprId = expr_mod.ExprId;
 const Terms = @import("./terms.zig").Terms;
 const terms_mod = @import("./terms.zig");
+const types = @import("../types.zig");
 const WVars = @import("./wvars.zig").WVars;
 
 pub const Error = terms_mod.Error;
@@ -189,6 +191,7 @@ pub const Keys = struct {
     /// Record `expr`'s wvars in order of first occurrence, visiting bag
     /// members in shape order.
     fn collect(self: *Keys, expr: ExprId) Error!void {
+        expr_mod.work_ticks_core +%= types.core_key_weight;
         if (!try self.wvars.holdsWVar(expr)) return;
         if ((try self.visited.getOrPut(self.allocator, expr)).found_existing) return;
         switch (self.terms.theorem.interner.node(expr).*) {
@@ -229,6 +232,7 @@ pub const Keys = struct {
     /// Append `expr` to `out` with each wvar written as its position in
     /// `order`.
     fn write(self: *Keys, expr: ExprId, out: *std.ArrayListUnmanaged(u8)) Error!void {
+        expr_mod.work_ticks_core +%= types.core_key_weight;
         if (!try self.wvars.holdsWVar(expr)) {
             try putTo(self.allocator, out, 'g');
             return putTo(self.allocator, out, expr);
@@ -275,6 +279,7 @@ pub const Keys = struct {
     /// A hash of `expr` that every wvar leaf of one sort shares. Valid for
     /// resolved expressions, the only kind asked about.
     fn shape(self: *Keys, expr: ExprId) Error!u64 {
+        expr_mod.work_ticks_core +%= types.core_key_weight;
         if (self.shapes.get(expr)) |known| return known;
         var hasher = std.hash.Wyhash.init(0);
         switch (self.terms.theorem.interner.node(expr).*) {
@@ -315,6 +320,7 @@ pub const Keys = struct {
     /// The variables `expr` mentions, bound ones included, sorted. Valid
     /// for resolved expressions.
     pub fn variables(self: *Keys, expr: ExprId) Error![]const ExprId {
+        expr_mod.work_ticks_core +%= types.core_key_weight;
         if (self.var_sets.get(expr)) |known| return known;
         const result: []const ExprId = switch (self.terms.theorem.interner.node(expr).*) {
             .variable => try self.arena.dupe(ExprId, &.{expr}),

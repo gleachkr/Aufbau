@@ -125,7 +125,7 @@ You can allow more search work on a single line by passing parameters to
 that call:
 
 ```
-l4: $ a → b , ¬ b ⊢ ¬ a $ by auto? (depth: 8, budget: 13)
+l4: $ a → b , ¬ b ⊢ ¬ a $ by auto? (depth: 8, budget: 6)
 ```
 
 The parameters, their defaults and their ranges are listed in

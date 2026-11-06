@@ -131,7 +131,7 @@ auto? search failed: the search was cut short: the limit of 256 subgoals per
 pass was reached in 1 pass. 153 applications validated (55 accepted). Every
 depth below 6 was searched, so the proof may also be deeper. These limits share
 one work budget, so raise them together: try 'auto? (depth: 8, nodes: 512,
-budget: 14)'. A larger search finds only some of the proofs a smaller one
+budget: 6)'. A larger search finds only some of the proofs a smaller one
 misses; if it fails too, try proving an intermediate lemma first. Most-tried
 rules: ax (81 tried, 2 accepted), not_intro (42 tried, 42 accepted), all_intro
 (19 tried, 0 accepted).

@@ -335,8 +335,8 @@ pub const guards = [_]FrontierGuard{
     },
     // Depth guard for the phase schedule (`generate.buildSchedule`): every
     // phase runs at depth 1 before any deeper pass, so `CONTR`'s k=2 step,
-    // which needs a late phase, is found in about 70M ticks. When late
-    // phases waited for every deeper pass to miss it took about 5G; the 1G
+    // which needs a late phase, is found in about 13M ticks. When late
+    // phases waited for every deeper pass to miss it took about 1.3G; the 1G
     // budget catches a return to that. Capped at k=2, the frontier.
     .{
         .filter = "CONTR",
@@ -422,16 +422,16 @@ pub const guards = [_]FrontierGuard{
     // sub-goal harvest, its free-variable gate, or the scoped extension
     // pool regresses. Capped at k=5, the frontier, for the core budget
     // spend described at `lt_trans_ax`, so this no longer reaches the k=7
-    // cut. The k=4 and k=5 cuts take 11G since the core passes open cuts
+    // cut. The k=4 and k=5 cuts take 3.3G since the core passes open cuts
     // through rules and retries a premise no fact closes first when the
-    // fact guess for its sibling fails, so the budget is 12G.
+    // fact guess for its sibling fails, so the budget is 3.6G.
     .{
         .filter = "cb_bijection_maps_domain",
         .files = "tests/search_bench_cases/zermelo_frontier.mm0:" ++
             "tests/search_bench_cases/zermelo_frontier.auf",
         .mode = "depth",
         .max_k = 5,
-        .global_budget = 12_000_000_000,
+        .global_budget = 3_600_000_000,
     },
     // Pinned family fills (task #512, `backtrack.solvePinnedMetas`) must be
     // anchored. hoare's `valid_elim` families `?g ⊢ ?w : φ` face `at_mp`'s
@@ -641,7 +641,7 @@ pub const guards = [_]FrontierGuard{
     // backward`. Eager rules are tried first, committed to once applied, and
     // exempt from the depth budget, so counted depth is roughly the number
     // of genuine choice points and every theorem is FULL at the default
-    // md=6. The worst theorem needs ~0.31G ticks (exists_mono), so the nets
+    // md=6. The worst theorem needs ~27M ticks (drinker), so the nets
     // below run at the pure default budget with >10x margin. How the old
     // per-theorem depth floors and budget overrides were closed:
     // docs/frontier_guard_history.md.

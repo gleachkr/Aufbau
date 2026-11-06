@@ -415,7 +415,7 @@ fn writeStatusDetail(
     try appendTopRuleAttempts(w, counters);
 }
 
-/// " Try 'auto? (nodes: 512, budget: 14)'." — on a cut-short miss, with
+/// " Try 'auto? (nodes: 512, budget: 6)'." — on a cut-short miss, with
 /// the reason to raise the limits together and what to try if that fails.
 fn writeRetryAdvice(
     w: anytype,

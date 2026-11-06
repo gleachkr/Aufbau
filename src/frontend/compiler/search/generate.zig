@@ -282,6 +282,7 @@ pub fn generateTopLevel(
     // as `compiler.work_budget` for the whole call.
     const ticks_start = expr_mod.work_ticks;
     const sym_ticks_start = expr_mod.work_ticks_sym;
+    const core_ticks_start = expr_mod.work_ticks_core;
     const walk_ticks_start = expr_mod.work_ticks_walk;
     // Candidate checks run deep in the descent; the checker's stack guard
     // measures from here so it counts the descent's frames too.
@@ -527,6 +528,7 @@ pub fn generateTopLevel(
     if (gen_counters) |c| {
         c.gen_work_ticks = expr_mod.work_ticks -% ticks_start;
         c.gen_sym_ticks = expr_mod.work_ticks_sym -% sym_ticks_start;
+        c.gen_core_ticks = expr_mod.work_ticks_core -% core_ticks_start;
         c.gen_walk_ticks = expr_mod.work_ticks_walk -% walk_ticks_start;
     }
 

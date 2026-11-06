@@ -334,7 +334,7 @@ distinguishes the cases, because they call for different responses:
   candidate it had, to completion, up to its depth limit. Nothing it can
   build within that depth closes the goal. That does not prove the goal
   unprovable, since the search does not try every possible proof. The
-  report suggests a deeper retry, e.g. `Try 'auto? (depth: 8, budget: 14)'`;
+  report suggests a deeper retry, e.g. `Try 'auto? (depth: 8, budget: 6)'`;
   the budget grows with the depth because a deeper search spends more.
   If that fails too, make the space richer: prove an intermediate lemma
   line for the pool, or enroll rules with `@auto` annotations.
@@ -353,7 +353,7 @@ distinguishes the cases, because they call for different responses:
   report adds "Every depth below N was searched", and the retry raises
   depth too. The report then suggests raising every limit that was hit,
   together with the budget, e.g.
-  `try 'auto? (nodes: 512, fuel: 8192, budget: 14)'`.
+  `try 'auto? (nodes: 512, fuel: 8192, budget: 6)'`.
 - **"stopped by the call-stack guard …"**: one branch recursed deep
   enough to risk the process stack. No parameter raises this guard; try
   a smaller goal or prove an intermediate lemma first.
@@ -393,7 +393,7 @@ written `name: INTEGER` (alongside any ordinary `name := $ … $`
 bindings):
 
 ```text
-l1: $ hard goal $ by auto? (depth: 8, budget: 13)
+l1: $ hard goal $ by auto? (depth: 8, budget: 6)
 ```
 
 The parameters (`depth`, `nodes`, `fuel` and `budget` for `auto?`;
@@ -446,7 +446,7 @@ $ abc search hello.mm0 hello.auf
 hello.auf:3  weaken l1  auto?  found
   h1
 hello.auf:7  imp_id l1  auto?  missed
-  retry: auto? (depth: 8, budget: 14)
+  retry: auto? (depth: 8, budget: 6)
 1 found, 1 missed
 ```
 

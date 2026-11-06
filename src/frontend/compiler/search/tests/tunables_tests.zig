@@ -162,12 +162,12 @@ test "auto? per-call depth parameter narrows one search" {
     // Raising depth spends more of the shared budget, so the budget grows
     // with it (the default ~6.3s rounds up to 7 units).
     try std.testing.expect(
-        std.mem.indexOf(u8, detail, "Try 'auto? (depth: 3, budget: 14)'") != null,
+        std.mem.indexOf(u8, detail, "Try 'auto? (depth: 3, budget: 6)'") != null,
     );
     // The retry edit rewrites the placeholder's own parameters.
     const retry = narrowed.retry orelse return error.MissingRetry;
-    try std.testing.expectEqualStrings("Retry with depth: 3, budget: 14", retry.title);
-    try std.testing.expectEqualStrings("auto? (depth: 3, budget: 14)", retry.replacement);
+    try std.testing.expectEqualStrings("Retry with depth: 3, budget: 6", retry.title);
+    try std.testing.expectEqualStrings("auto? (depth: 3, budget: 6)", retry.replacement);
 }
 
 test "auto? retry keeps the parameters it does not raise" {
@@ -188,7 +188,7 @@ test "auto? retry keeps the parameters it does not raise" {
     try std.testing.expectEqual(types.SearchStatus.miss, narrowed.status);
     const retry = narrowed.retry orelse return error.MissingRetry;
     try std.testing.expectEqualStrings(
-        "auto? (fuel: 4096, depth: 3, budget: 14)",
+        "auto? (fuel: 4096, depth: 3, budget: 6)",
         retry.replacement,
     );
     // The edit covers the keyword through the closing parenthesis.
@@ -322,7 +322,7 @@ test "auto? fuel exhaustion is reported as truncation with a fuel hint" {
     );
     // Fuel doubles, and the budget grows with it.
     try std.testing.expect(std.mem.indexOf(u8, detail, "fuel: 2") != null);
-    try std.testing.expect(std.mem.indexOf(u8, detail, "budget: 14)'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "budget: 6)'") != null);
     const retry = starved.retry orelse return error.MissingRetry;
     try std.testing.expect(std.mem.indexOf(u8, retry.replacement, "fuel: 2") != null);
 }
@@ -362,7 +362,7 @@ test "auto? node-cap truncation is reported as truncation with a nodes hint" {
         std.mem.indexOf(u8, detail, "limit of 1 subgoals per pass") != null,
     );
     try std.testing.expect(std.mem.indexOf(u8, detail, "nodes: 2") != null);
-    try std.testing.expect(std.mem.indexOf(u8, detail, "budget: 14)'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "budget: 6)'") != null);
     try std.testing.expect(
         std.mem.indexOf(u8, detail, "search space was exhausted") == null,
     );

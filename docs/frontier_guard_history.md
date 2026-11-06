@@ -130,3 +130,9 @@ unbound (2026-11-01), `cb_bijection_maps_domain`'s k=4 and k=5 cuts went
 from 5.9G to 6.9G ticks, past the 6.3G default: the core tries more cut
 values before the generation search gets its turn. The guard keeps its
 k=5 cap with an 8G budget.
+
+When the work budget began charging the core's matching and walks
+(2026-11-06), the older weights were divided by 4 to keep a unit near one
+nanosecond, and the default went from 6.3G to 2.3G. Figures above this
+paragraph are in the old units. `cb_bijection_maps_domain`'s k=4 and k=5
+cuts now take 3.3G, past the default, and the guard's budget is 3.6G.

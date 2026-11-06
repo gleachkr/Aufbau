@@ -567,9 +567,11 @@ pub const SearchCounters = struct {
     /// Work ticks consumed by the whole generation call (all retry phases) —
     /// the raw counts behind the per-call `GlobalBudget`'s weighted cost.
     /// Zero when generation never ran. See `expr.zig` `work_ticks` /
-    /// `work_ticks_sym`.
+    /// `work_ticks_sym`. `gen_core_ticks` is already weighted, as
+    /// `work_ticks_core` is.
     gen_work_ticks: u64 = 0,
     gen_sym_ticks: u64 = 0,
+    gen_core_ticks: u64 = 0,
     gen_walk_ticks: u64 = 0,
     /// Set when the per-call `GlobalBudget` ran out (as opposed to
     /// per-phase fuel), in the direct pass or generation.
@@ -1065,14 +1067,23 @@ pub const Fuel = struct {
 /// per-candidate charge (each `Fuel.spend` — a `tryCandidate` — carries fixed
 /// overhead: theorem/vars clones, session setup/hash — that no per-node tick
 /// sees). Calibrated on the full depth corpus by regressing per-call wall
-/// time on the four counts; units are ≈nanoseconds of calibrated wall, so a
+/// time on the counts; units are ≈nanoseconds of calibrated wall, so a
 /// budget limit reads as "estimated ns of search work" (4e9 ≈ 4s). The counts
 /// themselves are machine-independent, so capped behavior is deterministic
 /// even though the ns calibration is machine-specific.
-pub const intern_tick_weight: u64 = 600;
-pub const sym_tick_weight: u64 = 190;
-pub const walk_tick_weight: u64 = 110;
-pub const candidate_weight: u64 = 100_000;
+pub const intern_tick_weight: u64 = 150;
+pub const sym_tick_weight: u64 = 48;
+pub const walk_tick_weight: u64 = 28;
+pub const candidate_weight: u64 = 25_000;
+/// The search core's work per visit, from the same regression: a comparison
+/// that may stop at the first differing head, a matcher step, a walk over
+/// wvars, a walk that builds a memo key. Each site adds its weight to
+/// `expr.work_ticks_core` directly, a threadlocal per kind being more than one
+/// sum needs.
+pub const core_compare_weight: u64 = 14;
+pub const core_match_weight: u64 = 31;
+pub const core_wvar_weight: u64 = 9;
+pub const core_key_weight: u64 = 5;
 
 /// The budget's cost unit: weighted ticks.
 pub fn weightedTicks(
@@ -1080,11 +1091,13 @@ pub fn weightedTicks(
     sym_ticks: u64,
     walk_ticks: u64,
     candidates: u64,
+    core_ticks: u64,
 ) u64 {
     return intern_ticks *% intern_tick_weight +%
         sym_ticks *% sym_tick_weight +%
         walk_ticks *% walk_tick_weight +%
-        candidates *% candidate_weight;
+        candidates *% candidate_weight +%
+        core_ticks;
 }
 
 pub const GlobalBudget = struct {
@@ -1094,13 +1107,14 @@ pub const GlobalBudget = struct {
     start_intern: u64,
     start_sym: u64,
     start_walk: u64,
+    start_core: u64,
     /// Candidates spent so far (counted here, not threadlocally: `Fuel.spend`
     /// reports each one via `spendCandidate`).
     candidates: u64 = 0,
     /// Set once exhausted; observability for the driver/bench.
     exhausted: bool = false,
     /// `expr.work_ticks*` when `pause` was called; null while charging.
-    paused_at: ?[3]u64 = null,
+    paused_at: ?[4]u64 = null,
 
     pub fn init(limit: u64) GlobalBudget {
         return .{
@@ -1108,6 +1122,7 @@ pub const GlobalBudget = struct {
             .start_intern = expr_mod.work_ticks,
             .start_sym = expr_mod.work_ticks_sym,
             .start_walk = expr_mod.work_ticks_walk,
+            .start_core = expr_mod.work_ticks_core,
         };
     }
 
@@ -1130,11 +1145,12 @@ pub const GlobalBudget = struct {
         self.start_intern +%= now[0] -% at[0];
         self.start_sym +%= now[1] -% at[1];
         self.start_walk +%= now[2] -% at[2];
+        self.start_core +%= now[3] -% at[3];
         self.paused_at = null;
     }
 
-    fn ticksNow() [3]u64 {
-        return .{ expr_mod.work_ticks, expr_mod.work_ticks_sym, expr_mod.work_ticks_walk };
+    fn ticksNow() [4]u64 {
+        return .{ expr_mod.work_ticks, expr_mod.work_ticks_sym, expr_mod.work_ticks_walk, expr_mod.work_ticks_core };
     }
 
     pub fn spent(self: *const GlobalBudget) u64 {
@@ -1144,6 +1160,7 @@ pub const GlobalBudget = struct {
             now[1] -% self.start_sym,
             now[2] -% self.start_walk,
             self.candidates,
+            now[3] -% self.start_core,
         );
     }
 
@@ -1486,22 +1503,15 @@ pub const GenerateOptions = struct {
     persist_negative: bool = true,
     /// Cost-weighted per-call latency cap: total weighted work ticks one
     /// `auto?` generation call may consume across ALL retry phases (see
-    /// `GlobalBudget`; units ≈ ns of calibrated wall, so 6.3e9 ≈ 6s —
-    /// though with `persist_negative` the observed wall per tick on
-    /// miss-heavy workloads is well below the calibration).
+    /// `GlobalBudget`; units ≈ ns of native wall on the calibration machine,
+    /// so 2.3e9 ≈ 2.3 s, and the corpus's slowest search takes about 3 s).
     /// Exhaustion truncates the un-tried candidate tail exactly like
     /// per-phase fuel exhaustion, and the tick counts are deterministic, so
-    /// capped results are machine-independent. Default sized 1.15x above the
-    /// most expensive FOUND search in the depth corpus (surj_wit_maps k=1 at
-    /// 5.48e9 after `persist_negative` freed per-phase fuel to explore more
-    /// distinct candidates per cell — the memo skips spend no fuel; it was
-    /// 3.34e9 after the solveProof interner scope, 2.91e9 after the
-    /// pure-representative memo, 4.33e9 pre-memo), so every known proof
-    /// clears it while doomed misses stop near the found ceiling: zero
-    /// frontier loss. The wall cost of the higher tick cap is offset by
-    /// persistence cutting wall-per-tick on miss-heavy workloads (fail-max
-    /// dropped despite the raise). Null disables the cap.
-    global_budget: ?u64 = 6_300_000_000,
+    /// capped results are machine-independent. The default is set by that
+    /// latency, not by the corpus's most expensive proof: a few proofs cost
+    /// more and need a raised `budget:`, which the miss report suggests.
+    /// Null disables the cap.
+    global_budget: ?u64 = 2_300_000_000,
     /// Call-stack guard for the recursive descent: the deepest point (in
     /// stack bytes below the driver's entry frame, measured via
     /// `@frameAddress`) the search may recurse to before the branch is

@@ -71,13 +71,15 @@
 //! the premises bind them.
 
 const std = @import("std");
-const ExprId = @import("../../../expr.zig").ExprId;
-const TheoremContext = @import("../../../expr.zig").TheoremContext;
+const expr_mod = @import("../../../expr.zig");
+const ExprId = expr_mod.ExprId;
+const TheoremContext = expr_mod.TheoremContext;
 const Rules = @import("../../../rules.zig");
 const TemplateExpr = Rules.TemplateExpr;
 const RuleDecl = @import("../../../env.zig").RuleDecl;
 const AcuiBag = @import("../../../acui_bag.zig");
-const Context = @import("../types.zig").Context;
+const types = @import("../types.zig");
+const Context = types.Context;
 const catalog = @import("./catalog.zig");
 const WVars = @import("./wvars.zig").WVars;
 const ExprFlags = @import("./wvars.zig").ExprFlags;
@@ -653,6 +655,7 @@ pub const Terms = struct {
     /// be an instance of `expr`: a cheap structural check where an unfixed
     /// binder, an unbound wvar and a bag stand for anything.
     pub fn mightFit(self: *Terms, template: TemplateExpr, bindings: []const ?ExprId, expr: ExprId) Error!bool {
+        expr_mod.work_ticks_core +%= types.core_compare_weight;
         switch (template) {
             .binder => |idx| return if (bindings[idx]) |value| self.mightEqual(value, expr, .strict) else true,
             .app => |app| {
@@ -675,6 +678,7 @@ pub const Terms = struct {
     /// where heads differ, an application of a definition declared after
     /// the other head is compared unfolded.
     pub fn mightEqual(self: *Terms, a: ExprId, b: ExprId, how: enum { strict, unfolding }) Error!bool {
+        expr_mod.work_ticks_core +%= types.core_compare_weight;
         const lhs = self.wvars.resolve(a);
         const rhs = self.wvars.resolve(b);
         if (lhs == rhs) return true;
@@ -758,6 +762,7 @@ pub const Terms = struct {
     /// and no bag is read. It interns nothing, and further bindings leave
     /// it true, so `unify` may skip the pair.
     fn clash(self: *Terms, a: ExprId, b: ExprId) Error!bool {
+        expr_mod.work_ticks_core +%= types.core_compare_weight;
         const lhs = self.wvars.resolve(a);
         const rhs = self.wvars.resolve(b);
         if (lhs == rhs) return false;
@@ -816,6 +821,7 @@ pub const Terms = struct {
     /// `clash` for `unify`: they differ where `expr` holds no unbound wvar
     /// and the matcher neither postpones, unfolds nor reads a bag.
     fn conclusionClash(self: *Terms, template: TemplateExpr, expr: ExprId) Error!bool {
+        expr_mod.work_ticks_core +%= types.core_compare_weight;
         const app = switch (template) {
             .binder => return false,
             .app => |app| app,
@@ -1110,6 +1116,7 @@ fn Matcher(comptime Sink: type) type {
         }
 
         fn term(self: *Self, template: TemplateExpr, expr: ExprId, next: ?*const Pending) MatchError!void {
+            expr_mod.work_ticks_core +%= types.core_match_weight;
             switch (template) {
                 .binder => |idx| try self.bind(idx, expr, next),
                 .app => |app| {
@@ -1167,6 +1174,7 @@ fn Matcher(comptime Sink: type) type {
         }
 
         fn bind(self: *Self, idx: usize, expr: ExprId, next: ?*const Pending) MatchError!void {
+            expr_mod.work_ticks_core +%= types.core_match_weight;
             if (self.bindings[idx]) |value| return self.unify(value, expr, next);
             self.bindings[idx] = expr;
             defer self.bindings[idx] = null;
@@ -1174,6 +1182,7 @@ fn Matcher(comptime Sink: type) type {
         }
 
         fn unify(self: *Self, a: ExprId, b: ExprId, next: ?*const Pending) MatchError!void {
+            expr_mod.work_ticks_core +%= types.core_match_weight;
             const wvars = self.terms.wvars;
             const lhs = wvars.resolve(a);
             const rhs = wvars.resolve(b);
@@ -1283,6 +1292,7 @@ fn Matcher(comptime Sink: type) type {
         }
 
         fn pairBags(self: *Self, state: BagPairing, next: ?*const Pending) MatchError!void {
+            expr_mod.work_ticks_core +%= types.core_match_weight;
             const idempotent = state.combiner.law.isIdempotent();
             var after = state;
             after.index += 1;
@@ -1411,6 +1421,7 @@ fn Matcher(comptime Sink: type) type {
         }
 
         fn bag(self: *Self, state: BagState, next: ?*const Pending) MatchError!void {
+            expr_mod.work_ticks_core +%= types.core_match_weight;
             if (state.index == state.template.len) return self.finishBag(state, next);
             const part = state.template[state.index];
             if (self.isRestBinder(state.combiner, part)) {
@@ -1514,6 +1525,7 @@ fn Matcher(comptime Sink: type) type {
         /// the run is what the members after it leave; otherwise each length
         /// is an alternative.
         fn seq(self: *Self, state: SeqState, next: ?*const Pending) MatchError!void {
+            expr_mod.work_ticks_core +%= types.core_match_weight;
             if (state.part == state.template.len) {
                 if (state.at == state.goal.len) try self.run(next);
                 return;

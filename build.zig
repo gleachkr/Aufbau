@@ -855,9 +855,9 @@ pub fn build(b: *std.Build) void {
     abc_search_depth.expectExitCode(4);
     abc_search_depth.expectStdOutEqual(
         "retry.auf:3  near l1  auto?  missed\n" ++
-            "  retry: auto? (depth: 3, budget: 14)\n" ++
+            "  retry: auto? (depth: 3, budget: 6)\n" ++
             "retry.auf:7  far l1  auto?  missed\n" ++
-            "  retry: auto? (depth: 3, budget: 14)\n" ++
+            "  retry: auto? (depth: 3, budget: 6)\n" ++
             "0 found, 2 missed\n",
     );
     cli_smoke_step.dependOn(&abc_search_depth.step);
@@ -870,7 +870,7 @@ pub fn build(b: *std.Build) void {
     abc_search_only.expectExitCode(4);
     abc_search_only.expectStdOutEqual(
         "retry.auf:7  far l1  auto?  missed\n" ++
-            "  retry: auto? (depth: 3, budget: 14)\n" ++
+            "  retry: auto? (depth: 3, budget: 6)\n" ++
             "0 found, 1 missed\n",
     );
     cli_smoke_step.dependOn(&abc_search_only.step);
@@ -884,7 +884,7 @@ pub fn build(b: *std.Build) void {
     abc_search_retry_json.addCheck(.{ .expect_stdout_match = "\"status\":\"found\"," ++
         "\"suggestions\":[\"st [rs [near []]]\"]," });
     abc_search_retry_json.addCheck(.{ .expect_stdout_match = "\"rounds\":[{\"status\":\"missed\"," ++
-        "\"retry\":\"auto? (depth: 3, budget: 14)\",\"ticks\":" });
+        "\"retry\":\"auto? (depth: 3, budget: 6)\",\"ticks\":" });
     cli_smoke_step.dependOn(&abc_search_retry_json.step);
 
     const abc_search_only_none = b.addRunArtifact(compiler_exe);

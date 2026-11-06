@@ -51,7 +51,8 @@ const std = @import("std");
 const ExprModule = @import("../../../expr.zig");
 const ExprId = ExprModule.ExprId;
 const TheoremContext = ExprModule.TheoremContext;
-const Context = @import("../types.zig").Context;
+const types = @import("../types.zig");
+const Context = types.Context;
 
 pub const Error = error{ OutOfMemory, TooManyTheoremExprs };
 
@@ -433,6 +434,7 @@ pub const WVars = struct {
     }
 
     fn holdsWalk(self: *WVars, expr: ExprId) Error!bool {
+        ExprModule.work_ticks_core +%= types.core_wvar_weight;
         const result = switch (self.theorem.interner.node(expr).*) {
             .variable => false,
             .placeholder => self.of(expr) != null,
@@ -450,6 +452,7 @@ pub const WVars = struct {
     /// `expr` with every bound wvar replaced by its value, and each unbound
     /// one by `names`' entry when it has one.
     pub fn deref(self: *WVars, expr: ExprId, names: ?*const std.AutoHashMapUnmanaged(u32, ExprId)) Error!ExprId {
+        ExprModule.work_ticks_core +%= types.core_wvar_weight;
         if (!try self.holdsWVar(expr)) return expr;
         switch (self.theorem.interner.node(expr).*) {
             .variable => return expr,
@@ -480,6 +483,7 @@ pub const WVars = struct {
         expr: ExprId,
         out: *std.ArrayListUnmanaged(u32),
     ) Error!void {
+        ExprModule.work_ticks_core +%= types.core_wvar_weight;
         if (!try self.holdsWVar(expr)) return;
         switch (self.theorem.interner.node(expr).*) {
             .variable => {},
@@ -497,6 +501,7 @@ pub const WVars = struct {
     /// depends on it: substituting `expr` for a binder that does not
     /// depend on `variable` breaks MM0's dependency condition either way.
     pub fn mentions(self: *WVars, expr: ExprId, variable: ExprId) bool {
+        ExprModule.work_ticks_core +%= types.core_wvar_weight;
         const at = self.resolve(expr);
         if (at == variable) return true;
         return switch (self.theorem.interner.node(at).*) {

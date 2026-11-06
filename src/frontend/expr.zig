@@ -177,6 +177,10 @@ const ExprIdIndex = std.HashMapUnmanaged(
 pub threadlocal var work_ticks: u64 = 0;
 pub threadlocal var work_ticks_sym: u64 = 0;
 pub threadlocal var work_ticks_walk: u64 = 0;
+/// The search core's own work, already weighted (`search/types.zig`
+/// `core_*_weight`): the comparisons, matcher steps and walks that intern
+/// nothing, so no tick above sees them.
+pub threadlocal var work_ticks_core: u64 = 0;
 
 /// A ceiling over the ticks above that a budgeted search installs for the
 /// duration of one call (`search/types.zig` `GlobalBudget.workBudget`). The

@@ -479,6 +479,7 @@ fn costOf(out: std.mem.Allocator, counters: *const Search.SearchCounters) !Cost 
             counters.gen_sym_ticks,
             counters.gen_walk_ticks,
             counters.full_try_candidate_calls,
+            counters.gen_core_ticks,
         ) else 0,
         .candidates = counters.full_try_candidate_calls,
         .wall_ns = counters.cold_setup_ns + counters.warm_search_ns,
