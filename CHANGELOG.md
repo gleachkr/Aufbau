@@ -232,6 +232,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   proofs plus one more church row; the natural-deduction Pelletier battery
   finds one more problem, and the ⊥ goals that kept re-deriving
   themselves through `raa` take about half the work.
+- `auto?` also recognizes a premise that becomes a goal it is already
+  working on once the part of the context it receives is filled in:
+  weakening's premise `g ⊢ a`, given the whole of the goal's context, is
+  the goal again one level deeper. It is cut there, so an unprovable goal
+  under such a rule, with a context hole, ends in a millisecond instead
+  of stacking the rule until the budget runs out. The bench corpus finds
+  the same proofs.
 - When none of a rule's remaining premises can be met by a known fact,
   `auto?` now searches first the premise whose structure fixes variables
   the other premises share, such as an elimination rule's major premise,

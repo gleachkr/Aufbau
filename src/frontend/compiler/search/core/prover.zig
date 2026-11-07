@@ -530,13 +530,7 @@ pub const Prover = struct {
             // other proof can help the continuation.
             if (outcome != .failed or self.stats.rejects == rejects) return outcome;
         };
-        var on_path = goal.path;
-        while (on_path) |cell| : (on_path = cell.next) {
-            if (cell.expr == goal.expr) {
-                self.prune_floor = @min(self.prune_floor, cell.level);
-                return .failed;
-            }
-        }
+        if (self.repeats(goal.path, goal.expr)) return .failed;
         // A goal only facts may close has not run out of proofs as the
         // same goal closed by rules would.
         const full = goal.bridged == null and goal.pass.len == 0;
@@ -852,6 +846,18 @@ pub const Prover = struct {
         return result;
     }
 
+    /// Whether `expr` is a goal on `path`, which prunes it (`prune_floor`).
+    fn repeats(self: *Prover, path: ?*const PathCell, expr: ExprId) bool {
+        var on_path = path;
+        while (on_path) |cell| : (on_path = cell.next) {
+            if (cell.expr == expr) {
+                self.prune_floor = @min(self.prune_floor, cell.level);
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// Try every alternative for `frame`'s goal until one leads to a proof
     /// or a cut.
     fn expand(self: *Prover, frame: *Frame, close: *const Agenda, path: *const PathCell) Error!Outcome {
@@ -904,7 +910,11 @@ pub const Prover = struct {
             for (held.items) |idx| {
                 if (!try self.wvars.bind(idx, value)) break;
             } else {
-                const outcome = try self.expandRules(frame, try self.terms.resolveGoal(goal.expr), close, path);
+                // With its shares bound, the goal may be one it was reached
+                // through.
+                const bound = try self.terms.resolveGoal(goal.expr);
+                if (self.repeats(path, bound)) continue;
+                const outcome = try self.expandRules(frame, bound, close, path);
                 if (outcome != .failed) return outcome;
             }
         }

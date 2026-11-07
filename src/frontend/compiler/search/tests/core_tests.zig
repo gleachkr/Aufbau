@@ -271,6 +271,56 @@ test "the search core deepens past a memo hit with no limit" {
     try std.testing.expectEqual(@as(usize, 0), limited.items.len);
 }
 
+// `weak`'s premise holds the share `g`, which binds to the whole context
+// while `d` is unbound: the goal again, one step deeper. The hole keeps the
+// premise from a memo key, so only the repeat stops it, and with nothing
+// cut at depth 1 the search ends there.
+test "a goal its shares make again is a repeat" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try suggestionsAtNeedle(&arena,
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\--| @hole _ctx
+        \\sort ctx;
+        \\term F: wff;
+        \\term ctx_eq (g h: ctx): wff;
+        \\term emp: ctx;
+        \\notation emp: ctx = ($∅$:max);
+        \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+        \\term join (g h: ctx): ctx;
+        \\infixl join: $,$ prec 5;
+        \\term hyp (a: wff): ctx;
+        \\coercion hyp: wff > ctx;
+        \\term nd (g: ctx) (a: wff): wff;
+        \\infixl nd: $⊢$ prec 1;
+        \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+        \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+        \\axiom ctx_trans (g h i: ctx):
+        \\  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+        \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+        \\axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+        \\axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+        \\axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+        \\axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+        \\axiom weak (g d: ctx) (a: wff): $ g ⊢ a $ > $ g , d ⊢ a $;
+        \\theorem stuck (a: wff): $ a ⊢ F $;
+        \\
+    ,
+        \\stuck
+        \\-----
+        \\l1: $ a , _ctx ⊢ F $ by auto?
+    , "auto?", .{
+        .counters = &counters,
+        .generate = .{ .enabled = true, .ladder = false },
+    });
+    defer suggestions.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
+    try std.testing.expectEqual(@as(usize, 1), counters.gen_last_depth);
+}
+
 test "the search core closes a quantifier witness by unification" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
