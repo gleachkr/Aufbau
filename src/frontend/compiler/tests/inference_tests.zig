@@ -609,6 +609,216 @@ test "uncoupled ACUI cover product is resolved without enumeration" {
     );
 }
 
+/// A proof case's theory up to `cut`, with no unit law, then `rest`.
+fn noUnitTheory(
+    allocator: std.mem.Allocator,
+    stem: []const u8,
+    cut: []const u8,
+    rest: []const u8,
+) ![]u8 {
+    const src = try readProofCase(allocator, stem, "mm0");
+    defer allocator.free(src);
+    const head = src[0 .. std.mem.indexOf(u8, src, cut) orelse return error.ExpectedNeedle];
+    const unit_law = "axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;\n";
+    const no_unit = try replaceOnceOwned(allocator, head, unit_law, "");
+    defer allocator.free(no_unit);
+    return try std.fmt.allocPrint(allocator, "{s}{s}", .{ no_unit, rest });
+}
+
+const acui_stem = "pass_acui_cover_product_ambiguous";
+const acu_stem = "pass_acu_identical_members_ambiguous";
+
+/// Compile, verify, and check the one ambiguity warning's notes.
+fn expectAmbiguousNotes(
+    allocator: std.mem.Allocator,
+    mm0_src: []const u8,
+    proof_src: []const u8,
+    chosen: []const u8,
+    alternative: []const u8,
+    count: []const u8,
+) !void {
+    var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
+    const mmb = try compiler.compileMmb(allocator);
+    defer allocator.free(mmb);
+    try mm0.verifyPair(allocator, mm0_src, mmb);
+    const warnings = compiler.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), warnings.len);
+    const diag = warnings[0];
+    try std.testing.expectEqual(error.AmbiguousAcuiMatch, diag.err);
+    try expectNoteText(chosen, diag.noteSlice()[1]);
+    try expectNoteStartsWith(alternative, diag.noteSlice()[2]);
+    try expectNoteText(count, diag.noteSlice()[3]);
+}
+
+test "with no ACUI unit law a cover leaves no binder empty" {
+    // `emp` is no unit here, so it is no way to fill a binder: of the 127^2
+    // covers, the 3^7 - 2 that give each of the seven binders a member remain.
+    const allocator = std.testing.allocator;
+    const mm0_src = try noUnitTheory(allocator, acui_stem, "axiom frame ",
+        \\axiom frame7 (g1 g2 g3 g4 g5 g6 g7 d: ctx):
+        \\  $ g1 , g2 , g3 , g4 , g5 , g6 , g7 ==> d $;
+        \\theorem acui_cover_product_ambiguous (x y u: wff):
+        \\  $ x , y ==> u $;
+        \\
+    );
+    defer allocator.free(mm0_src);
+    const proof_src = try readProofCase(allocator, acui_stem, "auf");
+    defer allocator.free(proof_src);
+    try expectAmbiguousNotes(
+        allocator,
+        mm0_src,
+        proof_src,
+        "chosen bindings: g1 = hyp(v1); g2 = hyp(v0); g3 = hyp(v0); +5 more",
+        "alternative bindings: g1 = join(hyp(v0), hyp(v1)); ",
+        "distinct solutions considered: 2185",
+    );
+}
+
+test "ACUI covers with no unit law are counted without being listed" {
+    // Listing the 282298105 covers and comparing them would not finish.
+    const allocator = std.testing.allocator;
+    const mm0_src = try noUnitTheory(allocator, acui_stem, "axiom frame ",
+        \\axiom frame10 (g1 g2 g3 g4 g5 g6 g7 g8 g9 g10 d: ctx):
+        \\  $ g1 , g2 , g3 , g4 , g5 , g6 , g7 , g8 , g9 , g10 ==> d $;
+        \\theorem many (x y z u: wff): $ x , y , z ==> u $;
+        \\
+    );
+    defer allocator.free(mm0_src);
+    try expectAmbiguousNotes(
+        allocator,
+        mm0_src,
+        \\many
+        \\----
+        \\l1: $ x , y , z ==> u $ by frame10 []
+        \\
+    ,
+        "chosen bindings: g1 = hyp(v2); g2 = hyp(v1); g3 = hyp(v0); +8 more",
+        "alternative bindings: g1 = join(join(hyp(v0), hyp(v1)), hyp(v2)); ",
+        "distinct solutions considered: 282298105",
+    );
+}
+
+test "with no ACU unit law identical members split with neither side empty" {
+    // `weaken` splits 4 copies of `x`: 3 splits rather than 5. Every split
+    // places all the copies, so the first is the chosen one and the next
+    // stands for the rest.
+    const allocator = std.testing.allocator;
+    const mm0_src = try noUnitTheory(allocator, acu_stem, "theorem ",
+        \\theorem split (x u: wff) (h: $ x , x , x , x ==> u $): $ x , x , x ==> u $;
+        \\
+    );
+    defer allocator.free(mm0_src);
+    try expectAmbiguousNotes(
+        allocator,
+        mm0_src,
+        \\split
+        \\-----
+        \\l1: $ _c ==> u $ by weaken [#1]
+        \\
+    ,
+        "chosen bindings: g = join(join(hyp(v0), hyp(v0)), hyp(v0)); h = hyp(v0); d = hyp(v1)",
+        "alternative bindings: g = join(hyp(v0), hyp(v0)); h = join(hyp(v0), hyp(v0)); d = hyp(v1)",
+        "distinct solutions considered: 3",
+    );
+}
+
+test "ACU covers with no unit law are counted without being listed" {
+    // Twelve members over eight binders: 8^12 placements to list. The first
+    // cover is the chosen one, and the next is found without listing them.
+    const allocator = std.testing.allocator;
+    const mm0_src = try noUnitTheory(allocator, acu_stem, "axiom weaken ",
+        \\axiom frame8 (g1 g2 g3 g4 g5 g6 g7 g8 d: ctx):
+        \\  $ g1 , g2 , g3 , g4 , g5 , g6 , g7 , g8 ==> d $ > $ g1 ==> d $;
+        \\theorem many (a b c d e f g h i j k l u: wff)
+        \\  (p: $ a , b , c , d , e , f , g , h , i , j , k , l ==> u $):
+        \\  $ a , b , c , d , e ==> u $;
+        \\
+    );
+    defer allocator.free(mm0_src);
+    try expectAmbiguousNotes(
+        allocator,
+        mm0_src,
+        \\many
+        \\----
+        \\l1: $ _c ==> u $ by frame8 [#1]
+        \\
+    ,
+        "chosen bindings: g1 = join(join(join(join(hyp(v0), hyp(v1)), hyp(v2))...; g2 = hyp(v5); g3 = hyp(v6); +6 more",
+        "alternative bindings: g1 = join(join(join(join(hyp(v0), hyp(v1)), hyp(v2))...; g2 = hyp(v5); g3 = hyp(v6); +6 more",
+        "distinct solutions considered: 6411968640",
+    );
+}
+
+test "with no ACU unit law too few members fail without listing placements" {
+    // Twelve binders and ten copies: no cover, among 12^10 placements.
+    const allocator = std.testing.allocator;
+    const mm0_src = try noUnitTheory(allocator, acu_stem, "axiom weaken ",
+        \\axiom frame12 (g1 g2 g3 g4 g5 g6 g7 g8 g9 g10 g11 g12 d: ctx):
+        \\  $ g1 , g2 , g3 , g4 , g5 , g6 , g7 , g8 , g9 , g10 , g11 , g12 ==> d $;
+        \\theorem few (a b c d e f g h i j u: wff):
+        \\  $ a , b , c , d , e , f , g , h , i , j ==> u $;
+        \\
+    );
+    defer allocator.free(mm0_src);
+    var compiler = Compiler.initWithProof(allocator, mm0_src,
+        \\few
+        \\---
+        \\l1: $ a , b , c , d , e , f , g , h , i , j ==> u $ by frame12 []
+        \\
+    );
+    try std.testing.expectError(error.UnifyMismatch, compiler.compileMmb(allocator));
+}
+
+test "with no unit law a bag holding the unit may leave a binder empty" {
+    // An empty binder reads as `emp`, which the bag holds.
+    const allocator = std.testing.allocator;
+    const mm0_src = try noUnitTheory(allocator, acui_stem, "axiom frame ",
+        \\axiom frame7 (g1 g2 g3 g4 g5 g6 g7 d: ctx):
+        \\  $ g1 , g2 , g3 , g4 , g5 , g6 , g7 ==> d $;
+        \\theorem holds (x y u: wff): $ emp , x , y ==> u $;
+        \\
+    );
+    defer allocator.free(mm0_src);
+    var compiler = Compiler.initWithProof(allocator, mm0_src,
+        \\holds
+        \\-----
+        \\l1: $ emp , x , y ==> u $ by frame7 []
+        \\
+    );
+    const mmb = try compiler.compileMmb(allocator);
+    defer allocator.free(mmb);
+    try mm0.verifyPair(allocator, mm0_src, mmb);
+    try expectNoteText(
+        "chosen bindings: g1 = emp; g2 = emp; g3 = emp; +5 more",
+        compiler.warningDiagnostics()[0].noteSlice()[1],
+    );
+}
+
+test "a binder occurring more often than a mask has bits does not crash" {
+    const allocator = std.testing.allocator;
+    const mm0_src = try noUnitTheory(allocator, acu_stem, "axiom weaken ",
+        \\axiom many (g d: ctx): $
+        \\  g , g , g , g , g , g , g , g , g , g ,
+        \\  g , g , g , g , g , g , g , g , g , g ,
+        \\  g , g , g , g , g , g , g , g , g , g ,
+        \\  g , g , g , g , g , g , g , g , g , g ,
+        \\  g , g , g , g , g , g , g , g , g , g ,
+        \\  g , g , g , g , g , g , g , g , g , g ,
+        \\  g , g , g , g , g , g , g , g , g , g ,
+        \\  g ==> d $;
+        \\theorem one (x u: wff): $ x ==> u $;
+        \\
+    );
+    defer allocator.free(mm0_src);
+    var compiler = Compiler.initWithProof(allocator, mm0_src,
+        \\one
+        \\---
+        \\l1: $ x ==> u $ by many []
+        \\
+    );
+    try std.testing.expectError(error.UnifyMismatch, compiler.compileMmb(allocator));
+}
+
 test "identical ACU members are split once per count" {
     // `weaken` splits a context of 24 copies of `x` between two binders.
     // Trying every binder for every copy made 2^24 covers to compare; the

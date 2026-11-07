@@ -267,6 +267,10 @@ This file records notable user-facing changes to Aufbau. The project follows
 - `auto?` treated a rule's `@freshen` as covering a variable the context holds
   free, as in `¬ P y ⊢ ∀ y P y`, which no renaming helps. It offered the checker
   proof after proof it had to reject, and passed over the rules that apply.
+- Inferring the binders of a rule that spreads a context over many binders could
+  take minutes when the `@acui` combiner had no unit law, as in a theory whose
+  unit axiom does not parse yet. The ways to fill them are now counted rather
+  than listed.
 - A search could overflow the WebAssembly engine's call stack and kill the
   instance, as Pelletier 34 did under the LSP. The search's stack guard now
   stops short of that on WebAssembly, so such a search misses. Native builds

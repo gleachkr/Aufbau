@@ -165,7 +165,8 @@ const MemberChoices = struct {
 /// Cartesian product of the per-member choice lists. When the bounds are
 /// exact and nothing outside them can tell two covers apart
 /// (`obligationCoupled`), the product is resolved in closed form; otherwise
-/// the covers are enumerated for the later constraints to filter.
+/// the covers are enumerated for the later constraints to filter. With no
+/// unit law a cover must also leave no binder empty (`resolveFullCovers`).
 fn solveBagStructuralObligation(
     self: anytype,
     state: BranchState,
@@ -264,17 +265,27 @@ fn solveBagStructuralObligation(
     }
 
     if (exact and !obligationCoupled(self, &state, space, obligation)) {
-        if (try resolveCoverProduct(
-            self,
-            state,
-            space,
-            obligation,
-            profile,
-            choices.items,
-            &out,
-        )) {
-            return try out.toOwnedSlice(self.allocator);
-        }
+        const resolved = if (try emptyBinderAllowed(self, upper_items.items, profile))
+            try resolveCoverProduct(
+                self,
+                state,
+                space,
+                obligation,
+                profile,
+                choices.items,
+                &out,
+            )
+        else
+            try resolveFullCovers(
+                self,
+                state,
+                space,
+                obligation,
+                profile,
+                choices.items,
+                &out,
+            );
+        if (resolved) return try out.toOwnedSlice(self.allocator);
         out.clearRetainingCapacity();
     }
 
@@ -527,12 +538,57 @@ fn resolveCoverProduct(
         count *|= member.len();
         if (minimalPlacement(member) != 0) first_is_minimal = false;
     }
-    // The first cover stands for itself when it is the chosen one, else
-    // for every cover but the chosen one; the second pick stands for the
-    // rest. When the first is not minimal some member has two placements,
-    // so there are at least two covers.
+    const picks = try self.allocator.alloc(usize, 2 * choices.len);
+    defer self.allocator.free(picks);
+    const first = picks[0..choices.len];
+    const second = picks[choices.len..];
+    @memset(first, 0);
+    @memset(second, 0);
+    if (first_is_minimal) {
+        // The cover enumerated after the first: the last member with a
+        // choice takes its second placement.
+        var last_choice: ?usize = null;
+        for (choices, 0..) |member, pos| {
+            if (member.len() > 1) last_choice = pos;
+        }
+        if (last_choice) |pos| second[pos] = 1;
+    } else {
+        for (choices, second) |member, *pick| pick.* = minimalPlacement(member);
+    }
+    return try appendRepresentatives(
+        self,
+        state,
+        space,
+        obligation,
+        profile,
+        choices,
+        first,
+        second,
+        first_is_minimal,
+        count,
+        out,
+    );
+}
+
+/// The two states that stand for `count` covers: the first enumerated, and
+/// `second`, the chosen cover or, when the first is the chosen one, the next.
+/// The first stands for itself when it is the chosen one, else for every
+/// cover but the chosen one; the second stands for the rest. Returns false
+/// if a representative was rejected.
+fn appendRepresentatives(
+    self: anytype,
+    state: BranchState,
+    space: BinderSpace,
+    obligation: StructuralJointObligation,
+    profile: StructuralProfile,
+    choices: []const MemberChoices,
+    first: []const usize,
+    second: []const usize,
+    first_is_minimal: bool,
+    count: usize,
+    out: *std.ArrayListUnmanaged(BranchState),
+) anyerror!bool {
     const first_multiplicity: usize = if (first_is_minimal) 1 else count - 1;
-    const second: CoverPick = if (first_is_minimal) .next else .minimal;
     const before = out.items.len;
     try appendCover(
         self,
@@ -541,7 +597,7 @@ fn resolveCoverProduct(
         obligation,
         profile,
         choices,
-        .first,
+        first,
         first_multiplicity,
         out,
     );
@@ -561,10 +617,6 @@ fn resolveCoverProduct(
     return out.items.len != before + 1;
 }
 
-/// `next` is the cover enumerated after the first: the last member with a
-/// choice takes its second placement.
-const CoverPick = enum { first, next, minimal };
-
 fn appendCover(
     self: anytype,
     state: BranchState,
@@ -572,7 +624,7 @@ fn appendCover(
     obligation: StructuralJointObligation,
     profile: StructuralProfile,
     choices: []const MemberChoices,
-    pick: CoverPick,
+    picks: []const usize,
     multiplicity: usize,
     out: *std.ArrayListUnmanaged(BranchState),
 ) anyerror!void {
@@ -581,19 +633,8 @@ fn appendCover(
         obligation.binder_idxs.len,
     );
     defer deinitExprItemLists(self, binder_items);
-    var last_choice: usize = 0;
-    if (pick == .next) {
-        for (choices, 0..) |member, pos| {
-            if (member.len() > 1) last_choice = pos;
-        }
-    }
-    for (choices, 0..) |member, pos| {
-        const counts = member.placement(switch (pick) {
-            .first => 0,
-            .next => @intFromBool(pos == last_choice),
-            .minimal => minimalPlacement(member),
-        });
-        try placeMember(self, binder_items, member.item, counts);
+    for (choices, picks) |member, pick| {
+        try placeMember(self, binder_items, member.item, member.placement(pick));
     }
     const binder_exprs = try rebuildBindingExprs(
         self,
@@ -608,6 +649,169 @@ fn appendCover(
         obligation.binder_idxs,
         binder_exprs,
         multiplicity,
+        out,
+    );
+}
+
+/// Whether a binder may be left empty: it then reads as the unit, which
+/// the unit laws drop and which, with none, must be a member of the bag.
+fn emptyBinderAllowed(
+    self: anytype,
+    items: []const ExprId,
+    profile: StructuralProfile,
+) anyerror!bool {
+    const combiner = profile.combiner;
+    if (combiner.supportsLeftUnit() and combiner.supportsRightUnit()) return true;
+    const interner = @constCast(&self.theorem.interner);
+    const unit = try interner.internApp(profile.unitTermId(), &.{});
+    return std.mem.indexOfScalar(ExprId, items, unit) != null;
+}
+
+/// The covers that leave no binder empty. Members' placements depend on each
+/// other only through the binders covered so far, so what the members left
+/// can do depends only on those binders, however they were covered (`tail`).
+const FullCovers = struct {
+    const Key = struct { member: usize, covered: u64 };
+    /// What the members from `Key.member` on can do from `Key.covered`.
+    const Tail = struct {
+        /// How many ways they cover the rest.
+        count: usize = 0,
+        /// The fewest copies any of those ways places.
+        size: usize = std.math.maxInt(usize),
+    };
+
+    choices: []const MemberChoices,
+    /// Each placement's binders, as bits, per member.
+    masks: []const []const u64,
+    full: u64,
+    memo: std.AutoHashMapUnmanaged(Key, Tail) = .empty,
+
+    fn tail(covers: *FullCovers, self: anytype, member: usize, covered: u64) anyerror!Tail {
+        if (member == covers.choices.len) {
+            return if (covered == covers.full) .{ .count = 1, .size = 0 } else .{};
+        }
+        const key: Key = .{ .member = member, .covered = covered };
+        if (covers.memo.get(key)) |known| return known;
+        try self.checkBudget();
+        var result: Tail = .{};
+        for (covers.masks[member], 0..) |mask, idx| {
+            const rest = try covers.tail(self, member + 1, covered | mask);
+            if (rest.count == 0) continue;
+            result.count +|= rest.count;
+            result.size = @min(result.size, rest.size + placementSize(covers.choices[member].placement(idx)));
+        }
+        try covers.memo.put(self.allocator, key, result);
+        return result;
+    }
+
+    /// The covers' first in enumeration order, members `from` on, into `picks`.
+    fn walkFirst(covers: *FullCovers, self: anytype, from: usize, start: u64, picks: []usize) anyerror!void {
+        var covered = start;
+        for (from..covers.choices.len) |member| {
+            for (covers.masks[member], 0..) |mask, idx| {
+                if ((try covers.tail(self, member + 1, covered | mask)).count != 0) {
+                    picks[member] = idx;
+                    covered |= mask;
+                    break;
+                }
+            }
+        }
+    }
+
+    /// The first cover in enumeration order that places the fewest copies.
+    fn walkMinimal(covers: *FullCovers, self: anytype, picks: []usize) anyerror!void {
+        var covered: u64 = 0;
+        for (covers.choices, covers.masks, 0..) |member_choices, masks, member| {
+            const best = (try covers.tail(self, member, covered)).size;
+            for (masks, 0..) |mask, idx| {
+                const rest = try covers.tail(self, member + 1, covered | mask);
+                if (rest.count != 0 and rest.size + placementSize(member_choices.placement(idx)) == best) {
+                    picks[member] = idx;
+                    covered |= mask;
+                    break;
+                }
+            }
+        }
+    }
+
+    /// The cover enumerated after `first`: the last member that has a later
+    /// placement with a cover to it takes that, and the rest come first.
+    fn walkNext(covers: *FullCovers, self: anytype, first: []const usize, picks: []usize) anyerror!void {
+        @memcpy(picks, first);
+        var member = covers.choices.len;
+        while (member > 0) {
+            member -= 1;
+            var covered: u64 = 0;
+            for (first[0..member], covers.masks[0..member]) |pick, masks| covered |= masks[pick];
+            const masks = covers.masks[member];
+            for (first[member] + 1..masks.len) |idx| {
+                if ((try covers.tail(self, member + 1, covered | masks[idx])).count != 0) {
+                    picks[member] = idx;
+                    return covers.walkFirst(self, member + 1, covered | masks[idx], picks);
+                }
+            }
+        }
+    }
+};
+
+/// `resolveCoverProduct` when a binder may not be left empty, which ties the
+/// members together: the first cover, the chosen one and the next are found
+/// and counted through `FullCovers`, about 4^binders at worst, rather than
+/// listed. No cover means no states. More binders than a `u64` has bits are
+/// left to the caller's enumeration.
+fn resolveFullCovers(
+    self: anytype,
+    state: BranchState,
+    space: BinderSpace,
+    obligation: StructuralJointObligation,
+    profile: StructuralProfile,
+    choices: []const MemberChoices,
+    out: *std.ArrayListUnmanaged(BranchState),
+) anyerror!bool {
+    if (obligation.binder_idxs.len >= @bitSizeOf(u64)) return false;
+    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    defer arena.deinit();
+    const scratch = arena.allocator();
+    const masks = try scratch.alloc([]const u64, choices.len);
+    for (choices, masks) |member, *member_masks| {
+        const placements = try scratch.alloc(u64, member.len());
+        for (placements, 0..) |*mask, idx| {
+            mask.* = 0;
+            for (member.placement(idx), 0..) |copies, binder| {
+                if (copies != 0) mask.* |= @as(u64, 1) << @intCast(binder);
+            }
+        }
+        member_masks.* = placements;
+    }
+    var covers: FullCovers = .{
+        .choices = choices,
+        .masks = masks,
+        .full = (@as(u64, 1) << @intCast(obligation.binder_idxs.len)) - 1,
+    };
+    defer covers.memo.deinit(self.allocator);
+
+    const total = try covers.tail(self, 0, 0);
+    if (total.count == 0) return true;
+    const picks = try scratch.alloc(usize, 3 * choices.len);
+    @memset(picks, 0);
+    const first = picks[0..choices.len];
+    const minimal = picks[choices.len..][0..choices.len];
+    const next = picks[2 * choices.len ..];
+    try covers.walkFirst(self, 0, 0, first);
+    try covers.walkMinimal(self, minimal);
+    const first_is_minimal = std.mem.eql(usize, first, minimal);
+    if (first_is_minimal and total.count > 1) try covers.walkNext(self, first, next);
+    return try appendRepresentatives(
+        self,
+        state,
+        space,
+        obligation,
+        profile,
+        choices,
+        first,
+        if (first_is_minimal) next else minimal,
+        first_is_minimal,
+        total.count,
         out,
     );
 }
