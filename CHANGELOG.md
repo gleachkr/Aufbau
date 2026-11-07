@@ -135,6 +135,16 @@ This file records notable user-facing changes to Aufbau. The project follows
   and term walks, which it used to miss, and its default is 2.3 units instead
   of 6.3. A few proofs that took longer now miss at the default, and the miss
   report suggests the `budget:` to retry with.
+- `auto?` has no depth limit by default. The search core deepens until it finds
+  a proof, the work budget runs out, or a pass reaches no goal the limit stops,
+  since a deeper pass could then find nothing. `depth:` still sets a limit, and
+  then the generation search takes its turn when the core misses. The generation
+  search also runs when the core does not take the goal or stops. On the bench
+  corpus this finds 53 more proofs and 7 more theorems whole, with the slowest
+  search under 3 seconds. A search that used to stop at depth 6 may now use its
+  whole budget before it misses. Proofs only the generation search finds, such
+  as two eliminations in a row with no `@auto forward` (`a ∧ (b ∧ c) ⊢ c`), now
+  need `depth: 6`; 2 proofs on the corpus do.
 - A theorem's or axiom's bound variable named only in dependency lists
   (`{k: set} (G: hyps k)` with no `k` in any hypothesis or the
   conclusion) is now reported as an unused parameter. Such a variable is
@@ -252,6 +262,15 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- `auto?` could not give a witness a variable the formula binds somewhere else:
+  it refused `y` for `x` in `P x → ∀ y P y`, where `x` is not under the `∀`.
+- `auto?` treated a rule's `@freshen` as covering a variable the context holds
+  free, as in `¬ P y ⊢ ∀ y P y`, which no renaming helps. It offered the checker
+  proof after proof it had to reject, and passed over the rules that apply.
+- A search could overflow the WebAssembly engine's call stack and kill the
+  instance, as Pelletier 34 did under the LSP. The search's stack guard now
+  stops short of that on WebAssembly, so such a search misses. Native builds
+  have more room and find that proof.
 - `auto?` forward chaining kept a fact from a rule whose bound variable an
   independent argument holds, which no proof can use. A search could close its
   goal with that fact over and over, have the checker reject each proof, and

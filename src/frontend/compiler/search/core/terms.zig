@@ -77,6 +77,8 @@ const TheoremContext = expr_mod.TheoremContext;
 const Rules = @import("../../../rules.zig");
 const TemplateExpr = Rules.TemplateExpr;
 const RuleDecl = @import("../../../env.zig").RuleDecl;
+const TermDecl = @import("../../../env.zig").TermDecl;
+const boundArgDepsToBinderDeps = @import("../../../parse_recovery.zig").boundArgDepsToBinderDeps;
 const AcuiBag = @import("../../../acui_bag.zig");
 const types = @import("../types.zig");
 const Context = types.Context;
@@ -599,12 +601,16 @@ pub const Terms = struct {
         return self.theorem.interner.internApp(app.term_id, args[0..app.args.len]);
     }
 
-    /// Append the variables `expr` binds (those in a bound argument of some
-    /// application) to `out`.
-    pub fn boundVariables(
+    /// The variables `expr` captures around an occurrence of `hole`, into
+    /// `out`: a term swapped for `hole` may not hold them. An argument is in
+    /// the scope of the binders it depends on, and a binder captures unless
+    /// the term's result sort depends on it (`capturingDeps`). A leaf
+    /// depending on `hole` counts as an occurrence.
+    pub fn boundAround(
         self: *Terms,
         arena: std.mem.Allocator,
         expr: ExprId,
+        hole: ExprId,
         out: *std.ArrayListUnmanaged(ExprId),
     ) Error!void {
         const app = switch (self.theorem.interner.node(expr).*) {
@@ -612,12 +618,81 @@ pub const Terms = struct {
             .variable, .placeholder => return,
         };
         const decl = &self.context.env.terms.items[app.term_id];
-        for (app.args, 0..) |arg, idx| {
-            if (idx < decl.args.len and decl.args[idx].bound) {
-                if (std.mem.indexOfScalar(ExprId, out.items, arg) == null) try out.append(arena, arg);
-            } else {
-                try self.boundVariables(arena, arg, out);
+        const capturing = capturingDeps(decl);
+        const closed = self.closedBy(app, hole);
+        const count = @min(app.args.len, decl.args.len);
+        for (app.args[0..count], decl.args[0..count]) |arg, info| {
+            if (info.bound or info.deps & closed != 0 or !self.wvars.mentions(arg, hole)) continue;
+            for (app.args[0..count], decl.args[0..count]) |binder, binder_info| {
+                if (!binder_info.bound or binder_info.deps & info.deps & capturing == 0) continue;
+                if (std.mem.indexOfScalar(ExprId, out.items, binder) == null) try out.append(arena, binder);
             }
+            try self.boundAround(arena, arg, hole, out);
+        }
+    }
+
+    /// The dependency bits of the binders `decl` captures: those its result
+    /// sort does not depend on. `term keep {x: obj} (a: obj x): wff x` leaves
+    /// `x` free in `keep x a`.
+    fn capturingDeps(decl: *const TermDecl) u55 {
+        var bound: u55 = 0;
+        for (decl.args) |arg| {
+            if (arg.bound) bound |= arg.deps;
+        }
+        return bound & ~boundArgDepsToBinderDeps(decl.args, decl.ret_deps);
+    }
+
+    /// The dependency bits of the binders of `app` that are `variable` and
+    /// capture it: an argument with one of them holds the variable closed,
+    /// not free.
+    fn closedBy(self: *Terms, app: expr_mod.ExprNode.App, variable: ExprId) u55 {
+        const decl = &self.context.env.terms.items[app.term_id];
+        const capturing = capturingDeps(decl);
+        var closed: u55 = 0;
+        const count = @min(app.args.len, decl.args.len);
+        for (app.args[0..count], decl.args[0..count]) |arg, info| {
+            if (info.bound and info.deps & capturing != 0 and self.wvars.resolve(arg) == variable) closed |= info.deps;
+        }
+        return closed;
+    }
+
+    /// Whether `expr` holds `variable` other than under a binder of its own,
+    /// which alpha conversion could rename.
+    pub fn holdsFree(self: *Terms, expr: ExprId, variable: ExprId) bool {
+        const at = self.wvars.resolve(expr);
+        const app = switch (self.theorem.interner.node(at).*) {
+            .app => |app| app,
+            .variable, .placeholder => return self.wvars.mentions(at, variable),
+        };
+        const decl = &self.context.env.terms.items[app.term_id];
+        const closed = self.closedBy(app, variable);
+        for (app.args, 0..) |arg, idx| {
+            if (idx < decl.args.len and decl.args[idx].deps & closed != 0) continue;
+            if (self.holdsFree(arg, variable)) return true;
+        }
+        return false;
+    }
+
+    /// Keep `variable` out of the wvars `expr` holds outside a binder of its
+    /// own: as a value it would be free where `holdsFree` looks.
+    pub fn keepOut(self: *Terms, expr: ExprId, variable: ExprId) Error!void {
+        const at = self.wvars.resolve(expr);
+        if (!try self.wvars.holdsWVar(at)) return;
+        const app = switch (self.theorem.interner.node(at).*) {
+            .app => |app| app,
+            .variable => return,
+            .placeholder => {
+                const idx = self.wvars.of(at) orelse return;
+                const wvar = self.wvars.vars.items[idx];
+                if (wvar.introduced_at != null or std.mem.indexOfScalar(ExprId, wvar.capture, variable) != null) return;
+                return self.wvars.narrowCapture(idx, &.{variable});
+            },
+        };
+        const decl = &self.context.env.terms.items[app.term_id];
+        const closed = self.closedBy(app, variable);
+        for (app.args, 0..) |arg, idx| {
+            if (idx < decl.args.len and decl.args[idx].deps & closed != 0) continue;
+            try self.keepOut(arg, variable);
         }
     }
 

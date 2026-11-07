@@ -320,6 +320,44 @@ assert.ok(
     JSON.stringify(afterOutput),
 );
 
+// A goal too deep for the engine's call stack is a miss, rather than a trap
+// that kills the instance.
+const deepTheory = ["delimiter $ ( ) $;", "provable sort wff;", "term F: wff;"];
+for (let i = 0; i < 3000; i++) deepTheory.push("term c" + i + ": wff;");
+for (let i = 0; i < 2999; i++) {
+  deepTheory.push("axiom s" + i + ": $ c" + (i + 1) + " $ > $ c" + i + " $;");
+}
+deepTheory.push("axiom last: $ F $ > $ c2999 $;");
+deepTheory.push("theorem deep: $ F $ > $ c0 $;");
+const deepProof = "deep\n----\nl1: $ c0 $ by auto?\n";
+for (const [uri, languageId, text] of [
+  ["file:///deep.mm0", "mm0", deepTheory.join("\n") + "\n"],
+  ["file:///deep.auf", "aufbau", deepProof],
+]) {
+  lsp.process({
+    jsonrpc: "2.0",
+    method: "textDocument/didOpen",
+    params: { textDocument: { uri, languageId, version: 1, text } },
+  });
+}
+const deepOutput = lsp.process({
+  jsonrpc: "2.0",
+  id: 9,
+  method: "textDocument/codeAction",
+  params: {
+    textDocument: { uri: "file:///deep.auf" },
+    range: {
+      start: { line: 2, character: 11 },
+      end: { line: 2, character: 16 },
+    },
+    context: { diagnostics: [] },
+  },
+});
+assert.ok(
+  deepOutput.map(JSON.parse).some((m) => m.id === 9 && !m.error),
+  "a deep search got no reply: " + JSON.stringify(deepOutput),
+);
+
 console.log("Packed npm WASM packages load and run under Node.");
 `;
 }

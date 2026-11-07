@@ -277,7 +277,7 @@ fn writeStatusDetail(
                         "accepted, {d} rejected), so a proof, if one " ++
                         "exists, is deeper or needs a rule the search " ++
                         "cannot use backward here.",
-                    .{ gen.max_depth, validated, accepted, rejected },
+                    .{ gen.ladderDepth(), validated, accepted, rejected },
                 );
                 if (retry) |r| try writeRetryAdvice(w, keyword, r, false);
             } else {
@@ -311,7 +311,7 @@ fn writeStatusDetail(
                     .{
                         generate_mod.phaseName(counters.gen_last_phase),
                         counters.gen_last_depth,
-                        gen.max_depth,
+                        gen.ladderDepth(),
                     },
                 );
             } else {
@@ -332,14 +332,17 @@ fn writeStatusDetail(
                     if (generation_ran) {
                         try w.print(
                             "the per-call work budget (~{d}s of work) ran out " ++
-                                "during {s} at depth {d} of {d}",
+                                "during {s} at depth {d}",
                             .{
                                 seconds,
                                 generate_mod.phaseName(counters.gen_last_phase),
                                 counters.gen_last_depth,
-                                gen.max_depth,
                             },
                         );
+                        // By default only the ladder has a depth limit.
+                        if (gen.max_depth != null or counters.gen_last_phase != generate_mod.search_core_phase) {
+                            try w.print(" of {d}", .{gen.ladderDepth()});
+                        }
                     } else {
                         try w.print(
                             "the per-call work budget (~{d}s of work) ran out " ++
@@ -379,13 +382,13 @@ fn writeStatusDetail(
                     ". {d} applications validated ({d} accepted).",
                     .{ validated, accepted },
                 );
-                if (generation_ran and
-                    report.searchedBelowDepthLimit(gen.max_depth))
+                if (generation_ran and gen.max_depth != null and
+                    report.searchedBelowDepthLimit(gen.ladderDepth()))
                 {
                     try w.print(
                         " Every depth below {d} was searched, so the " ++
                             "proof may also be deeper.",
-                        .{gen.max_depth},
+                        .{gen.ladderDepth()},
                     );
                 }
                 if (retry) |r| {

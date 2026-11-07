@@ -31,7 +31,7 @@ test "search tunables apply valid params and skip invalid ones" {
         testParam("unknown", 3), // unknown: skipped
         testParam("budget", 12),
     });
-    try std.testing.expectEqual(@as(usize, 8), gen.max_depth);
+    try std.testing.expectEqual(@as(?usize, 8), gen.max_depth);
     try std.testing.expectEqual(@as(usize, 8192), gen.fuel);
     try std.testing.expectEqual(defaults.max_nodes, gen.max_nodes);
     try std.testing.expectEqual(
@@ -366,6 +366,35 @@ test "auto? node-cap truncation is reported as truncation with a nodes hint" {
     try std.testing.expect(
         std.mem.indexOf(u8, detail, "search space was exhausted") == null,
     );
+}
+
+test "only a search with no budget gets a default depth limit in the core" {
+    try std.testing.expectEqual(@as(?usize, null), (types.GenerateOptions{}).coreDepth());
+    try std.testing.expectEqual(@as(?usize, 3), (types.GenerateOptions{ .max_depth = 3 }).coreDepth());
+    try std.testing.expectEqual(
+        @as(?usize, types.GenerateOptions.ladder_depth),
+        (types.GenerateOptions{ .global_budget = null }).coreDepth(),
+    );
+    try std.testing.expectEqual(types.GenerateOptions.ladder_depth, (types.GenerateOptions{}).ladderDepth());
+}
+
+test "auto? names the core's depth with no limit when it spends the budget" {
+    const counters = types.SearchCounters{
+        .work_budget_exhausted = true,
+        .gen_last_phase = generate.search_core_phase,
+        .gen_last_depth = 9,
+    };
+    const detail = (try source.buildStatusDetail(
+        std.testing.allocator,
+        "auto?",
+        true,
+        .budget_exhausted,
+        &counters,
+        .{},
+    )) orelse return error.MissingStatusDetail;
+    defer std.testing.allocator.free(detail);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "ran out during the search core at depth 9") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "depth 9 of") == null);
 }
 
 fn budgetDetail(counters: types.SearchCounters) ![]const u8 {

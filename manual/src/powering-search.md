@@ -10,23 +10,24 @@ more expensive strategies.
 Ordinary `auto?` applies rules whose conclusions match the goal, discharges
 their hypotheses from the reference pool if possible, and recursively proves
 the remaining unsolved hypotheses. The search solves rule binders by
-*matching*. This handles many cases, including nested eliminations on premises
+*matching*. This handles many cases, including eliminations on premises
 already in scope:
 
 ```aufbau-proof prelude=nd-base,nd-rules
-lemma proj (a b c: wff): $ _ ⊢ a ∧ (b ∧ c) $ > $ _ ⊢ c $
+lemma swap (a b: wff): $ _ ⊢ a ∧ b $ > $ _ ⊢ b ∧ a $
 ----
-l1: $ _ ⊢ c $ by auto?
+l1: $ _ ⊢ b ∧ a $ by auto?
 ```
 
-The suggestion is `and_elim_r (a := $ b $) [and_elim_r [#1]]`.
+The suggestion is `and_intro [and_elim_r [#1], and_elim_l [#1]]`.
 
-- Matching `and_elim_r`'s conclusion `g ⊢ b` against the goal determines `g
-  := _` and `b := c`. Its premise becomes `_ ⊢ ?t ∧ c`, where `?t` stands
-  for the still-unknown conjunct `a`.
-- The pattern becomes a sub-goal.
-- The inner `and_elim_r`, applied to `#1`, concludes `_ ⊢ b ∧ c`: it fits
-  the pattern, and matching determines `a := b`.
+- Matching `and_intro`'s conclusion against the goal leaves two sub-goals,
+  `_ ⊢ b` and `_ ⊢ a`.
+- Matching `and_elim_r`'s conclusion `g ⊢ b` against `_ ⊢ b` determines
+  `g := _`. Its premise becomes `_ ⊢ ?t ∧ b`, where `?t` stands for the
+  still-unknown conjunct `a`.
+- `#1` concludes `_ ⊢ a ∧ b`: it fits the pattern, and matching determines
+  `?t := a`.
 
 Ordinary search prefers applications whose bindings it can determine
 immediately. If those candidates fail, it may leave a binder unresolved

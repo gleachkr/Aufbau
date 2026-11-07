@@ -17,8 +17,7 @@ pub const FrontierGuard = struct {
     mode: []const u8 = "breadth",
     // Per-guard budget overrides (null = use the bench default). A guard for
     // a genuinely deep proof can raise these without affecting the global
-    // search defaults (which must stay low — raising the global `max_depth`
-    // destroys corpus wall-clock on doomed searches for no found-ness gain).
+    // search defaults.
     max_depth: ?usize = null,
     // Depth mode: cut at most this many lines; the guard then requires the
     // frontier to reach this cap rather than the whole proof.
@@ -117,7 +116,9 @@ pub const guards = [_]FrontierGuard{
     // (`backtrack.banCarriedMetaDeps`, `MetaStore.dep_bans`): `all_intro`
     // carries `ex_intro`'s witness in its context, so the witness may not
     // mention the eigenvariable anywhere in that scope. Without the ban a
-    // member pass deep inside pins it to the eigenvariable and stops.
+    // member pass deep inside pins it to the eigenvariable and stops. The
+    // search core finds it first, and this also guards its witness capture
+    // (`Terms.boundAround`).
     .{
         .filter = "eigenvariable_ban_probe",
         .files = "tests/search_bench_cases/eigenvariable_ban_probe.mm0:" ++
@@ -200,10 +201,8 @@ pub const guards = [_]FrontierGuard{
     // (DAG-shaped) additive proofs whose shared subgoals the memo collapses;
     // without it they need ~40× the node/fuel budget. The memo keys subgoals
     // by an ACUI-canonical form, so commuted-context subgoals share a slot too.
-    // They are genuinely deep (proof depth ≥ 9), so the global default
-    // (`max_depth = 6`) cannot reach them — and must not be raised globally
-    // (doing so 10×'s corpus wall-clock on doomed searches for zero gain).
-    // These guards raise the budget *only* for these two lines, pinning them
+    // They are genuinely deep (proof depth ≥ 9). These guards raise the
+    // limits *only* for these two lines, pinning them
     // FULL as the memo's regression check (breadth finds them through the pool
     // and never exercises deep generation). The budgets are pinned just above
     // each theorem's measured floor (2026-06-24) so a budget regression trips

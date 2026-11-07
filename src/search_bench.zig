@@ -28,8 +28,8 @@ const BenchOptions = struct {
     files: []const FixturePair = &.{},
     /// Search marker spliced into ablated lines (`auto?` by default).
     marker: []const u8 = "auto?",
-    /// `max_depth` for frontier `auto?` generation.
-    max_depth: usize = 6,
+    /// `max_depth` for frontier `auto?` generation (`GenerateOptions.max_depth`).
+    max_depth: ?usize = null,
     /// Optional overrides for the generation budget (diagnostic; 0 = use the
     /// `GenerateOptions` defaults).
     gen_nodes: usize = 0,
@@ -96,6 +96,10 @@ const BenchOptions = struct {
     /// Discrimination/scaling sweep. When set, the
     /// scenario/frontier benches are skipped and the sweep runs instead.
     sweep: ?SweepSpec = null,
+
+    fn ladderDepth(self: BenchOptions) usize {
+        return self.max_depth orelse Search.GenerateOptions.ladder_depth;
+    }
 };
 
 /// Frontier analysis (see `tests/search_bench_cases/README.md`):
@@ -1718,7 +1722,7 @@ fn runFrontier(
         &default_frontier_corpus;
 
     try writer.print(
-        "frontier {s}: marker={s} max_depth={} fixtures={}\n",
+        "frontier {s}: marker={s} max_depth={?d} fixtures={}\n",
         .{ @tagName(mode), options.marker, options.max_depth, corpus.len },
     );
     try writer.flush();
@@ -2055,10 +2059,10 @@ fn runDepthFixture(
                     try writer.writeAll(" ");
                     try printMissCause(
                         writer,
-                        MissCause.of(&run.counters, options.max_depth),
+                        MissCause.of(&run.counters, options.ladderDepth()),
                         run.counters.gen_last_phase,
                         run.counters.gen_last_depth,
-                        options.max_depth,
+                        options.ladderDepth(),
                     );
                 }
                 try writer.print(
@@ -2091,7 +2095,7 @@ fn runDepthFixture(
                 fail_ns = run.search_ns;
                 fail_ticks = RunTicks.of(&run.counters);
                 fail_status = .miss;
-                fail_cause = MissCause.of(&run.counters, options.max_depth);
+                fail_cause = MissCause.of(&run.counters, options.ladderDepth());
                 fail_last_phase = run.counters.gen_last_phase;
                 fail_last_depth = run.counters.gen_last_depth;
                 stats.miss_causes[@backingInt(fail_cause)] += 1;
@@ -2158,7 +2162,7 @@ fn runDepthFixture(
                         fail_cause,
                         fail_last_phase,
                         fail_last_depth,
-                        options.max_depth,
+                        options.ladderDepth(),
                     );
                     try writer.writeAll(retry_note);
                     try writer.writeAll(") ");
@@ -2180,7 +2184,7 @@ fn runDepthFixture(
                     fail_cause,
                     fail_last_phase,
                     fail_last_depth,
-                    options.max_depth,
+                    options.ladderDepth(),
                 );
                 try writer.writeAll(") fail ");
                 try printDurationCompact(writer, fail_ns);
@@ -2225,7 +2229,7 @@ fn retryMissNote(
     const w = &out.writer;
     try w.print(" [retry {f}", .{retry});
     var retried = options;
-    if (retry.depth) |v| retried.max_depth = @intCast(v);
+    if (retry.depth) |v| retried.max_depth = @as(usize, @intCast(v));
     if (retry.nodes) |v| retried.gen_nodes = @intCast(v);
     if (retry.fuel) |v| retried.gen_fuel = @intCast(v);
     if (retry.budget) |v| retried.global_budget = v * Search.tunables.ticks_per_budget_unit;

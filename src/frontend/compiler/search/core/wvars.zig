@@ -33,9 +33,9 @@
 //! has used its dummies (`Terms.unfold`), so as an eigenvariable the
 //! dummy's level would say when that was, not where it is used.
 //!
-//! A wvar also carries the variables bound inside the formula it was swapped
-//! into: holding one of those, or a theorem variable that depends on one,
-//! would capture it.
+//! A wvar also carries the variables bound around the hole of the formula it
+//! was swapped into: holding one of those, or a theorem variable that depends
+//! on one, would capture it.
 //!
 //! A cut wvar stands for a binder of a cut rule (`imp_trans`'s `q`); the
 //! prover lets only a closure or a rule match that binds it work on a goal

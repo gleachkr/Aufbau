@@ -94,14 +94,16 @@ pub const Retry = struct {
 /// or every limit that was hit is already at its maximum.
 ///
 /// Each limit that was hit is doubled. Depth grows by 2 after a miss nothing
-/// cut short, and after one whose core searched every depth below the limit
-/// in full. The budget doubles whenever anything else grows, since the other
+/// cut short, and after one whose core ladder searched every depth below a
+/// limit the call set in full; with none, the search core goes deeper by
+/// itself. The budget doubles whenever anything else grows, since the other
 /// limits spend it.
 pub fn retryFor(report: MissReport, gen: types.GenerateOptions) ?Retry {
     if (report.stop == .stack or !report.generation_ran) return null;
     var retry = Retry{};
-    if (!report.truncated() or report.searchedBelowDepthLimit(gen.max_depth)) {
-        retry.depth = raised(gen.max_depth + 2, gen.max_depth, tunables.max_depth_value);
+    const depth = gen.ladderDepth();
+    if (!report.truncated() or (gen.max_depth != null and report.searchedBelowDepthLimit(depth))) {
+        retry.depth = raised(depth + 2, depth, tunables.max_depth_value);
     }
     if (report.nodes) {
         retry.nodes = raised(gen.max_nodes * 2, gen.max_nodes, tunables.max_nodes_value);

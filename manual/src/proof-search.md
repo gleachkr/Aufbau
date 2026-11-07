@@ -85,9 +85,9 @@ bindings supply variables that cannot be inferred, as in the previous chapter.
 If you would rather read the result as separate lines, accept it and use the 
 *unpack* action.
 
-`auto?`'s search runs under a work budget and a depth limit, so it always
-stops. Its results are deterministic — the same goal, theory, and pool always
-produce the same suggestions in the same order.
+`auto?`'s search runs under a work budget, so it always stops. Its results are
+deterministic — the same goal, theory, and pool always produce the same
+suggestions in the same order.
 
 ## Placeholders in argument slots
 
@@ -112,10 +112,9 @@ and leave only the missing premises to search.
 
 When a search fails, the diagnostic explains why it stopped. **Exhausted**
 means it finished exploring the candidates available to its search
-strategies at the configured depth. It does not mean that the goal is
-unprovable. Try a greater depth, add useful references, or adjust the
-theory's search annotations. If a limit such as the work **budget** or the
-per-pass subgoal limit (`nodes`) cut the search short, it stopped before
+strategies. It does not mean that the goal is unprovable. Add useful
+references, or adjust the theory's search annotations. If a limit such as the
+work **budget** or the per-pass subgoal limit (`nodes`) cut the search short, it stopped before
 finishing that exploration. The report names
 every limit it hit and suggests a retry that raises them together, which
 editors also offer as a **Retry with …** code action. The report also lists

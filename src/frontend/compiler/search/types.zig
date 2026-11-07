@@ -1420,19 +1420,18 @@ pub const SourceSuggestions = struct {
 /// so they never pay generation cost.
 pub const GenerateOptions = struct {
     enabled: bool = false,
-    /// Maximum generation depth. Every phase first searches depth 1; the
-    /// core phases (1–3) then deepen together from depth 2 up to this, and
-    /// the search stops at the first (depth, phase) cell that yields a proof
+    /// Maximum generation depth, the `depth:` parameter. Null runs the search
+    /// core until the budget runs out or a pass cuts nothing (`core/root.zig`),
+    /// and the ladder to `ladder_depth` in what the core leaves. A budget of
+    /// `null` needs a finite limit, since a goal with no proof would otherwise
+    /// deepen for ever (`coreDepth`).
+    ///
+    /// In the ladder, every phase first searches depth 1; the core phases
+    /// (1–3) then deepen together from depth 2 up to this, and the search
+    /// stops at the first (depth, phase) cell that yields a proof
     /// (generate.zig:`runPhaseLadder`). The tail phases (4–5) each run
     /// depths 2..max only after the core misses with no core phase retired.
-    /// For proofs the core finds, and depth-1 proofs of any phase, raising
-    /// the limit keeps the same cell order and so never loses them. It can
-    /// lose a deeper tail-phase or trigger-seeded proof: the core runs every extra depth first and
-    /// may spend the shared `global_budget` before the tail reaches it
-    /// (#295: the depth corpus went 363→361→360 FULL rows at 6, 7, 8).
-    /// A finite limit keeps a miss bounded, since a goal with no proof runs
-    /// every cell before giving up.
-    max_depth: usize = 6,
+    max_depth: ?usize = null,
     /// Budget of *distinct* generated-node solves per ladder cell (one
     /// depth pass of one phase), reset at each cell; subgoals the path
     /// guard or a failure memo skip cost nothing. Once a cell reaches it,
@@ -1527,8 +1526,12 @@ pub const GenerateOptions = struct {
     /// the guard's check points) and comfortably under the 8 MiB
     /// stack the wasm executables link with (`build.zig` `stack_size`),
     /// leaving headroom for the frames between two check points (one full
-    /// backtracker level plus expression walks). Overridable only for tests.
-    stack_guard_bytes: usize = 4 * 1024 * 1024,
+    /// backtracker level plus expression walks). On wasm the engine's own
+    /// call stack (984 KiB in V8) runs out first, with a trap that kills the
+    /// instance, and these bytes count only the part of a frame kept in linear
+    /// memory: a chain of rules traps between 1 and 1.5 MiB of them, and
+    /// Pelletier 34 between 1.5 and 2 MiB. Overridable only for tests.
+    stack_guard_bytes: usize = if (@import("builtin").target.cpu.arch.isWasm()) 768 * 1024 else 4 * 1024 * 1024,
     /// Try the search core (`core/`, `docs/design_notes/shared_witness.md`
     /// revision 2) before the generation ladder, which still runs when the
     /// core abstains or misses. Off only to measure the ladder alone.
@@ -1536,6 +1539,18 @@ pub const GenerateOptions = struct {
     /// Run the generation ladder after the core. Off only to measure the
     /// core alone.
     ladder: bool = true,
+
+    /// Where the ladder stops when the call sets no limit.
+    pub const ladder_depth: usize = 6;
+
+    pub fn ladderDepth(self: GenerateOptions) usize {
+        return self.max_depth orelse ladder_depth;
+    }
+
+    /// The core's limit: none, unless the call sets one or has no budget.
+    pub fn coreDepth(self: GenerateOptions) ?usize {
+        return self.max_depth orelse if (self.global_budget == null) ladder_depth else null;
+    }
 };
 
 pub const SourceSuggestionOptions = struct {

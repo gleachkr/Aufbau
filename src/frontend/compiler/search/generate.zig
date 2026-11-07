@@ -501,7 +501,7 @@ pub fn generateTopLevel(
     defer driver.concrete_fail.deinit(driver.scratch);
     defer driver.open_fail.deinit(driver.scratch);
 
-    const schedule = try buildSchedule(session.allocator, options.max_depth, driver.gates);
+    const schedule = try buildSchedule(session.allocator, options.ladderDepth(), driver.gates);
     defer session.allocator.free(schedule);
     defer driver.root_vars.deinit(driver.scratch);
     if (session.context.registry.triggerRuleCount() > 0) {
@@ -512,7 +512,8 @@ pub fn generateTopLevel(
     }
     var applications = std.ArrayListUnmanaged(RuleApplication).empty;
     if (options.core) try runCore(&driver, theorem, goal, &applications);
-    if (applications.items.len == 0 and options.ladder) try runPhaseLadder(&driver, goal_expr, &applications, schedule);
+    const spent = if (driver.fuel.global) |budget| budget.exhausted else false;
+    if (applications.items.len == 0 and options.ladder and !spent) try runPhaseLadder(&driver, goal_expr, &applications, schedule);
 
     // Mirror the forward layer's meta-store activity into the bench counters.
     if (derived_pool) |*dpool| {
@@ -539,7 +540,8 @@ pub fn generateTopLevel(
 
 /// The search core's attempt at `goal`, ahead of the ladder. A proof it
 /// finds is the call's result; when it abstains, misses, or runs out of
-/// budget or stack, the ladder runs as it would without it.
+/// stack, the ladder runs as it would without it, in what is left of the
+/// budget.
 fn runCore(
     driver: *Driver,
     theorem: *const TheoremContext,
@@ -555,14 +557,18 @@ fn runCore(
         .pool = try driver.session.getReferencePool(theorem, driver.counters),
         .derived = driver.derived,
         .goal = goal,
-        .max_depth = driver.options.max_depth,
+        .max_depth = driver.options.coreDepth(),
         .stack_guard_bytes = driver.options.stack_guard_bytes,
         .budget = driver.fuel.global,
         .counters = driver.counters,
         .out = driver.arena,
         .scratch = driver.scratch,
     }) catch |err| switch (err) {
-        error.SearchBudgetExhausted, error.SearchStackExhausted => return,
+        error.SearchBudgetExhausted => {
+            if (driver.counters) |c| c.gen_last_phase = search_core_phase;
+            return;
+        },
+        error.SearchStackExhausted => return,
         else => |e| return e,
     };
     switch (result) {
@@ -684,8 +690,9 @@ const ladder_phases = [_]Phase{
     .{ .name = "constrained modus ponens", .split = true, .retain_principal = true, .constrained_mp = true },
 };
 
-/// `SearchCounters.gen_last_phase` when the search core found the proof.
-const search_core_phase = ladder_phases.len + 1;
+/// `SearchCounters.gen_last_phase` when the search core found the proof or
+/// spent the budget.
+pub const search_core_phase = ladder_phases.len + 1;
 
 /// The name of ladder phase `phase_1based` (`SearchCounters.gen_last_phase`).
 pub fn phaseName(phase_1based: usize) []const u8 {

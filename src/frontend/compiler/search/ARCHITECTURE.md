@@ -246,9 +246,11 @@ for *committing*. See the `@acui can be a subset` note.
 Before any of this, `generateTopLevel` hands a concrete goal to the search
 core (`core/`, `runCore`), in the same tick budget. A proof the core finds is
 the call's result (`gen_last_phase` = `ladder_phases.len + 1`, "the search
-core"); when it abstains, misses, or runs out of budget or stack, the ladder
-below runs as it would without it. `GenerateOptions.core = false` (`abc
-search --no-core`, bench `--no-core`) leaves the core out.
+core"); when it abstains, misses, or runs out of stack, the ladder below runs
+in what is left of the budget. With no `depth:` the core deepens until the
+budget runs out or a pass stops no goal at the limit (`Prover.depth_cut`), and
+the ladder stops at `GenerateOptions.ladder_depth`. `GenerateOptions.core =
+false` (`abc search --no-core`, bench `--no-core`) leaves the core out.
 
 `generateTopLevel` runs **five** retry phases over single-depth passes
 (`runDepthPass`) inside `runPhaseLadder`, and a sixth outer retry against a
@@ -427,8 +429,8 @@ structure goes first). Guarded by the `nd_minimal` depth frontier tests in
   `budget_exhausted` status; only an untruncated one reads as exhausted.
 
 `SearchCounters.gen_core_depth_done` records the deepest depth at which every
-core phase finished with no find, exhaustion or node cap. When it reaches
-`max_depth - 1`, the report says every depth below the limit was searched and
+core phase finished with no find, exhaustion or node cap. When the call set a
+`max_depth` and it reaches `max_depth - 1`, the report says every depth below the limit was searched and
 `miss.retryFor` raises depth; a node cap in the core keeps it lower on
 purpose (see `searchedBelowDepthLimit`). `retryFor` doubles every limit that
 was hit and the budget with them, and returns null when nothing can help (the
@@ -802,7 +804,7 @@ rationale):
 - **Depth exemption** (`hookSolve`): an eager application's subgoal is solved
   at the parent's remaining depth (the level is added back), so counted depth
   ≈ number of genuine choice points, and tall deterministic ladders fit the
-  default `max_depth`. Eager steps still pay nodes, per-phase fuel, and
+  ladder's default depth. Eager steps still pay nodes, per-phase fuel, and
   global ticks — a wrong annotation burns budget, never diverges — and the
   `visited` path guard catches cycles. `genDepth` mirrors the exemption
   (eager edges cost 0) so `concrete_ok` replays stay consistent with the new
@@ -1397,8 +1399,8 @@ Notes:
   stale binaries give garbage. The breadth result is the stable oracle.
 - Metrics: breadth reports `found` / `miss` / `top1` (rank of the oracle
   suggestion); depth reports per-theorem frontier `k` / `FULL`.
-- Defaults: `max_depth=6`, gen-nodes (`max_nodes`)=256, gen-fuel=4096,
-  global-budget=6.3e9 weighted ticks (`--global-budget=0` disables for
+- Defaults: no `max_depth` (the ladder stops at 6), gen-nodes
+  (`max_nodes`)=256, gen-fuel=4096, global-budget=2.3e9 weighted ticks (`--global-budget=0` disables for
   uncapped calibration runs).
 - Determinism is required: candidate/fan-out ordering is observable through
   `top1` and the byte-identical suggestions, so preserve enumeration order
@@ -1549,10 +1551,8 @@ proof compiler inserts the ACUI reorder bridge — the same matching that lets
 returned non-null so the slot was never re-searched. Relabeling is the fix; it is
 sound because the recompile validates the bridged proof.)
 
-**Budget policy.** These two proofs need depth ≥ 9, so reaching them requires
-`max_depth > 6` — but **the global default must stay at 6**: raising it to 10
-roughly 10×'s corpus wall-clock on the 385 doomed generic-corpus searches for
-zero found-ness gain. The higher budget is scoped to the depth-frontier
+**Budget policy.** These two proofs need depth ≥ 9, past the ladder's default
+of 6. The higher budget is scoped to the depth-frontier
 regression guards in `tests/frontier_guards.zig`, which double as the memo's only automated check
 — breadth finds these lines through the pool and never exercises deep generation.
 Each guard's budget is pinned just above the theorem's measured floor (2026-06-24)

@@ -61,7 +61,9 @@ pub const Request = struct {
     derived: ?*types.DerivedPool = null,
     /// A concrete or holey goal; the core abstains on an implicit one.
     goal: types.Goal,
-    max_depth: usize,
+    /// Null deepens until the budget runs out or a pass cuts nothing, so it
+    /// needs a budget (`GenerateOptions.coreDepth`).
+    max_depth: ?usize,
     stack_guard_bytes: usize,
     budget: ?*types.GlobalBudget,
     counters: ?*SearchCounters,
@@ -73,7 +75,7 @@ pub const Request = struct {
 pub const Result = union(enum) {
     /// The goal is outside what the core searches.
     abstained,
-    /// No proof within `max_depth`.
+    /// No proof within `max_depth`, or none at any depth.
     missed,
     found: struct { application: RuleApplication, depth: usize },
 };
@@ -148,10 +150,13 @@ pub fn run(request: Request) !Result {
         c.core_rejects += prover.stats.rejects;
     };
 
-    for (1..request.max_depth + 1) |depth| {
+    var depth: usize = 1;
+    while (request.max_depth == null or depth <= request.max_depth.?) : (depth += 1) {
+        if (request.counters) |c| c.gen_last_depth = depth;
         if (try prover.solve(goal, depth)) {
             return .{ .found = .{ .application = close_out.found.?, .depth = depth } };
         }
+        if (!prover.depth_cut) break;
     }
     return .missed;
 }

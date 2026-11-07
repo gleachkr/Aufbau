@@ -1,10 +1,8 @@
 //! Per-call search tunables: the `name: INTEGER` parameters a proof author
 //! can put on an `auto?` placeholder (`auto? (depth: 8, fuel: 8192)`) to
 //! widen ONE search without touching the engine defaults. The defaults stay
-//! the bench-anchored global operating point (raising them globally is a
-//! measured regression: max_depth=10 ~10x's doomed-search wall-clock across
-//! a corpus for zero found-ness gain); a per-call override scopes the extra
-//! cost to the one goal the author is actively working on.
+//! the bench-anchored global operating point; a per-call override scopes the
+//! extra cost to the one goal the author is actively working on.
 //!
 //! The parser accepts the parameter form only on search placeholders
 //! (`proof_script.zig:parsePlaceholderBindings`), so nothing here is
@@ -105,7 +103,7 @@ pub fn applySearchParams(
         const spec = specForName(param.name) orelse continue;
         if (param.value < spec.min or param.value > spec.max) continue;
         switch (spec.kind) {
-            .depth => options.max_depth = @intCast(param.value),
+            .depth => options.max_depth = @as(usize, @intCast(param.value)),
             .nodes => options.max_nodes = @intCast(param.value),
             .fuel => options.fuel = @intCast(param.value),
             .budget => options.global_budget = if (param.value == 0)

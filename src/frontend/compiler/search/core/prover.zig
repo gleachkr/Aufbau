@@ -266,6 +266,10 @@ const Split = struct {
     bag: terms_mod.SplitBag,
     /// The split whose premises were being proved when this one was made.
     outer: ?*const Split,
+    /// Per share, the ground value `sharesFit` last accepted over a ground
+    /// bag, which it need not check again. Undoing a binding the bag relied
+    /// on only skips that prune: `settle` still decides.
+    fitted: []?ExprId,
 };
 
 /// A postponed conclusion node (`terms_mod.Postponed`) to check once a
@@ -347,6 +351,12 @@ pub const Prover = struct {
     close_out: CloseOut,
     stack_base: usize,
     stack_guard_bytes: usize,
+    /// The pass stopped a goal at depth 0 short of an unsafe rule. A pass that
+    /// did not has searched all there is, and a deeper one would find nothing.
+    /// A memo hit hides nothing here: a goal's deepest route through a pass is
+    /// one deeper than through the pass before, so that route misses the memo
+    /// and searches the goal's rules.
+    depth_cut: bool = false,
     /// Per goal not keyed: the greatest depth at which it has no proof.
     failed: std.AutoHashMapUnmanaged(ExprId, usize) = .empty,
     /// The same per key of a keyed goal.
@@ -393,6 +403,7 @@ pub const Prover = struct {
     pub fn solve(self: *Prover, goal: ExprId, depth: usize) Error!bool {
         var root: ?*const Node = null;
         self.root = &root;
+        self.depth_cut = false;
         defer self.root = null;
         const outcome = try self.prove(.{ .expr = goal, .depth = depth, .slot = &root, .path = null }, null);
         return outcome == .proved;
@@ -978,7 +989,13 @@ pub const Prover = struct {
                     switch (entry.role) {
                         .closer, .bridge => {},
                         .safe => {},
-                        .unsafe => if (goal.depth == 0 or any_safe) break,
+                        .unsafe => {
+                            if (any_safe) break;
+                            if (goal.depth == 0) {
+                                self.depth_cut = true;
+                                break;
+                            }
+                        },
                     }
                     const rule = entry.statement(self.context);
                     // Such a conclusion matches only goals of its sort.
@@ -1251,7 +1268,11 @@ pub const Prover = struct {
                     filled[target] = true;
                     abstract = .{ .abstraction = abstraction, .values = full };
                 }
-                if (shares.items.len != 0) split = .{ .shares = shares.items, .bag = self.terms.split.?, .outer = self.splits };
+                if (shares.items.len != 0) {
+                    const fitted = try self.arena.alloc(?ExprId, shares.items.len);
+                    @memset(fitted, null);
+                    split = .{ .shares = shares.items, .bag = self.terms.split.?, .outer = self.splits, .fitted = fitted };
+                }
                 if (self.terms.postponed) |list| checks = (try self.postponedChecks(list, full, filled)) orelse return .failed;
                 if (!try self.freshBound(entry, bindings, full)) return .failed;
                 const rule_bindings = if (entry.abstraction != null) try self.ruleBindings(entry, full) else full;
@@ -1376,9 +1397,10 @@ pub const Prover = struct {
     /// keeps it, and the theorem variables that depend on it, out of the
     /// other arguments that do not depend on the binder, as MM0 requires.
     /// A binder fixed to an unbound eigenvariable bars it from those
-    /// arguments (`WVars.bar`), so no later binding or name breaks the
-    /// condition either. The match's `bindings` say which binders it
-    /// fixed; `full` holds every binder's value.
+    /// arguments (`WVars.bar`), and one fixed to a variable keeps it out of
+    /// the wvars they hold (`Terms.keepOut`), so no later binding or name
+    /// breaks the condition either. The match's `bindings` say which binders
+    /// it fixed; `full` holds every binder's value.
     fn freshBound(self: *Prover, entry: *const catalog_mod.Rule, bindings: []const ?ExprId, full: []const ExprId) Error!bool {
         const args = entry.statement(self.context).args;
         for (args, bindings, 0..) |arg, binding, idx| {
@@ -1387,11 +1409,13 @@ pub const Prover = struct {
             switch (self.terms.theorem.interner.node(value).*) {
                 .variable => for (args, full, 0..) |other, other_value, other_idx| {
                     if (other_idx == idx or other.deps & arg.deps != 0) continue;
-                    if (!self.wvars.mentions(other_value, value)) continue;
-                    // `@freshen` renames the variable out of the argument
-                    // when the checker applies the step.
-                    if (entry.abstraction == null and self.freshens(entry.rule_id, other_idx, idx)) continue;
-                    return false;
+                    if (self.wvars.mentions(other_value, value)) {
+                        // `@freshen` renames a variable the argument holds
+                        // under a binder when the checker applies the step.
+                        const renames = entry.abstraction == null and self.freshens(entry.rule_id, other_idx, idx);
+                        if (!renames or self.terms.holdsFree(other_value, value)) return false;
+                    }
+                    try self.terms.keepOut(other_value, value);
                 },
                 .placeholder => {
                     const wvar = self.wvars.of(value) orelse continue;
@@ -1730,7 +1754,7 @@ pub const Prover = struct {
             switch (w.kind) {
                 .gamma => {
                     var capture = std.ArrayListUnmanaged(ExprId).empty;
-                    try self.terms.boundVariables(self.arena, pattern.*, &capture);
+                    try self.terms.boundAround(self.arena, pattern.*, full[w.hole], &capture);
                     full[w.arg] = try self.wvars.mint(sort_name, capture.items, false);
                 },
                 .delta => full[w.arg] = try self.wvars.introduce(sort_name, goal, null),
@@ -1912,9 +1936,19 @@ pub const Prover = struct {
         var at = self.splits;
         while (at) |split| : (at = split.outer) {
             var members: AcuiBag.ExprBag = .{};
-            for (split.bag.members) |member| _ = members.append(try self.terms.resolveGoal(member));
-            for (split.shares) |idx| {
+            // Null until a share needs the bag's members.
+            var ground: ?bool = null;
+            for (split.shares, split.fitted) |idx, *fitted| {
                 const value = self.wvars.vars.items[idx].value orelse continue;
+                if (fitted.* == value) continue;
+                if (ground == null) {
+                    ground = true;
+                    for (split.bag.members) |member| {
+                        const resolved = try self.terms.resolveGoal(member);
+                        _ = members.append(resolved);
+                        if (try self.wvars.holdsWVar(resolved)) ground = false;
+                    }
+                }
                 const held = split.bag.combiner.flatten(self.terms.theorem, try self.terms.resolveGoal(value)) orelse
                     return error.Unsupported;
                 for (held.slice()) |member| {
@@ -1923,6 +1957,7 @@ pub const Prover = struct {
                         if (try self.terms.mightEqual(member, other, .unfolding)) break;
                     } else return false;
                 }
+                if (ground.? and !try self.wvars.holdsWVar(value)) fitted.* = value;
             }
         }
         return true;

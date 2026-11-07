@@ -138,11 +138,13 @@ proof is found first: a typing goal's type hole takes the structure the
 typing rules give it, and a context hole takes the members the proof
 needs, so `_ctx ⊢ a` may come back as `ax` with `_ctx := a`; a part of a
 context nothing fills is the empty context. Write the context out when
-the proof must use a particular one. A goal the core does not take (one with an
-idempotent but non-commutative `@acui` combiner) or cannot prove
-within the
-depth limit goes on to the generation search, in what is left of the
-same work budget.
+the proof must use a particular one. The core deepens until it finds a proof,
+the budget runs out, or a pass reaches no goal the limit stops, since a deeper
+pass would then find nothing either. A `depth:` the call sets ends it there. A
+goal the core does not take (one with an idempotent but non-commutative `@acui`
+combiner), or one it misses at its limit or stops on, goes on to the generation
+search, in what is left of the same work budget, to depth 6 unless `depth:` says
+otherwise.
 Either way the checker validates a proof before it is offered.
 
 A suggestion from `exact?` or `auto?` names a rule argument only when the
@@ -342,17 +344,17 @@ distinguishes the cases, because they call for different responses:
   search before it finished, so the empty result is *inconclusive*. The
   report names every limit that was hit, and usually there are several:
   - *the per-call work budget (~Ns of work) ran out during `<phase>` at
-    depth D of N*: the whole call stopped there;
+    depth D*, with *of N* when a limit applies: the whole call stopped there;
   - *the limit of N subgoals per pass was reached in K passes*: those
     passes stopped expanding new subgoals;
   - *a search phase ran out of fuel*: that phase was retired early;
   - *forward saturation stopped before reaching a fixpoint*: the
     theory's `@auto forward` rules left the derived-fact pool incomplete.
 
-  If the main phases searched every depth below the limit in full, the
-  report adds "Every depth below N was searched", and the retry raises
-  depth too. The report then suggests raising every limit that was hit,
-  together with the budget, e.g.
+  If the call set a depth limit and the main phases searched every depth
+  below it in full, the report adds "Every depth below N was searched", and
+  the retry raises depth too. The report then suggests raising every limit
+  that was hit, together with the budget, e.g.
   `try 'auto? (nodes: 512, fuel: 8192, budget: 6)'`.
 - **"stopped by the call-stack guard …"**: one branch recursed deep
   enough to risk the process stack. No parameter raises this guard; try
@@ -940,9 +942,9 @@ l3: $ b $ by exact?      -- finds e.g.  ax_mp (a := $ a $, b := $ b $) [l1, l2]
 ## Budgets and determinism
 
 - **Every search is bounded.** `exact?`, `apply?` and `auto?` each run
-  under a work budget (roughly a few seconds of calibrated work), and
-  `auto?` also under an iterative-deepening depth limit, so they always
-  terminate. A goal they can't crack within budget yields "no
+  under a work budget (roughly a few seconds of calibrated work), so they
+  always terminate. An `auto?` with `budget: 0` runs under a depth limit
+  instead. A goal they can't crack within budget yields "no
   suggestion", not a hang; `exact?` and `apply?` offer whatever they found
   before the budget ran out. Very deep goals may approach the budget before
   giving up. Checking and trimming the proofs a search found run under a

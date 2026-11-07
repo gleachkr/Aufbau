@@ -182,7 +182,7 @@ fn ndFolSearch(
     comptime name: []const u8,
     comptime statement: []const u8,
     counters: *types.SearchCounters,
-    options: struct { max_depth: usize = 6, ladder: bool = true, fixture: []const u8 = "nd_fol", dir: []const u8 = "search_bench_cases" },
+    options: struct { max_depth: ?usize = 6, ladder: bool = true, fixture: []const u8 = "nd_fol", dir: []const u8 = "search_bench_cases" },
 ) !types.SourceSuggestions {
     const allocator = arena.allocator();
     const path = try std.fmt.allocPrint(allocator, "tests/{s}/{s}.mm0", .{ options.dir, options.fixture });
@@ -194,6 +194,81 @@ fn ndFolSearch(
         .counters = counters,
         .generate = .{ .enabled = true, .core = true, .max_depth = options.max_depth, .ladder = options.ladder },
     });
+}
+
+// Two rules that need each other: nothing is left to search once the depth
+// limit stops cutting. `T` is nine steps from `F` by way of `t2`, and `r2`'s
+// chain reaches `t2` too, later and shallower, so a memo answers it there.
+const deepening_mm0 =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\term P: wff; term Q: wff; term F: wff; term R: wff; term X: wff; term Y: wff;
+    \\term t2: wff; term t3: wff; term t4: wff; term t5: wff;
+    \\term t6: wff; term t7: wff; term t8: wff; term t9: wff;
+    \\axiom p_q: $ Q $ > $ P $;
+    \\axiom q_p: $ P $ > $ Q $;
+    \\axiom r1: $ t2 $ > $ R $;
+    \\axiom r2: $ X $ > $ R $;
+    \\axiom x_y: $ Y $ > $ X $;
+    \\axiom y_t: $ t2 $ > $ Y $;
+    \\axiom s2: $ t3 $ > $ t2 $;
+    \\axiom s3: $ t4 $ > $ t3 $;
+    \\axiom s4: $ t5 $ > $ t4 $;
+    \\axiom s5: $ t6 $ > $ t5 $;
+    \\axiom s6: $ t7 $ > $ t6 $;
+    \\axiom s7: $ t8 $ > $ t7 $;
+    \\axiom s8: $ t9 $ > $ t8 $;
+    \\axiom s9: $ F $ > $ t9 $;
+    \\theorem no_proof: $ P $;
+    \\theorem deep: $ F $ > $ R $;
+;
+
+fn deepeningSearch(
+    arena: *std.heap.ArenaAllocator,
+    proof_src: []const u8,
+    max_depth: ?usize,
+    counters: *types.SearchCounters,
+) !types.SourceSuggestions {
+    return suggestionsAtNeedle(arena, deepening_mm0, proof_src, "auto?", .{
+        .counters = counters,
+        .generate = .{ .enabled = true, .core = true, .max_depth = max_depth, .ladder = false },
+    });
+}
+
+test "the search core stops at a pass the depth limit cut nothing in" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try deepeningSearch(&arena,
+        \\no_proof
+        \\--------
+        \\l1: $ P $ by auto?
+    , null, &counters);
+    defer suggestions.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
+    try std.testing.expect(!counters.work_budget_exhausted);
+    try std.testing.expectEqual(@as(usize, 2), counters.gen_last_depth);
+}
+
+test "the search core deepens past a memo hit with no limit" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const proof_src =
+        \\deep
+        \\----
+        \\l1: $ R $ by auto?
+    ;
+    var counters = types.SearchCounters{};
+    var found = try deepeningSearch(&arena, proof_src, null, &counters);
+    defer found.deinit();
+    try std.testing.expect(found.items.len != 0);
+    try std.testing.expectEqual(@as(usize, 9), counters.gen_last_depth);
+
+    var limited_counters = types.SearchCounters{};
+    var limited = try deepeningSearch(&arena, proof_src, 6, &limited_counters);
+    defer limited.deinit();
+    try std.testing.expectEqual(@as(usize, 0), limited.items.len);
 }
 
 test "the search core closes a quantifier witness by unification" {
@@ -275,6 +350,104 @@ test "an eigenvariable becomes the variable a hypothesis names" {
 
     try expectOffered(suggestions.items, &.{"all_intro [and_intro [#1, #1]]"});
     try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// In each, `imp_intro` comes first so that the direct pass, which tries one
+// rule on the facts, cannot find the step and the core chooses the witness.
+fn expectCoreWitness(suggestions: types.SourceSuggestions, counters: *const types.SearchCounters) !void {
+    try expectOffered(suggestions.items, &.{"imp_intro [ex_intro [#1]]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "a witness may hold a variable bound outside its scope" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `∀ y` does not hold `x`, so `y` for `x` captures nothing.
+    var suggestions = try ndFolSearch(
+        &arena,
+        "theorem elsewhere {x y: obj}: $ P C ⊢ P y → ∀ y P y $ > $ ∅ ⊢ P C → ∃ x (P x → ∀ y P y) $;\n",
+        "elsewhere",
+        "∅ ⊢ P C → ∃ x (P x → ∀ y P y)",
+        &counters,
+        .{ .ladder = false },
+    );
+    defer suggestions.deinit();
+
+    try expectCoreWitness(suggestions, &counters);
+}
+
+test "a witness may hold a binder of a term whose argument is out of its scope" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `scoped`'s `a` does not depend on its binder `z`.
+    var suggestions = try ndFolSearch(
+        &arena,
+        \\term scoped {z: obj} (a: obj) (p: wff z): wff;
+        \\--| @congr
+        \\axiom scoped_congr {z: obj} (a b: obj z) (p q: wff z):
+        \\  $ a = b $ > $ p ↔ q $ > $ scoped z a p ↔ scoped z b q $;
+        \\--| @rewrite
+        \\axiom sb_f_scoped {x z: obj} (t a: obj x z) (p: wff z):
+        \\  $ [x/t] (scoped z a p) ↔ scoped z (subst x / t a) p $;
+        \\theorem unscoped {x z: obj}: $ P C ⊢ scoped z z (P z) $ > $ ∅ ⊢ P C → ∃ x (scoped z x (P z)) $;
+        \\
+    ,
+        "unscoped",
+        "∅ ⊢ P C → ∃ x (scoped z x (P z))",
+        &counters,
+        .{ .ladder = false },
+    );
+    defer suggestions.deinit();
+
+    try expectCoreWitness(suggestions, &counters);
+}
+
+test "a witness may hold a binder a term's result sort depends on" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `keep y a` leaves `y` free: it does not capture it.
+    var suggestions = try ndFolSearch(
+        &arena,
+        \\term keep {z: obj} (a: obj z): wff z;
+        \\--| @congr
+        \\axiom keep_congr {z: obj} (a b: obj z): $ a = b $ > $ keep z a ↔ keep z b $;
+        \\--| @rewrite
+        \\axiom sb_f_keep {x z: obj} (t a: obj x z):
+        \\  $ [x/t] (keep z a) ↔ keep z (subst x / t a) $;
+        \\theorem kept {x y: obj}: $ P C ⊢ keep y y $ > $ ∅ ⊢ P C → ∃ x (keep y x) $;
+        \\
+    ,
+        "kept",
+        "∅ ⊢ P C → ∃ x (keep y x)",
+        &counters,
+        .{ .ladder = false },
+    );
+    defer suggestions.deinit();
+
+    try expectCoreWitness(suggestions, &counters);
+}
+
+test "a witness may not hold a binder around it" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `y` for `x` under `∀ y` would capture it, so `#1` is no instance.
+    var suggestions = try ndFolSearch(
+        &arena,
+        "theorem around {x y: obj}: $ P C ⊢ ∀ y R y y $ > $ ∅ ⊢ P C → ∃ x (∀ y R x y) $;\n",
+        "around",
+        "∅ ⊢ P C → ∃ x (∀ y R x y)",
+        &counters,
+        .{ .max_depth = 2, .ladder = false },
+    );
+    defer suggestions.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
