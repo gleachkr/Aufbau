@@ -6,10 +6,12 @@
 //! `ExprId` order, and a sequence (associative with a unit, nothing more)
 //! lists its members in their own order, so two ground goals equal modulo
 //! ACUI are the same `ExprId`. The order is only stable within one
-//! theorem's interner, which is all one core run uses. A goal holding
-//! witness variables (`wvars.zig`) is canonical as written, with each wvar
-//! a leaf; once a binding changes it, `resolveGoal` makes it canonical
-//! again.
+//! theorem's interner, which is all one core run uses. A bag's unit is no
+//! member only when the theory's unit laws let a proof drop it
+//! (`AcuiBag.Combiner.provable`); otherwise it is a member like any other,
+//! and no bag is empty. A goal holding witness variables (`wvars.zig`) is
+//! canonical as written, with each wvar a leaf; once a binding changes it,
+//! `resolveGoal` makes it canonical again.
 //!
 //! Matching enumerates every way a conclusion template fits a goal, and
 //! unifies through the witness variables: a binder met twice must agree
@@ -173,7 +175,7 @@ pub const Terms = struct {
         for (self.opens, 0..) |*opens, term_id| opens.* = context.env.openableDef(@intCast(term_id)) != null;
         var it = context.registry.acui_by_head.keyIterator();
         while (it.next()) |head| {
-            const combiner = AcuiBag.Combiner.of(context.registry, context.env, head.*) orelse continue;
+            const combiner = AcuiBag.Combiner.provable(context.registry, context.env, head.*) orelse continue;
             if (!catalog.readsLaw(combiner.law)) continue;
             self.bags[combiner.head] = combiner;
             if (combiner.unit) |unit| self.bags[unit] = combiner;
@@ -204,14 +206,16 @@ pub const Terms = struct {
         return if (term_id < self.bags.len) self.bags[term_id] else null;
     }
 
-    /// The unit of the bag over `sort_name`, or null when no bag the core
-    /// reads has that sort or its unit does not resolve.
+    /// The declared unit of the bag over `sort_name`, a member or not, or
+    /// null when no bag the core reads has that sort or its unit does not
+    /// resolve.
     pub fn unitOf(self: *Terms, sort_name: []const u8) Error!?ExprId {
         for (self.bags, 0..) |bag, term_id| {
             const combiner = bag orelse continue;
             if (combiner.head != term_id) continue;
             if (!std.mem.eql(u8, self.context.env.terms.items[term_id].ret_sort_name, sort_name)) continue;
-            return try combiner.build(self.theorem, &.{});
+            const declared = AcuiBag.Combiner.of(self.context.registry, self.context.env, combiner.head).?;
+            return try declared.build(self.theorem, &.{});
         }
         return null;
     }

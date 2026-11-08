@@ -321,6 +321,75 @@ test "a goal its shares make again is a repeat" {
     try std.testing.expectEqual(@as(usize, 1), counters.gen_last_depth);
 }
 
+// With no unit law, `∅ , p` is not `p`: the inner `imp_intro` must take
+// `g := ∅ , p`, as the checker reads the outer one's premise.
+test "a bag's unit with no unit law is a member" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try suggestionsAtNeedle(&arena,
+        \\delimiter $ ( ) $;
+        \\sort wff;
+        \\sort ctx;
+        \\provable sort seq;
+        \\term iff (a b: wff): seq;
+        \\infixr iff: $↔$ prec 20;
+        \\term ctx_eq (g h: ctx): seq;
+        \\term emp: ctx;
+        \\notation emp: ctx = ($∅$:max);
+        \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+        \\term join (g h: ctx): ctx;
+        \\infixl join: $,$ prec 5;
+        \\term hyp (a: wff): ctx;
+        \\coercion hyp: wff > ctx;
+        \\term nd (g: ctx) (a: wff): seq;
+        \\infixl nd: $⊢$ prec 0;
+        \\term seq_eq (s t: seq): seq;
+        \\infixl seq_eq: $⟚$ prec 1;
+        \\term imp (a b: wff): wff;
+        \\infixr imp: $→$ prec 25;
+        \\--| @relation wff iff iff_refl iff_trans iff_sym _
+        \\axiom iff_refl (a: wff): $ a ↔ a $;
+        \\axiom iff_trans (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+        \\axiom iff_sym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+        \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+        \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+        \\axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+        \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+        \\axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+        \\axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+        \\axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+        \\--| @relation seq seq_eq seq_refl seq_trans seq_sym seq_mp
+        \\axiom seq_refl (s: seq): $ s ⟚ s $;
+        \\axiom seq_trans (s t u: seq): $ s ⟚ t $ > $ t ⟚ u $ > $ s ⟚ u $;
+        \\axiom seq_sym (s t: seq): $ s ⟚ t $ > $ t ⟚ s $;
+        \\axiom seq_mp (s t: seq): $ s ⟚ t $ > $ s $ > $ t $;
+        \\--| @congr
+        \\axiom join_congr (g1 g2 h1 h2: ctx):
+        \\  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+        \\--| @congr
+        \\axiom hyp_congr (a b: wff): $ a ↔ b $ > $ ctx_eq (hyp a) (hyp b) $;
+        \\--| @congr
+        \\axiom nd_congr (g h: ctx) (a b: wff):
+        \\  $ ctx_eq g h $ > $ a ↔ b $ > $ (g ⊢ a) ⟚ (h ⊢ b) $;
+        \\axiom ax (g: ctx) (a: wff): $ g , a ⊢ a $;
+        \\axiom imp_intro (g: ctx) (a b: wff): $ g , a ⊢ b $ > $ g ⊢ a → b $;
+        \\theorem k (p q: wff): $ ∅ ⊢ p → q → p $;
+        \\
+    ,
+        \\k
+        \\---
+        \\l1: $ ∅ ⊢ p → q → p $ by auto?
+    , "auto?", .{
+        .counters = &counters,
+        .generate = .{ .enabled = true, .ladder = false },
+    });
+    defer suggestions.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), suggestions.items.len);
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
 test "the search core closes a quantifier witness by unification" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

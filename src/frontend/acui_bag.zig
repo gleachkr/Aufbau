@@ -251,11 +251,13 @@ pub fn anyLaw(registry: *const RewriteRegistry, comptime pred: fn (Law) bool) bo
 
 pub const Combiner = struct {
     head: u32,
-    /// Null when the declared unit term does not resolve.
+    /// Null when the declared unit term does not resolve, or for `provable`
+    /// when no unit law removes it.
     unit: ?u32,
     law: Law,
 
     /// The `@acui` combiner headed by `head`, or null when `head` is not one.
+    /// Its bags drop the unit: they read the meaning.
     pub fn of(
         registry: *const RewriteRegistry,
         env: *const GlobalEnv,
@@ -267,6 +269,19 @@ pub const Combiner = struct {
             .unit = env.term_names.get(combiner.unit_term_name),
             .law = Law.of(combiner.comm_name != null, combiner.idem_name != null),
         };
+    }
+
+    /// `of` read as a proof can follow it (`Spine.provable`): when no unit
+    /// law removes the unit, the unit is a member like any other, and no bag
+    /// is empty.
+    pub fn provable(
+        registry: *const RewriteRegistry,
+        env: *const GlobalEnv,
+        head: u32,
+    ) ?Combiner {
+        var combiner = of(registry, env, head) orelse return null;
+        if (!registry.acui_by_head.get(head).?.removesUnit()) combiner.unit = null;
+        return combiner;
     }
 
     pub fn fromResolved(acui: ResolvedStructuralCombiner) Combiner {

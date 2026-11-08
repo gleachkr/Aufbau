@@ -452,7 +452,7 @@ fn templateSupported(
     };
     if (app.args.len > max_args) return false;
     if (app.term_id >= context.env.terms.items.len) return false;
-    if (AcuiBag.Combiner.of(context.registry, context.env, app.term_id)) |combiner| {
+    if (AcuiBag.Combiner.provable(context.registry, context.env, app.term_id)) |combiner| {
         if (!readsLaw(combiner.law)) return false;
         const members = combiner.flattenTemplate(template) orelse return false;
         // Distinct rest binders: `g , g` has one.
@@ -516,7 +516,7 @@ fn collectShares(
         .binder => return,
         .app => |app| app,
     };
-    const combiner = AcuiBag.Combiner.of(context.registry, context.env, app.term_id) orelse {
+    const combiner = AcuiBag.Combiner.provable(context.registry, context.env, app.term_id) orelse {
         for (app.args) |arg| try collectShares(allocator, context, args, arg, out);
         return;
     };

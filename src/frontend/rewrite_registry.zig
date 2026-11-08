@@ -175,6 +175,15 @@ pub const StructuralCombiner = struct {
     /// cite (a hypothesis, a bound binder) never is.
     left_unit_rule: ?UnitRule = null,
     right_unit_rule: ?UnitRule = null,
+
+    /// Whether the unit laws let a proof remove the unit from either end of
+    /// a bag, the one from the other side by commutativity.
+    pub fn removesUnit(self: StructuralCombiner) bool {
+        const left = self.left_unit_rule != null;
+        const right = self.right_unit_rule != null;
+        const comm = self.comm_name != null;
+        return (left or (comm and right)) and (right or (comm and left));
+    }
 };
 
 pub const ResolvedStructuralCombiner = struct {
