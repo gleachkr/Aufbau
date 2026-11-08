@@ -588,7 +588,7 @@ pub const SearchCounters = struct {
     gen_core_ticks: u64 = 0,
     gen_walk_ticks: u64 = 0,
     /// Set when the per-call `GlobalBudget` ran out (as opposed to
-    /// per-phase fuel), in the direct pass or generation.
+    /// per-phase fuel), in the search core or generation.
     work_budget_exhausted: bool = false,
     /// Ladder progress observability (for the user-facing failure report):
     /// the (depth, phase) of the last generation ladder cell that STARTED.
@@ -1062,7 +1062,7 @@ pub const Fuel = struct {
 };
 
 /// Cost-weighted budget for one whole search call (`exact?`, `apply?` or
-/// `auto?`): the direct pass and every generation retry phase (unlike `Fuel`,
+/// `auto?`): the search core and every generation retry phase (unlike `Fuel`,
 /// which each phase resets). The cost unit is the
 /// interner work tick (`expr.zig` `work_ticks`): one per intern attempt,
 /// everywhere on the thread. Unlike the per-phase `tryCandidate` count, tick
@@ -1215,7 +1215,7 @@ pub const ExactOptions = struct {
     generator: ?*const GenerationHook = null,
     /// Global recursive-search budget; null for non-generating `exact?`/`apply?`.
     fuel: ?*Fuel = null,
-    /// Per-call work budget for a search without `fuel` (the direct pass):
+    /// Per-call work budget for a search without `fuel`:
     /// each candidate validation spends from it, and when it runs out the
     /// enumeration stops and returns the candidates validated so far.
     budget: ?*GlobalBudget = null,
@@ -1470,8 +1470,7 @@ pub const GenerateOptions = struct {
     /// skips the remaining tail cells. Sized generously so ordinary proofs never hit it.
     /// Lowered in tests to assert clean budget-exhausted behaviour.
     fuel: usize = 4096,
-    /// Cap on generated top-level suggestions. Set by the dispatch to the number
-    /// of result slots still free after direct `exact?` suggestions.
+    /// Cap on generated top-level suggestions, set by the dispatch.
     max_results: ?usize = null,
     /// Fuel for the constrained-backward-MP retry (phase 5). It opens every
     /// implication-shaped goal to `ax_mp`-style backward search, so on a deep

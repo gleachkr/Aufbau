@@ -460,19 +460,8 @@ test "ACUI conclusion member prune scans below semantic container" {
         \\------
         \\l1: $ nd (join (hyp a) (hyp b)) c $ by exact?
     ;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try suggestionsAtNeedle(
-        &arena,
-        mm0_src,
-        proof_src,
-        "exact?",
-        .{ .counters = &counters },
-    );
-    defer suggestions.deinit();
-
-    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
+    try std.testing.expectEqual(@as(usize, 0), try exactSuggestionCount(mm0_src, proof_src, &counters));
     try std.testing.expectEqual(
         @as(usize, 0),
         counters.full_try_candidate_calls,
@@ -540,7 +529,8 @@ const idempotent_ctx_theory = replaceOnce(
     \\
 ;
 
-/// Runs `exact?` at the proof's `exact?` needle; returns the suggestion count.
+/// Runs the legacy direct search at the proof's `exact?` line, whose prunes
+/// these tests cover; returns its result count.
 fn exactSuggestionCount(
     mm0_src: []const u8,
     proof_src: []const u8,
@@ -548,15 +538,7 @@ fn exactSuggestionCount(
 ) !usize {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try suggestionsAtNeedle(
-        &arena,
-        mm0_src,
-        proof_src,
-        "exact?",
-        .{ .counters = counters },
-    );
-    defer suggestions.deinit();
-    return suggestions.items.len;
+    return (try helpers.legacyExactRules(&arena, mm0_src, proof_src, counters)).len;
 }
 
 /// A theory with one `@rewrite` head, a substitution: `sb x u t` reduces to
@@ -1323,8 +1305,9 @@ test "auto? hands a generated context split to the checker as explicit bindings"
     // the context it is given, so only the search knows which members each
     // side took. The checker's positional reading of `B , (A , B)` gives
     // `g := hyp B`, against which `la` cannot be checked, so the suggestion
-    // states the `g` that `la` needs. The ladder's split; the search core
-    // closes the goal with `la` alone.
+    // states the `g` that `la` needs. The ladder's split; `two` concludes
+    // `nd2` and only `lb` states `ndr`, so `la` alone closes nothing and
+    // the premises cannot trade places.
     const mm0_src = comm_ctx_theory ++
         \\--| @congr
         \\axiom join_congr (g1 g2 h1 h2: ctx):
@@ -1336,15 +1319,23 @@ test "auto? hands a generated context split to the checker as explicit bindings"
         \\  $ ctx_eq g h $ > $ a <-> b $ > $ nd g a <-> nd h b $;
         \\term A: wff;
         \\term B: wff;
-        \\axiom two (g h: ctx) (a: wff): $ nd g a $ > $ nd h a $ > $ nd (join g h) a $;
+        \\term nd2 (g: ctx) (a: wff): wff;
+        \\term ndr (g: ctx) (a: wff): wff;
+        \\--| @congr
+        \\axiom nd2_congr (g h: ctx) (a b: wff):
+        \\  $ ctx_eq g h $ > $ a <-> b $ > $ nd2 g a <-> nd2 h b $;
+        \\--| @congr
+        \\axiom ndr_congr (g h: ctx) (a b: wff):
+        \\  $ ctx_eq g h $ > $ a <-> b $ > $ ndr g a <-> ndr h b $;
+        \\axiom two (g h: ctx) (a: wff): $ nd g a $ > $ ndr h a $ > $ nd2 (join g h) a $;
         \\axiom la (g: ctx): $ nd (join g (hyp A)) bot $;
-        \\axiom lb: $ nd (hyp B) bot $;
-        \\theorem u: $ nd (join (hyp B) (join (hyp A) (hyp B))) bot $;
+        \\axiom lb: $ ndr (hyp B) bot $;
+        \\theorem u: $ nd2 (join (hyp B) (join (hyp A) (hyp B))) bot $;
     ;
     const proof_src =
         \\u
         \\------
-        \\l1: $ nd (join (hyp B) (join (hyp A) (hyp B))) bot $ by auto?
+        \\l1: $ nd2 (join (hyp B) (join (hyp A) (hyp B))) bot $ by auto?
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -2204,16 +2195,10 @@ test "abstract pruner skips rigid-bad broad refs before validation" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try suggestionsAtNeedle(
-        &arena,
-        mm0_src,
-        proof_src,
-        "exact?",
-        .{ .counters = &counters },
-    );
-    defer suggestions.deinit();
-
-    try expectOffered(suggestions.items, &.{"ax_ctx [#1, #2]"});
+    const rules = try helpers.legacyExactRules(&arena, mm0_src, proof_src, &counters);
+    for (rules) |rule| {
+        if (std.mem.eql(u8, rule, "ax_ctx")) break;
+    } else return error.MissingSuggestion;
     try std.testing.expect(counters.abstract_prunes > 0);
 }
 

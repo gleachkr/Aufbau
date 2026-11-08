@@ -196,10 +196,12 @@ fn ndOrSuggestions(
     counters: ?*types.SearchCounters,
     policy: NdPolicy,
 ) !types.SourceSuggestions {
+    // The policy is the generation ladder's, so the search core stays out.
     return suggestionsAtNeedle(arena, nd_or_mm0, nd_or_proof, "auto?", .{
         .counters = counters,
         .generate = .{
             .enabled = true,
+            .core = false,
             .search_memo = policy.search_memo,
             .deep_member_prune = policy.deep_member_prune,
         },
@@ -420,9 +422,17 @@ test "inline auto generates a longer chain in a slot" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    // The ladder's slot recursion: the search core would close the slot
-    // with the earlier theorem `t` at once.
-    var suggestions = try autoInlineSuggestions(&arena, proof_src, "auto?", .{
+    // The ladder's slot recursion, without the earlier theorem `t` that
+    // would close the slot at once.
+    const mm0_src = try std.mem.replaceOwned(
+        u8,
+        arena.allocator(),
+        auto_inline_mm0,
+        "theorem t: $ R $;\n",
+        "",
+    );
+    try std.testing.expect(mm0_src.len < auto_inline_mm0.len);
+    var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
         .counters = &counters,
         .generate = .{ .enabled = true, .core = false },
     });
@@ -757,31 +767,49 @@ test "auto infers a type with the generic ax as the variable rule" {
     );
 }
 
-test "exact does not generate the chain" {
-    const proof_src =
+/// `auto_chain_mm0` one step longer: `R` needs `qr [pq [p []]]`, two steps
+/// above the closer `p`.
+const auto_chain3_mm0 =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\term P: wff;
+    \\term Q: wff;
+    \\term R: wff;
+    \\axiom p: $ P $;
+    \\axiom pq: $ P $ > $ Q $;
+    \\axiom qr: $ Q $ > $ R $;
+    \\theorem t: $ R $;
+;
+
+test "exact proves one step, its premises closed by references and closers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // `exact?` never generates, even with the permit set: `pq [p []]` is one
+    // step whose premise a closer closes, `qr [pq [p []]]` is two.
+    var one = try autoChainSuggestions(&arena,
         \\t
         \\----
         \\l1: $ Q $ by exact?
-    ;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var suggestions = try autoChainSuggestions(&arena, proof_src, "exact?", .{
-        .generate = .{ .enabled = true },
-    });
-    defer suggestions.deinit();
-    // `exact?` never generates, even with the permit set.
-    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
-}
-
-test "auto without the generation permit does not generate" {
-    const proof_src =
+    , "exact?", .{ .generate = .{ .enabled = true } });
+    defer one.deinit();
+    try expectOffered(one.items, &.{"pq [p []]"});
+    var two = try suggestionsAtNeedle(&arena, auto_chain3_mm0,
         \\t
         \\----
-        \\l1: $ Q $ by auto?
-    ;
+        \\l1: $ R $ by exact?
+    , "exact?", .{ .generate = .{ .enabled = true } });
+    defer two.deinit();
+    try std.testing.expectEqual(@as(usize, 0), two.items.len);
+}
+
+test "auto without the generation permit proves only one step" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try autoChainSuggestions(&arena, proof_src, "auto?", .{});
+    var suggestions = try suggestionsAtNeedle(&arena, auto_chain3_mm0,
+        \\t
+        \\----
+        \\l1: $ R $ by auto?
+    , "auto?", .{});
     defer suggestions.deinit();
     try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
 }

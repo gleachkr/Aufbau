@@ -161,6 +161,24 @@ This file records notable user-facing changes to Aufbau. The project follows
   the budget at it, suggests more depth along with more budget; and one the
   call-stack guard stopped says so. Run without the generation search, such a
   miss used to read as one that never searched, with no retry.
+- `exact?` runs on the search core. It still proves the goal with one rule,
+  and may now close that rule's premises with rules that have no premises of
+  their own (`and_intro [#1, true_intro []]`) as well as with references. It
+  meets a rule whose conclusion is a definition that unfolds to the goal, and
+  a definition that drops one of its arguments in its body is compared
+  unfolded. Proofs come fewest nested steps first, then in the order the
+  theory declares their rules. On the bench corpus `exact?` finds 9 lines it
+  missed and misses 7 it found, gives the expected proof first on 22 more, and
+  its slowest call drops from 58 ms to 5 ms. The 7 are a rule whose `@recover`
+  witness a premise fixes rather than the conclusion (`ex_elim_sub` in
+  `euclid`, 3 lines), an instance stated through a schematic substitution
+  (`[x/t](¬P)` with `P` depending on `x`, 2 lines), and 2 `martin_lof` lines;
+  `auto?` still finds 4 of them. `auto?` now tries one-step proofs before it
+  deepens, and no longer runs a separate direct pass first; 3 of its proofs on
+  the corpus (2 in `euclid`'s `not_forall`, 1 in `exists_prime_factor`) are
+  now missed, as are 4 lines of `nd_fol`'s derived left rules, which the
+  generation search finds but no longer gets the budget for. The `exact?` miss
+  report says how many references were in reach.
 - A theorem's or axiom's bound variable named only in dependency lists
   (`{k: set} (G: hyps k)` with no `k` in any hypothesis or the
   conclusion) is now reported as an unused parameter. Such a variable is

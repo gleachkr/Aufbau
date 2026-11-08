@@ -136,3 +136,13 @@ When the work budget began charging the core's matching and walks
 nanosecond, and the default went from 6.3G to 2.3G. Figures above this
 paragraph are in the old units. `cb_bijection_maps_domain`'s k=4 and k=5
 cuts now take 3.3G, past the default, and the guard's budget is 3.6G.
+
+When `exact?` moved to the search core and `auto?` lost its separate
+one-step pass (2026-11-08), five lines missed that the old pass had found.
+`euclid` `exists_prime_factor` l41 is `ex_elim` with a `@recover` witness
+that a premise fixes, which the core does not read back. `nd_fol`
+`not_all_left` and `not_ex_left` l2 and l6 need a substitution into a
+schematic formula (`[x/t] (¬ p)` against `¬ [x/u] p`), which the core does
+not match; it spends the budget before the generation search, which finds
+them, runs. The guards pin these lines with `expect_miss`, which fails once
+a pinned line is found.

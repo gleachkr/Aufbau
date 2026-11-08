@@ -171,6 +171,10 @@ pub const Catalog = struct {
     /// Per head, an index over its rules' conclusions, items in catalog
     /// order.
     indexes: std.AutoHashMapUnmanaged(u32, TermIndex) = .empty,
+    /// Per head, the definitions heading rule conclusions whose unfoldings
+    /// apply it (`cb_prefixed X := cb_step X ⊆ X` for `⊆`): a goal with the
+    /// head meets those rules too, the match unfolding their conclusion.
+    folds: std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(u32)) = .empty,
 
     pub fn deinit(self: *Catalog) void {
         var it = self.by_head.valueIterator();
@@ -182,12 +186,20 @@ pub const Catalog = struct {
         var indexes = self.indexes.valueIterator();
         while (indexes.next()) |index| index.deinit();
         self.indexes.deinit(self.allocator);
+        var folds = self.folds.valueIterator();
+        while (folds.next()) |list| list.deinit(self.allocator);
+        self.folds.deinit(self.allocator);
         self.* = undefined;
     }
 
     /// The rules whose conclusion has head `term_id`.
     pub fn forHead(self: *const Catalog, term_id: u32) []const Rule {
         return self.by_head.get(term_id) orelse &.{};
+    }
+
+    /// The definitions whose rules' conclusions unfold to head `term_id`.
+    pub fn foldsInto(self: *const Catalog, term_id: u32) []const u32 {
+        return if (self.folds.get(term_id)) |list| list.items else &.{};
     }
 };
 
@@ -241,6 +253,22 @@ pub fn build(allocator: std.mem.Allocator, context: *const Context, terms: *cons
         errdefer index.deinit();
         for (rules) |*rule| try index.addTemplate(terms, rule.statement(context).concl);
         try catalog.indexes.put(allocator, entry.key_ptr.*, index);
+    }
+    var heads = catalog.by_head.keyIterator();
+    while (heads.next()) |head| {
+        // A template unfolds only without dummies (`Terms.unfoldTemplate`).
+        var at = head.*;
+        while (terms.opensDef(at)) {
+            const def = &context.env.terms.items[at];
+            if (def.dummy_args.len != 0) break;
+            at = switch (def.body.?) {
+                .app => |app| app.term_id,
+                .binder => break,
+            };
+            const gop = try catalog.folds.getOrPut(allocator, at);
+            if (!gop.found_existing) gop.value_ptr.* = .empty;
+            try gop.value_ptr.append(allocator, head.*);
+        }
     }
     return catalog;
 }

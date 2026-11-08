@@ -6,7 +6,6 @@ const miss = @import("./miss.zig");
 const ConversionSearch = @import("./conversion.zig");
 const timer = @import("./timer.zig");
 const apply_mod = @import("./apply.zig");
-const backtrack = @import("./backward/backtrack.zig");
 const candidate_mod = @import("./candidate.zig");
 const generate_mod = @import("./generate.zig");
 const session_mod = @import("./session.zig");
@@ -24,13 +23,11 @@ const DiagnosticSink = @import("../diagnostic_sink.zig").DiagnosticSink;
 const Goal = types.Goal;
 const Context = types.Context;
 const ApplyCandidate = types.ApplyCandidate;
-const ExactCandidate = types.ExactCandidate;
 const SourceSuggestion = types.SourceSuggestion;
 const SourceSuggestionOptions = types.SourceSuggestionOptions;
 const SourceSuggestions = types.SourceSuggestions;
 const NameExprMap = types.NameExprMap;
 const applyWithSession = apply_mod.applyWithSession;
-const exactWithSession = backtrack.exactWithSession;
 const fixture_mod = @import("./fixture.zig");
 const fixtureForSourceTarget = fixture_mod.fixtureForSourceTarget;
 const parseGoal = fixture_mod.parseGoal;
@@ -369,16 +366,8 @@ pub fn suggestionsAtSourceOffset(
             .theorem = &theorem,
             .theorem_vars = theorem_vars,
         };
-        var suggestions = if (target.path.len == 0)
-            try topLevelExactSuggestions(
-                work,
-                &session,
-                site,
-                target_application.span,
-                target_application.rule_name,
-                exact_options,
-            )
-        else
+        // `auto?`'s search finds the one-step proofs `exact?` would too.
+        var suggestions = if (target.path.len != 0)
             try inlineExactSuggestions(
                 work,
                 &compiler,
@@ -394,19 +383,24 @@ pub fn suggestionsAtSourceOffset(
                 is_auto,
                 &budgets,
                 exact_options,
-            );
-        // `auto?` appends bounded recursive generation to the direct
-        // results. Top-level concrete goals only in Step 1.
-        if (is_auto and options.generate.enabled and target.path.len == 0) {
-            suggestions = try appendGeneratedSuggestions(
+            )
+        else if (is_auto and options.generate.enabled)
+            try generatedSuggestions(
                 work,
                 &session,
                 site,
                 target_application.span,
                 exact_options,
-                suggestions,
+            )
+        else
+            try topLevelExactSuggestions(
+                work,
+                &session,
+                site,
+                target_application.span,
+                target_application.rule_name,
+                exact_options,
             );
-        }
         suggestions.target_span = match_span;
         options.counters.?.work_budget_exhausted = budgets.searchExhausted();
         suggestions.status = searchStatus(
@@ -493,53 +487,30 @@ fn topLevelExactSuggestions(
     keyword: []const u8,
     options: SourceSuggestionOptions,
 ) !SourceSuggestions {
-    var results = try exactWithSession(
+    var found = try generate_mod.exactTopLevel(
         site.compiler,
         session,
         site.line_goal,
         site.theorem,
         site.theorem_vars,
-        .{
-            .max_results = options.max_results,
-            .counters = options.counters,
-            .budget = site.budgets.searchBudget(),
-        },
+        options.generate.stack_guard_bytes,
+        site.budgets.searchBudget(),
     );
-    defer results.deinit();
-    return try renderExactSourceSuggestions(
-        allocator,
-        site,
-        results.candidates,
-        replace_span,
-        keyword,
-    );
+    defer found.deinit();
+    return try foundSuggestions(allocator, site, found.applications, replace_span, keyword, options.max_results);
 }
 
-/// Run bounded recursive generation for an `auto?` goal and merge the resulting
-/// proof-tree suggestions into the direct-search results, deduplicating by
-/// replacement text and respecting `max_results`. Takes ownership of `existing`.
-fn appendGeneratedSuggestions(
+/// Run bounded recursive generation for an `auto?` goal, keeping at most
+/// `max_results` distinct suggestions.
+fn generatedSuggestions(
     allocator: std.mem.Allocator,
     session: *session_mod.SearchSession,
     site: SuggestionSite,
     replace_span: Span,
     options: SourceSuggestionOptions,
-    existing: SourceSuggestions,
 ) !SourceSuggestions {
-    var items = std.ArrayListUnmanaged(SourceSuggestion).empty;
-    errdefer deinitSourceSuggestionItems(allocator, items.items);
-    // Seed with the already-rendered direct suggestions. `existing` and its
-    // strings live on the per-call work allocator (as does everything appended
-    // below), so there is no ownership hand-off to manage: the caller receives a
-    // deep copy at the return boundary, and the work allocator reclaims the rest.
-    try items.appendSlice(allocator, existing.items);
-
-    if (items.items.len >= options.max_results) {
-        return .{ .allocator = allocator, .items = try items.toOwnedSlice(allocator) };
-    }
-
     var gen_options = options.generate;
-    gen_options.max_results = options.max_results - items.items.len;
+    gen_options.max_results = options.max_results;
     var generated = try generate_mod.generateTopLevel(
         site.compiler,
         session,
@@ -550,11 +521,26 @@ fn appendGeneratedSuggestions(
         site.budgets.searchBudget(),
     );
     defer generated.deinit();
+    return try foundSuggestions(allocator, site, generated.applications, replace_span, "auto?", options.max_results);
+}
 
-    for (generated.applications) |generated_app| {
-        if (items.items.len >= options.max_results) break;
-        const trimmed = try trimBindings(allocator, site, generated_app);
-        const app = trimmed orelse generated_app;
+/// The suggestions for the proofs a search found for a top-level line, each
+/// with only the bindings the checker needs, deduplicated by replacement
+/// text, at most `max_results`.
+fn foundSuggestions(
+    allocator: std.mem.Allocator,
+    site: SuggestionSite,
+    applications: []const RuleApplication,
+    replace_span: Span,
+    keyword: []const u8,
+    max_results: usize,
+) !SourceSuggestions {
+    var items = std.ArrayListUnmanaged(SourceSuggestion).empty;
+    errdefer deinitSourceSuggestionItems(allocator, items.items);
+    for (applications) |found_app| {
+        if (items.items.len >= max_results) break;
+        const trimmed = try trimBindings(allocator, site, found_app);
+        const app = trimmed orelse found_app;
         // A holey goal was searched with metas for its holes; the line itself
         // must check with the rendered proof in place, filling them.
         if (site.line_goal == .holey and trimmed == null and
@@ -565,22 +551,15 @@ fn appendGeneratedSuggestions(
             app.arg_bindings,
             app.refs,
         );
-        var duplicate = false;
-        for (items.items) |item| {
-            if (std.mem.eql(u8, item.replacement, replacement)) {
-                duplicate = true;
-                break;
-            }
-        }
-        if (duplicate) {
+        if (offers(items.items, replacement)) {
             allocator.free(replacement);
             continue;
         }
         errdefer allocator.free(replacement);
         const title = try std.fmt.allocPrint(
             allocator,
-            "Replace auto? with {s}",
-            .{replacement},
+            "Replace {s} with {s}",
+            .{ keyword, replacement },
         );
         errdefer allocator.free(title);
         try items.append(allocator, .{
@@ -634,25 +613,25 @@ fn inlineExactSuggestions(
         );
     }
 
-    if (items.items.len < max_results) {
-        const remaining = max_results - items.items.len;
-        var results = try exactWithSession(
+    // A concrete slot goal of `auto?` is generated below, which finds the
+    // one-step proofs too.
+    const generates = is_auto and options.generate.enabled and
+        inline_expectation != null and !inline_expectation.?.has_placeholder;
+    if (items.items.len < max_results and !generates) {
+        var found = try generate_mod.exactTopLevel(
             compiler,
             session,
             search_goal,
             theorem,
             theorem_vars,
-            .{
-                .max_results = remaining,
-                .counters = options.counters,
-                .budget = budgets.searchBudget(),
-            },
+            options.generate.stack_guard_bytes,
+            budgets.searchBudget(),
         );
-        defer results.deinit();
+        defer found.deinit();
         try appendInlineExactApplications(
             allocator,
             site,
-            results.candidates,
+            found.applications,
             &items,
             max_results,
         );
@@ -681,39 +660,6 @@ fn inlineExactSuggestions(
         }
     }
 
-    return .{ .allocator = allocator, .items = try items.toOwnedSlice(allocator) };
-}
-
-fn renderExactSourceSuggestions(
-    allocator: std.mem.Allocator,
-    site: SuggestionSite,
-    candidates: []const ExactCandidate,
-    replace_span: Span,
-    keyword: []const u8,
-) !SourceSuggestions {
-    var items = std.ArrayListUnmanaged(SourceSuggestion).empty;
-    errdefer deinitSourceSuggestionItems(allocator, items.items);
-    for (candidates) |candidate| {
-        const app = try withNeededBindings(allocator, site, candidate.application);
-        const replacement = try renderApplication(
-            allocator,
-            app.rule_name,
-            app.arg_bindings,
-            app.refs,
-        );
-        errdefer allocator.free(replacement);
-        const title = try std.fmt.allocPrint(
-            allocator,
-            "Replace {s} with {s}",
-            .{ keyword, replacement },
-        );
-        errdefer allocator.free(title);
-        try items.append(allocator, .{
-            .title = title,
-            .replacement = replacement,
-            .replace_span = replace_span,
-        });
-    }
     return .{ .allocator = allocator, .items = try items.toOwnedSlice(allocator) };
 }
 
@@ -805,17 +751,21 @@ fn appendDirectRefSuggestions(
 fn appendInlineExactApplications(
     allocator: std.mem.Allocator,
     site: SuggestionSite,
-    candidates: []const ExactCandidate,
+    applications: []const RuleApplication,
     items: *std.ArrayListUnmanaged(SourceSuggestion),
     max_results: usize,
 ) !void {
     const line = site.line;
     const path = site.path;
-    for (candidates) |candidate| {
+    for (applications) |found_app| {
         if (items.items.len >= max_results) return;
-        if (!try site.validates(allocator, candidate.application)) continue;
-        const app = try withNeededBindings(allocator, site, candidate.application);
+        if (!try site.validates(allocator, found_app)) continue;
+        const app = try withNeededBindings(allocator, site, found_app);
         const replacement = try renderInlineApplication(allocator, app);
+        if (offers(items.items, replacement)) {
+            allocator.free(replacement);
+            continue;
+        }
         errdefer allocator.free(replacement);
         const title = try std.fmt.allocPrint(
             allocator,
@@ -834,10 +784,10 @@ fn appendInlineExactApplications(
 
 /// Run bounded recursive generation for a concrete inline `auto?` slot goal and
 /// splice each resulting proof tree into the slot, keeping only those whose
-/// reconstructed whole line still validates. Mirrors `appendGeneratedSuggestions`
-/// (top-level) and `appendInlineExactApplications` (inline direct): the generated
-/// proof is a single nested `RuleApplication`, so it drops into the slot the same
-/// way a direct exact candidate does. Deduplicates against `items` by replacement
+/// reconstructed whole line still validates. Mirrors `generatedSuggestions`
+/// (top-level) and `appendInlineExactApplications` (inline one step): the
+/// generated proof is a single nested `RuleApplication`, so it drops into the
+/// slot the same way a proof of one step does. Deduplicates against `items` by replacement
 /// text and respects `max_results`.
 fn appendInlineGeneratedApplications(
     allocator: std.mem.Allocator,
@@ -871,14 +821,7 @@ fn appendInlineGeneratedApplications(
         if (!try site.validates(allocator, generated_app)) continue;
         const app = try withNeededBindings(allocator, site, generated_app);
         const replacement = try renderInlineApplication(allocator, app);
-        var duplicate = false;
-        for (items.items) |item| {
-            if (std.mem.eql(u8, item.replacement, replacement)) {
-                duplicate = true;
-                break;
-            }
-        }
-        if (duplicate) {
+        if (offers(items.items, replacement)) {
             allocator.free(replacement);
             continue;
         }
@@ -896,6 +839,14 @@ fn appendInlineGeneratedApplications(
                 line.application).span,
         });
     }
+}
+
+/// Whether `items` already offers `replacement`.
+fn offers(items: []const SourceSuggestion, replacement: []const u8) bool {
+    for (items) |item| {
+        if (std.mem.eql(u8, item.replacement, replacement)) return true;
+    }
+    return false;
 }
 
 fn renderRefString(
@@ -946,7 +897,7 @@ fn validateReplacementApplication(
 }
 
 /// The work budgets of one search call, each of `GenerateOptions.global_budget`
-/// (none when that is null). `search` bounds the search: the direct pass,
+/// (none when that is null). `search` bounds the search: the search core,
 /// generation, and the pool refs tried in an inline slot. `checks` bounds the
 /// checks of the results it found (`SuggestionSite.validates`: the line with
 /// a result in place, and trimming its bindings), so a search that spent its

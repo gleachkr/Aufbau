@@ -117,8 +117,7 @@ test "search driver leaves a missed marker as written and continues" {
     const proof_src =
         \\t1
         \\---
-        \\l1: $ Q $ by exact?
-        \\l2: $ R $ by both [p [], l1]
+        \\l1: $ R $ by exact?
         \\
         \\t2
         \\---
@@ -128,6 +127,7 @@ test "search driver leaves a missed marker as written and continues" {
         \\---
         \\l1: $ isty o $ by o_ty
     ;
+    // `R` is two steps above the axiom `p`: no proof of one step.
     var result = try run(proof_src);
     defer result.deinit();
 
@@ -139,7 +139,7 @@ test "search driver leaves a missed marker as written and continues" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         result.text,
-        "l1: $ Q $ by exact?",
+        "l1: $ R $ by exact?",
     ) != null);
 }
 

@@ -26,21 +26,26 @@ All three live behind `root.zig` and share `SearchSession` (`session.zig`),
 which lazily builds and caches the three indices (rule index, reference pool,
 ref index) so repeated queries in one theorem amortize.
 
-- **`exact?` / `apply?`** → `backward/backtrack.zig:exact` / `exactWithSession`. One-shot:
-  find rules whose conclusion matches the goal and whose hypotheses are
-  discharged by existing proof references (the *reference pool*). No sub-proof
-  synthesis. `apply.zig` is the thin `apply?` variant.
-- **`auto?`** → `generate.zig:generateTopLevel`. Recursive: drives
-  `exactWithSession` under a `generator` hook that can *synthesize* sub-proofs
-  for unmet hypotheses, with iterative deepening and a global fuel budget.
+- **`exact?`** → `generate.zig:exactTopLevel`. One step of the search core
+  (`core/root.zig`, `Request.one_step`): any rule at the root, its premises
+  closed by the *reference pool* or by rules with no premises. Every proof is
+  collected (`Request.collect`) and ranked fewest nested steps first, then by
+  rule declaration order.
+- **`apply?`** → `apply.zig`: the rules whose conclusion matches the goal,
+  probed against the checker.
+- **`auto?`** → `generate.zig:generateTopLevel`. The search core first (which
+  tries one-step proofs, then deepens), then the generation ladder: legacy
+  `backward/backtrack.zig:exactWithSession` under a `generator` hook that can
+  *synthesize* sub-proofs for unmet hypotheses, with iterative deepening and a
+  global fuel budget.
 
-The key relationship: **`auto?` is `exact?` plus a hook**. `generateTopLevel`
-sets up a `Driver` whose `hook.solveFn` recursively re-enters the same
-`exactWithSession` for each open hypothesis. Almost every code path is shared;
+The ladder's key relationship: **the ladder is the legacy one-step search plus
+a hook**. `generateTopLevel` sets up a `Driver` whose `hook.solveFn` recursively
+re-enters the same `exactWithSession` for each open hypothesis. Almost every code path is shared;
 the generation-only behavior is gated on `options.generator != null` (in
 `exact`) or on the `hook` flags (`allow_split`, `allow_invent_witness`). When
 reading `backward/backtrack.zig`, "is `generator` null?" is the single most important branch
-to track — it separates plain `exact?` (must stay untouched) from `auto?`.
+to track — it separates the one-step search (tests only, now) from generation.
 
 Inside the search, validation renders every binder the search chose
 (existential metas, bound witnesses, ACUI split and principal choices) as an
@@ -440,21 +445,21 @@ stack guard, no generation, or every hit limit already at its maximum).
 
 Per-phase fuel counts `tryCandidate`s, but per-candidate cost varies ~100x, so
 fuel alone cannot bound wall-clock latency; a doomed miss used to burn up to
-~12s across the five phases. `GenerateOptions.global_budget` (default 6.3e9,
-null = off) caps the **whole call** — the direct pass, forward saturation and
-all five phases; for `exact?` and `apply?`, the direct pass alone — in
+~12s across the five phases. `GenerateOptions.global_budget` (default 2.3e9,
+null = off) caps the **whole call** — the search core, forward saturation and
+all five phases; for `exact?` and `apply?`, their single pass — in
 *weighted work ticks*: deterministic, machine-independent op counts
 (`expr.zig` threadlocals) taken at four chokepoints with wall-calibrated
 weights (`types.zig`): intern probe levels (COW base-chain hops, x600),
 def-eq symbolic-node allocations (x190), non-interning tree-walk node visits
 (shape builder / meta walks / suggestion rendering, x110), and a fixed
 per-`tryCandidate` charge (x100k) for the clone/session overhead no per-node
-tick sees. Units ≈ ns of calibrated wall, so the default reads as "≈6s of
+tick sees. Units ≈ ns of calibrated wall, so the default reads as "≈2.3s of
 work". Checked at candidate granularity (`Fuel.spend`, the generation node
 entries and each node of a rule's reference enumeration), so a candidate
 mid-validation always completes; exhaustion unwinds as
-`error.SearchBudgetExhausted`, exactly like per-phase fuel. A direct pass
-(`exact?`, `apply?`) stops there with the candidates it has validated.
+`error.SearchBudgetExhausted`, exactly like per-phase fuel. `exact?` and
+`apply?` stop there with the proofs they have found.
 `source.zig` `CallBudgets` holds the call's budget and a second of the same
 size for checking and trimming the results found, each charged only for its
 own work (`GlobalBudget.pause`), so a search that spent its budget still has

@@ -259,11 +259,11 @@ const Driver = struct {
     fuel: types.Fuel,
 };
 
-/// Top-level entry: find proof trees for `goal` that use at least one generated
-/// inline application (so they are genuinely novel relative to direct `exact?`).
-/// A holey goal is searched with a meta in place of each hole, so the proof
-/// found fills the holes too (`auto?` on `g ⊢ t : _` infers a type). An
-/// implicit whole-conclusion goal gets no generation.
+/// Top-level entry for `auto?`: proof trees for `goal`, by the search core
+/// and then, when it finds none, the generation ladder. A holey goal is
+/// searched with a meta in place of each hole, so the proof found fills the
+/// holes too (`auto?` on `g ⊢ t : _` infers a type). An implicit
+/// whole-conclusion goal gets no generation.
 pub fn generateTopLevel(
     compiler: *CompilerContext,
     session: *session_mod.SearchSession,
@@ -301,52 +301,21 @@ pub fn generateTopLevel(
     var work_theorem = try theorem.clone();
     defer work_theorem.deinit();
 
-    // Pre-materialize every `@vars` pool token as a named theorem-local dummy
-    // in the work theorem (sorted for deterministic dummy ids), through a
-    // driver-owned clone of the theorem-vars map. Two consumers read it:
-    // open bound binders of witness-deferring rules enumerate these as
-    // concrete witnesses (the rendered explicit binding re-materializes the
-    // same name on the user's side), and a generated premise whose only open
-    // binders are bound variables takes a fresh one (`tryFreshBoundGenerate`).
-    // The witness capabilities (phase 3, invention) stay gated on
-    // `hasWitnessBackwardRules`, not raw enrollment count, because
-    // `@auto eager` implies enrollment while rejecting witness-deferring
-    // rules: an eager-only theory has no witness consumer for the pool.
-    var vars_clone: ?types.NameExprMap = null;
+    // The `@vars` pool tokens, named as dummies of the work theorem. Two
+    // consumers read them: open bound binders of witness-deferring rules
+    // enumerate these as concrete witnesses (the rendered explicit binding
+    // re-materializes the same name on the user's side), and a generated
+    // premise whose only open binders are bound variables takes a fresh one
+    // (`tryFreshBoundGenerate`). The witness capabilities (phase 3,
+    // invention) stay gated on `hasWitnessBackwardRules`, not raw enrollment
+    // count, because `@auto eager` implies enrollment while rejecting
+    // witness-deferring rules: an eager-only theory has no witness consumer
+    // for the pool.
+    var vars_clone = try poolVarsClone(session, &work_theorem, theorem_vars);
     defer if (vars_clone) |*clone| clone.deinit();
-    var effective_vars: *const NameExprMap = theorem_vars;
+    const effective_vars: *const NameExprMap = if (vars_clone) |*clone| clone else theorem_vars;
     const can_invent_witness = session.context.sort_vars.count() > 0 and
         session.context.registry.hasWitnessBackwardRules(session.context.env);
-    if (session.context.sort_vars.count() > 0) {
-        vars_clone = try Check.cloneNameExprMap(
-            session.allocator,
-            theorem_vars,
-        );
-        var tokens = std.ArrayListUnmanaged([]const u8).empty;
-        defer tokens.deinit(session.allocator);
-        var token_iter = session.context.sort_vars.tokens.keyIterator();
-        while (token_iter.next()) |token| {
-            try tokens.append(session.allocator, token.*);
-        }
-        std.mem.sort([]const u8, tokens.items, {}, stringLessThan);
-        for (tokens.items) |token| {
-            const decl = session.context.sort_vars.getTokenDecl(token) orelse
-                continue;
-            work_theorem.ensureNamedDummyParserVar(
-                session.context.parser.core.allocator,
-                &vars_clone.?,
-                token,
-                decl.sort_name,
-                decl.sort_id,
-            ) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                // Dep-slot exhaustion: the pool variable is simply not
-                // available as a witness; branches needing it fail cleanly.
-                else => {},
-            };
-        }
-        effective_vars = &vars_clone.?;
-    }
 
     // The metas for a holey goal's holes are numbered before any open slot
     // mints one, from the counter the driver continues below.
@@ -536,6 +505,111 @@ pub fn generateTopLevel(
     // Copy the arena last: the dupe can add a buffer to it.
     const owned = try driver.arena.dupe(RuleApplication, applications.items);
     return .{ .arena = arena, .applications = owned };
+}
+
+/// `exact?`: a proof of `goal` in one step by the search core, a rule
+/// whose premises pool refs and rules with no premises close
+/// (`core.Request.one_step`). A holey
+/// goal's holes and an inline slot's unknowns are the core's to fill.
+pub fn exactTopLevel(
+    compiler: *CompilerContext,
+    session: *session_mod.SearchSession,
+    goal: Goal,
+    theorem: *const TheoremContext,
+    theorem_vars: *const NameExprMap,
+    stack_guard_bytes: usize,
+    budget: ?*types.GlobalBudget,
+) !GeneratedResults {
+    var arena = ArenaAllocator.init(session.allocator);
+    errdefer arena.deinit();
+    const saved_stack_base = compiler.stack_base;
+    if (saved_stack_base == null) compiler.stack_base = @frameAddress();
+    defer compiler.stack_base = saved_stack_base;
+    var work_theorem = try theorem.clone();
+    defer work_theorem.deinit();
+    var vars_clone = try poolVarsClone(session, &work_theorem, theorem_vars);
+    defer if (vars_clone) |*clone| clone.deinit();
+    const counters = session.effectiveCounters(null);
+    var found = std.ArrayListUnmanaged(RuleApplication).empty;
+    _ = core.run(.{
+        .compiler = compiler,
+        .context = session.context,
+        .theorem = &work_theorem,
+        .theorem_vars = if (vars_clone) |*clone| clone else theorem_vars,
+        .pool_theorem = theorem,
+        .pool = try session.getReferencePool(theorem, counters),
+        .goal = goal,
+        .max_depth = 1,
+        .one_step = true,
+        .collect = &found,
+        .stack_guard_bytes = stack_guard_bytes,
+        .budget = budget,
+        .counters = counters,
+        .out = arena.allocator(),
+        .scratch = session.allocator,
+    }) catch |err| switch (err) {
+        // Out of budget or stack: what the search found so far.
+        error.SearchBudgetExhausted, error.SearchStackExhausted => {},
+        else => |e| return e,
+    };
+    // Those citing only references first, then as the rules are declared,
+    // then by fewer premises.
+    std.mem.sort(RuleApplication, found.items, session.context, struct {
+        fn lessThan(context: *const Context, lhs: RuleApplication, rhs: RuleApplication) bool {
+            const l_nested = nestedSteps(lhs);
+            const r_nested = nestedSteps(rhs);
+            if (l_nested != r_nested) return l_nested < r_nested;
+            const l = context.env.getRuleId(lhs.rule_name).?;
+            const r = context.env.getRuleId(rhs.rule_name).?;
+            if (l != r) return l < r;
+            return lhs.refs.len < rhs.refs.len;
+        }
+
+        fn nestedSteps(app: RuleApplication) usize {
+            var count: usize = 0;
+            for (app.refs) |ref| if (ref == .application) {
+                count += 1;
+            };
+            return count;
+        }
+    }.lessThan);
+    return .{ .arena = arena, .applications = found.items };
+}
+
+/// A clone of `theorem_vars` naming each `@vars` pool token as a dummy of
+/// `work_theorem`, in sorted order so the dummy ids are deterministic; null
+/// when the theory declares no pools. A token that finds no dependency slot
+/// is left out: branches needing it fail cleanly.
+fn poolVarsClone(
+    session: *session_mod.SearchSession,
+    work_theorem: *TheoremContext,
+    theorem_vars: *const NameExprMap,
+) !?NameExprMap {
+    if (session.context.sort_vars.count() == 0) return null;
+    var vars = try Check.cloneNameExprMap(session.allocator, theorem_vars);
+    errdefer vars.deinit();
+    var tokens = std.ArrayListUnmanaged([]const u8).empty;
+    defer tokens.deinit(session.allocator);
+    var token_iter = session.context.sort_vars.tokens.keyIterator();
+    while (token_iter.next()) |token| {
+        try tokens.append(session.allocator, token.*);
+    }
+    std.mem.sort([]const u8, tokens.items, {}, stringLessThan);
+    for (tokens.items) |token| {
+        const decl = session.context.sort_vars.getTokenDecl(token) orelse
+            continue;
+        work_theorem.ensureNamedDummyParserVar(
+            session.context.parser.core.allocator,
+            &vars,
+            token,
+            decl.sort_name,
+            decl.sort_id,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {},
+        };
+    }
+    return vars;
 }
 
 /// The search core's attempt at `goal`, ahead of the ladder. A proof it
@@ -1035,11 +1109,6 @@ fn runDepthPass(
     defer results.deinit();
 
     for (results.candidates) |candidate| {
-        // Only surface assemblies that actually used generation; pure-ref
-        // proofs are already offered by direct `exact?`.
-        if (!applicationUsesInlineApp(candidate.application)) {
-            continue;
-        }
         try applications.append(
             driver.arena,
             try cloneApplication(driver.arena, candidate.application),
@@ -2528,21 +2597,6 @@ fn cloneApplication(
     copy.refs_span = if (refs.len == 0) null else zero_span;
     copy.span = zero_span;
     return copy;
-}
-
-/// True if the application was produced by generation rather than pure pool
-/// refs: it uses an inline `.application` ref somewhere in its tree, or it
-/// carries explicit bindings (only derived recipes render those —
-/// direct `exact?` never does).
-fn applicationUsesInlineApp(app: RuleApplication) bool {
-    if (app.arg_bindings.len != 0) return true;
-    for (app.refs) |ref| {
-        switch (ref) {
-            .hyp, .line => {},
-            .application => return true,
-        }
-    }
-    return false;
 }
 
 fn expectSchedule(max_depth: usize, gates: LadderGates, expected: []const [2]usize) !void {

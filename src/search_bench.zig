@@ -21,6 +21,11 @@ const BenchOptions = struct {
     /// comma-separated substrings (e.g. a fixture's supporting lemmas,
     /// proved with rules search never sees).
     exclude: ?[]const u8 = null,
+    /// Breadth frontier: comma-separated `theorem/label` lines that are known
+    /// to miss. Such a line may miss under `--require-no-miss`; finding it, or
+    /// a pin that names no selected line, fails the run, so a pin goes away
+    /// with the gap it marks.
+    expect_miss: ?[]const u8 = null,
     /// Frontier analysis mode. When set, the
     /// scenario bench is skipped and the frontier runs over the corpus.
     frontier: ?FrontierMode = null,
@@ -300,6 +305,10 @@ fn parseOptions(
             options.filter = try allocator.dupe(u8, arg["--filter=".len..]);
             continue;
         }
+        if (std.mem.startsWith(u8, arg, "--expect-miss=")) {
+            options.expect_miss = try allocator.dupe(u8, arg["--expect-miss=".len..]);
+            continue;
+        }
         if (std.mem.startsWith(u8, arg, "--exclude=")) {
             options.exclude = try allocator.dupe(u8, arg["--exclude=".len..]);
             continue;
@@ -462,7 +471,7 @@ fn printUsage() !void {
     try stderr.writeAll(
         "usage: zig build bench-search -- [--compact|-c] [--filter=TEXT]\n" ++
             "       [--frontier=breadth|depth] [--files=MM0:AUF]...\n" ++
-            "       [--exclude=TEXT[,TEXT...]]\n" ++
+            "       [--exclude=TEXT[,TEXT...]] [--expect-miss=THM/LINE[,...]]\n" ++
             "       [--marker=auto?|exact?|apply?] [--max-depth=N]\n" ++
             "       [--slow-ms=N] [--verbose|-v] [--counters] [--track-sites]\n" ++
             "       [--require-no-miss] [--retry-misses] [--max-k=N]\n" ++
@@ -1316,6 +1325,9 @@ const BreadthStats = struct {
     matched: usize = 0,
     errors: usize = 0,
     slow: usize = 0,
+    /// `--expect-miss` lines that missed, and that were found.
+    pinned_misses: usize = 0,
+    pinned_finds: usize = 0,
     search_ns_sum: u64 = 0,
     search_ns_max: u64 = 0,
     wall_ns_sum: u64 = 0,
@@ -1323,6 +1335,8 @@ const BreadthStats = struct {
     fn add(self: *BreadthStats, other: BreadthStats) void {
         self.tried += other.tried;
         self.found += other.found;
+        self.pinned_misses += other.pinned_misses;
+        self.pinned_finds += other.pinned_finds;
         self.matched += other.matched;
         self.errors += other.errors;
         self.slow += other.slow;
@@ -1747,8 +1761,10 @@ fn runFrontier(
             }
             try writer.writeAll("\n");
             try printBreadthSummary(writer, "TOTAL", totals, options);
-            return totals.found != totals.tried or totals.errors != 0 or
-                totals.tried == 0;
+            return totals.found + totals.pinned_misses != totals.tried or
+                totals.errors != 0 or totals.tried == 0 or
+                totals.pinned_finds != 0 or
+                totals.pinned_misses != listCount(options.expect_miss);
         },
         .depth => {
             var totals = DepthStats{};
@@ -1801,6 +1817,26 @@ const BlockIterator = struct {
         }
     }
 };
+
+/// Whether `--expect-miss` names line `label` of theorem `theorem`.
+fn expectsMiss(options: BenchOptions, theorem: []const u8, label: []const u8) bool {
+    const list = options.expect_miss orelse return false;
+    var pins = std.mem.splitScalar(u8, list, ',');
+    while (pins.next()) |pin| {
+        const slash = std.mem.indexOfScalar(u8, pin, '/') orelse continue;
+        if (std.mem.eql(u8, pin[0..slash], theorem) and std.mem.eql(u8, pin[slash + 1 ..], label)) return true;
+    }
+    return false;
+}
+
+fn listCount(list: ?[]const u8) usize {
+    var count: usize = 0;
+    var items = std.mem.splitScalar(u8, list orelse return 0, ',');
+    while (items.next()) |item| {
+        if (item.len != 0) count += 1;
+    }
+    return count;
+}
 
 /// Frontier theorem selection: `--filter` must match and `--exclude` must not.
 fn frontierSelects(options: BenchOptions, name: []const u8) bool {
@@ -1863,6 +1899,10 @@ fn runBreadthFixture(
             );
 
             stats.tried += 1;
+            const pinned = expectsMiss(options, block.name, line.label);
+            if (pinned) {
+                if (run.found) stats.pinned_finds += 1 else stats.pinned_misses += 1;
+            }
             stats.search_ns_sum += run.search_ns;
             stats.search_ns_max = @max(stats.search_ns_max, run.search_ns);
             stats.wall_ns_sum += run.wall_ns;
@@ -1878,8 +1918,12 @@ fn runBreadthFixture(
                     "  ERR  {s}/{s} {s}: {s}\n",
                     .{ fixture.name, block.name, line.label, @errorName(err) },
                 );
-            } else if (!run.found or slow or options.verbose) {
-                const tag = if (!run.found)
+            } else if (!run.found or slow or pinned or options.verbose) {
+                const tag = if (pinned and !run.found)
+                    "PIN "
+                else if (pinned)
+                    "FIXD"
+                else if (!run.found)
                     "MISS"
                 else if (slow)
                     "SLOW"

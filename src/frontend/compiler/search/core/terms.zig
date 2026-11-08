@@ -48,7 +48,11 @@
 //! an application of the later-declared definition unfolds one step
 //! (`unfold`, or `unfoldTemplate` for one in a rule's template) and the
 //! match goes on, since a definition's body only uses terms declared
-//! before it. Equal heads compare argument by argument. A template's
+//! before it. Equal heads compare argument by argument, except those of a
+//! definition whose applications may be equal with different arguments
+//! (one that drops an argument, as `K a b := a` does), which compare
+//! unfolded: an argument the body drops is then fixed only where the rest
+//! of the match fixes it. A template's
 //! definition with dummies does not unfold: its dummies would need binders
 //! the rule does not have. The checker makes the same conversion when it
 //! validates the proof.
@@ -89,6 +93,7 @@ const WVars = @import("./wvars.zig").WVars;
 const ExprFlags = @import("./wvars.zig").ExprFlags;
 const ExprMap = @import("./wvars.zig").ExprMap;
 const Canonicalizer = @import("../../../normalizer.zig").Canonicalizer;
+const head_class = @import("../../../head_class.zig");
 
 pub const Error = error{
     OutOfMemory,
@@ -126,6 +131,12 @@ pub const Terms = struct {
     rewritten: []bool = &.{},
     /// Whether each term is a definition `unfold` opens, by term id.
     opens: []bool = &.{},
+    /// Whether each term is a definition without dummies two applications
+    /// of which may be equal with different arguments, by term id: one
+    /// that drops an argument or puts it where conversion can move it
+    /// (`head_class.argDetermined`). Two applications of it are compared
+    /// unfolded.
+    lossy: []bool = &.{},
     canonical_memo: ExprMap = .{},
     /// One-step unfoldings of definition applications, newest first; an
     /// expression's only one is itself when its body is past what the core
@@ -173,6 +184,15 @@ pub const Terms = struct {
         }
         self.opens = try allocator.alloc(bool, term_count);
         for (self.opens, 0..) |*opens, term_id| opens.* = context.env.openableDef(@intCast(term_id)) != null;
+        self.lossy = try allocator.alloc(bool, term_count);
+        for (self.lossy, 0..) |*lossy, term_id| {
+            lossy.* = false;
+            const def = context.env.openableDef(@intCast(term_id)) orelse continue;
+            if (def.dummy_args.len != 0) continue;
+            for (0..def.args.len) |idx| {
+                if (!head_class.argDetermined(context.env, context.registry, @intCast(term_id), idx)) lossy.* = true;
+            }
+        }
         var it = context.registry.acui_by_head.keyIterator();
         while (it.next()) |head| {
             const combiner = AcuiBag.Combiner.provable(context.registry, context.env, head.*) orelse continue;
@@ -187,6 +207,7 @@ pub const Terms = struct {
         self.allocator.free(self.bags);
         self.allocator.free(self.rewritten);
         self.allocator.free(self.opens);
+        self.allocator.free(self.lossy);
         self.canonical_memo.deinit(self.allocator);
         self.unfold_memo.deinit(self.allocator);
         self.defs.deinit(self.allocator);
@@ -357,6 +378,12 @@ pub const Terms = struct {
     /// Whether `term_id` is a definition `unfold` opens.
     pub fn opensDef(self: *const Terms, term_id: u32) bool {
         return term_id < self.opens.len and self.opens[term_id];
+    }
+
+    /// Whether `term_id` is a definition whose applications compare
+    /// unfolded (`lossy`).
+    pub fn isLossy(self: *const Terms, term_id: u32) bool {
+        return term_id < self.lossy.len and self.lossy[term_id];
     }
 
     /// Whether a conclusion node applying `term_id` meets only goal nodes
@@ -581,10 +608,13 @@ pub const Terms = struct {
     /// An occurrence under a binder of `hole` belongs to that binder and
     /// stays.
     pub fn swap(self: *Terms, pattern: ExprId, hole: ExprId, value: ExprId) Error!ExprId {
-        return self.canonical(try self.swapWalk(pattern, hole, value));
+        return self.canonical(try self.swapWalk(pattern, hole, value, self.wvars.sortOf(value)));
     }
 
-    fn swapWalk(self: *Terms, expr: ExprId, hole: ExprId, value: ExprId) Error!ExprId {
+    /// A coercion chain around `hole` ending in `value`'s sort (`v2t x` for
+    /// a term in place of the variable `x`) is replaced whole, as the
+    /// checker reads a cross-sort `@recover` (`derived_bindings.zig`).
+    fn swapWalk(self: *Terms, expr: ExprId, hole: ExprId, value: ExprId, value_sort: ?[]const u8) Error!ExprId {
         if (expr == hole) return value;
         const app = switch (self.theorem.interner.node(expr).*) {
             .app => |app| app,
@@ -592,17 +622,33 @@ pub const Terms = struct {
         };
         if (app.args.len > catalog.max_args) return error.Unsupported;
         const decl = &self.context.env.terms.items[app.term_id];
+        if (value_sort) |sort| if (std.mem.eql(u8, decl.ret_sort_name, sort) and self.coerces(expr, hole)) return value;
         for (app.args, 0..) |arg, idx| {
             if (idx < decl.args.len and decl.args[idx].bound and arg == hole) return expr;
         }
         var args: [catalog.max_args]ExprId = undefined;
         var changed = false;
         for (app.args, 0..) |arg, idx| {
-            args[idx] = try self.swapWalk(arg, hole, value);
+            args[idx] = try self.swapWalk(arg, hole, value, value_sort);
             if (args[idx] != arg) changed = true;
         }
         if (!changed) return expr;
         return self.theorem.interner.internApp(app.term_id, args[0..app.args.len]);
+    }
+
+    /// Whether `expr` is a chain of one or more coercions around `hole`.
+    fn coerces(self: *const Terms, expr: ExprId, hole: ExprId) bool {
+        var at = expr;
+        var depth: usize = 0;
+        while (at != hole) : (depth += 1) {
+            const app = switch (self.theorem.interner.node(at).*) {
+                .app => |app| app,
+                .variable, .placeholder => return false,
+            };
+            if (app.args.len != 1 or !self.context.env.isCoercionTerm(app.term_id)) return false;
+            at = app.args[0];
+        }
+        return depth != 0;
     }
 
     /// The variables `expr` captures around an occurrence of `hole`, into
@@ -780,6 +826,11 @@ pub const Terms = struct {
         }
         if (lhs_app.args.len != rhs_app.args.len) return false;
         if (self.bagFor(lhs_app.term_id) != null) return true;
+        if (how == .unfolding and self.isLossy(lhs_app.term_id)) {
+            const lhs_body = (try self.unfold(lhs)) orelse return true;
+            const rhs_body = (try self.unfold(rhs)) orelse return true;
+            return self.mightEqual(lhs_body, rhs_body, how);
+        }
         for (lhs_app.args, rhs_app.args) |x, y| {
             if (!try self.mightEqual(x, y, how)) return false;
         }
@@ -860,6 +911,7 @@ pub const Terms = struct {
             return !self.opensDef(later);
         }
         if (lhs_head == null) return true;
+        if (self.isLossy(lhs_head.?)) return false;
         const interner = &self.theorem.interner;
         const lhs_args = interner.node(lhs).app.args;
         const rhs_args = interner.node(rhs).app.args;
@@ -915,6 +967,7 @@ pub const Terms = struct {
         }
         if (self.bagFor(app.term_id) != null) return false;
         if (head != app.term_id) return true;
+        if (self.isLossy(app.term_id)) return false;
         const args = self.theorem.interner.node(target).app.args;
         if (args.len != app.args.len) return true;
         for (app.args, args) |arg, value| {
@@ -1219,6 +1272,13 @@ fn Matcher(comptime Sink: type) type {
                         else => return,
                     };
                     if (goal_app.term_id != app.term_id or goal_app.args.len != app.args.len) return;
+                    if (self.terms.isLossy(app.term_id)) {
+                        // Equal applications need not have equal
+                        // arguments: compare what they stand for.
+                        if (try self.terms.unfoldTemplate(app)) |body| {
+                            if (try self.terms.unfold(target)) |goal_body| return self.term(body, goal_body, next);
+                        }
+                    }
                     const cell = Pending{
                         .step = .{ .args = .{ .template = app.args, .goal = goal_app.args, .at = 0 } },
                         .next = next,
@@ -1306,6 +1366,11 @@ fn Matcher(comptime Sink: type) type {
             const lhs_app = interner.node(lhs).app;
             const rhs_app = interner.node(rhs).app;
             if (lhs_app.args.len != rhs_app.args.len) return;
+            if (self.terms.isLossy(lhs_app.term_id)) {
+                if (try self.terms.unfold(lhs)) |lhs_body| if (try self.terms.unfold(rhs)) |rhs_body| {
+                    return self.unify(lhs_body, rhs_body, next);
+                };
+            }
             if (self.terms.bagFor(lhs_app.term_id)) |combiner| {
                 if (try self.terms.same(lhs, rhs)) return self.run(next);
                 if (!combiner.law.isCommutative()) {

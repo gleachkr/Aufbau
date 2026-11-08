@@ -11,9 +11,14 @@
 //! standing for its recipe. A γ witness or cut is a witness variable closed
 //! by unification, a δ one (or a definition's dummy) an eigenvariable whose
 //! name waits until the proof needs one (`wvars.zig`). Each hole of a
-//! holey goal is a witness variable too, one the proof fills. It runs
-//! before the generation ladder (`GenerateOptions.core`, on by default),
-//! which still runs when the core abstains or misses.
+//! holey goal is a witness variable too, one the proof fills, and so is
+//! each unknown of an inline slot's goal. It runs before the generation
+//! ladder (`GenerateOptions.core`, on by default), which still runs when
+//! the core abstains or misses.
+//!
+//! A run tries the proofs of one step first (`Prover.one_step`), then
+//! deepens. `exact?` stops after that pass, and takes every proof it finds
+//! (`Request.collect`) to rank them.
 //!
 //! The run works in a clone of the call's theorem, discarded at the end.
 //! The proof record is rendered as one `RuleApplication` tree with every
@@ -65,6 +70,13 @@ pub const Request = struct {
     /// needs a budget (`GenerateOptions.coreDepth`).
     max_depth: ?usize,
     stack_guard_bytes: usize,
+    /// Search only for proofs of one step, which every run tries first: a
+    /// rule whose premises facts and closers close (`Prover.one_step`).
+    one_step: bool = false,
+    /// When set, every proof the checker accepts is added here and the
+    /// search goes on, as past a rejected one; the run then ends without
+    /// one (`Result.missed`).
+    collect: ?*std.ArrayListUnmanaged(RuleApplication) = null,
     budget: ?*types.GlobalBudget,
     counters: ?*SearchCounters,
     /// Owns the returned application.
@@ -101,7 +113,13 @@ pub fn run(request: Request) !Result {
             error.OutOfMemory => return error.OutOfMemory,
             else => return .abstained,
         }) orelse return .abstained,
-        .implicit_whole_conclusion => return .abstained,
+        // An inline slot's goal, with an unknown where the enclosing rule
+        // leaves a binder open.
+        .implicit_whole_conclusion => |hint| blk: {
+            var memo = std.AutoHashMapUnmanaged(ExprId, ExprId).empty;
+            defer memo.deinit(request.scratch);
+            break :blk try holesForUnknowns(&theorem, &wvars, hint orelse return .abstained, &memo, request.scratch);
+        },
     };
     if (!try terms.supported(goal_expr)) return .abstained;
     const goal = terms.canonical(goal_expr) catch |err| switch (err) {
@@ -148,8 +166,21 @@ pub fn run(request: Request) !Result {
     close_out.prover = &prover;
     defer if (request.counters) |c| {
         c.core_nodes += prover.stats.nodes;
-        c.core_rejects += prover.stats.rejects;
+        // A collected proof goes on as a rejected one does, but is none.
+        c.core_rejects += prover.stats.rejects - close_out.collected;
     };
+
+    // The proofs of one step first: the commitment to a safe rule, or the
+    // order of the depths, could otherwise reach the goal only by a longer
+    // proof, or not within the budget.
+    prover.one_step = true;
+    if (request.counters) |c| c.gen_last_depth = 1;
+    if (try prover.solve(goal, 1)) {
+        return .{ .found = .{ .application = close_out.found.?, .depth = 1 } };
+    }
+    if (request.one_step) return .{ .missed = .{ .exhausted = true } };
+    prover.one_step = false;
+    prover.forget();
 
     var depth: usize = 1;
     while (request.max_depth == null or depth <= request.max_depth.?) : (depth += 1) {
@@ -165,15 +196,69 @@ pub fn run(request: Request) !Result {
     return .{ .missed = .{ .exhausted = false } };
 }
 
+/// `expr` with a hole's wvar for each unknown it holds (a search meta), one
+/// per distinct unknown.
+fn holesForUnknowns(
+    theorem: *TheoremContext,
+    wvars: *WVars,
+    expr: ExprId,
+    memo: *std.AutoHashMapUnmanaged(ExprId, ExprId),
+    scratch: std.mem.Allocator,
+) !ExprId {
+    if (memo.get(expr)) |done| return done;
+    const result = switch (theorem.interner.node(expr).*) {
+        .variable => expr,
+        .placeholder => |pid| blk: {
+            const info = theorem.placeholderInfo(pid) orelse break :blk expr;
+            if (info.class != .meta) break :blk expr;
+            break :blk try wvars.mintHole(info.sort_name);
+        },
+        .app => |app| blk: {
+            const args = try scratch.alloc(ExprId, app.args.len);
+            defer scratch.free(args);
+            for (app.args, args) |arg, *out| out.* = try holesForUnknowns(theorem, wvars, arg, memo, scratch);
+            break :blk try theorem.interner.internApp(app.term_id, args);
+        },
+    };
+    try memo.put(scratch, expr, result);
+    return result;
+}
+
+/// Whether two rendered proofs are the same text.
+fn sameApplication(a: RuleApplication, b: RuleApplication) bool {
+    if (!std.mem.eql(u8, a.rule_name, b.rule_name)) return false;
+    if (a.arg_bindings.len != b.arg_bindings.len or a.refs.len != b.refs.len) return false;
+    for (a.arg_bindings, b.arg_bindings) |x, y| {
+        if (!std.mem.eql(u8, x.name, y.name) or !std.mem.eql(u8, x.formula.text, y.formula.text)) return false;
+    }
+    for (a.refs, b.refs) |x, y| {
+        if (!sameRef(x, y)) return false;
+    }
+    return true;
+}
+
+fn sameRef(a: ProofScript.Ref, b: ProofScript.Ref) bool {
+    return switch (a) {
+        .hyp => |x| b == .hyp and x.index == b.hyp.index and
+            std.mem.eql(u8, x.name orelse "", b.hyp.name orelse ""),
+        .line => |x| b == .line and std.mem.eql(u8, x.label, b.line.label),
+        .application => |x| b == .application and sameApplication(x, b.application),
+    };
+}
+
 /// A hole's wvar, minted before the search starts (`WVars.mintHole`).
 fn mintHole(wvars: *WVars, _: *TheoremContext, sort_name: []const u8) anyerror!?ExprId {
     return try wvars.mintHole(sort_name);
 }
 
 /// The pool facts the core can close a goal with, canonical, then the
-/// ground facts forward rules derived, each standing for its recipe.
+/// ground facts forward rules derived, each standing for its recipe. Of
+/// several facts stating one expression only the first is kept: the others
+/// give the same proofs, citing another reference.
 fn poolFacts(request: Request, theorem: *TheoremContext, terms: *Terms, arena: std.mem.Allocator) ![]const prover_mod.Fact {
     var facts = std.ArrayListUnmanaged(prover_mod.Fact).empty;
+    var stated = std.AutoHashMapUnmanaged(ExprId, void).empty;
+    defer stated.deinit(request.scratch);
     for (request.pool) |entry| {
         const expr = refs_mod.sourceRefExpr(request.context, request.pool_theorem, entry.ref) catch continue;
         if (!try terms.supported(expr)) continue;
@@ -181,6 +266,7 @@ fn poolFacts(request: Request, theorem: *TheoremContext, terms: *Terms, arena: s
             error.Unsupported => continue,
             else => |e| return e,
         };
+        if ((try stated.getOrPut(request.scratch, canonical)).found_existing) continue;
         try facts.append(arena, .{ .expr = canonical, .ref = entry.ref, .shape = try terms.shape(canonical) });
     }
     if (request.derived) |dpool| for (dpool.refs) |*dref| {
@@ -192,6 +278,7 @@ fn poolFacts(request: Request, theorem: *TheoremContext, terms: *Terms, arena: s
             error.Unsupported => continue,
             else => |e| return e,
         };
+        if ((try stated.getOrPut(request.scratch, canonical)).found_existing) continue;
         const application = (try forward.materializeApplication(
             dpool,
             request.context,
@@ -232,11 +319,14 @@ const CloseOut = struct {
     /// Names of the wvars left unbound, by wvar index, during one render.
     names: std.AutoHashMapUnmanaged(u32, ExprId) = .empty,
     found: ?RuleApplication = null,
+    /// Close-outs `Request.collect` turned back: the proofs it took, and
+    /// later routes to them.
+    collected: usize = 0,
 
     fn tryRoot(ctx: *anyopaque, root: *const Node) prover_mod.Error!bool {
         const self: *CloseOut = @ptrCast(@alignCast(ctx));
-        // A goal a pool fact states is direct `exact?`'s to report; one a
-        // derived fact states is proved by the fact's recipe.
+        // A pool fact that states the goal is no proof line; a derived
+        // fact that does is proved by the fact's recipe.
         switch (root.step) {
             .rule => {},
             .ref => |ref| if (ref != .application) return false,
@@ -252,6 +342,13 @@ const CloseOut = struct {
         const application = switch (root.step) {
             .rule => (try self.render(&namer, root)) orelse return false,
             .ref => |ref| ref.application,
+        };
+        // Another route to a proof already collected is no other proof.
+        if (request.collect) |list| for (list.items) |known| {
+            if (sameApplication(known, application)) {
+                self.collected += 1;
+                return false;
+            }
         };
         if (request.counters) |c| c.full_try_candidate_calls += 1;
         if (request.budget) |budget| try budget.spendCandidate();
@@ -270,6 +367,11 @@ const CloseOut = struct {
             else => return false,
         };
         attempt.deinit();
+        if (request.collect) |list| {
+            try list.append(request.out, application);
+            self.collected += 1;
+            return false;
+        }
         self.found = application;
         return true;
     }

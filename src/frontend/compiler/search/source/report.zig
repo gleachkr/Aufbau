@@ -299,6 +299,14 @@ fn writeStatusDetail(
                     .{ gen.ladderDepth(), validated, accepted, rejected },
                 );
                 if (retry) |r| try writeRetryAdvice(w, keyword, r, false);
+            } else if (std.mem.eql(u8, keyword, "exact?")) {
+                try w.print(
+                    "no rule application closes this goal in one step, " ++
+                        "its premises proved by the {d} references in reach " ++
+                        "or by rules with no premises. auto? can " ++
+                        "additionally synthesize sub-proofs.",
+                    .{counters.ref_pool_size},
+                );
             } else {
                 try w.print(
                     "no rule application closes this goal from existing " ++
@@ -309,11 +317,6 @@ fn writeStatusDetail(
                         counters.ref_pool_size,
                     },
                 );
-                if (std.mem.eql(u8, keyword, "exact?")) {
-                    try w.writeAll(
-                        " auto? can additionally synthesize sub-proofs.",
-                    );
-                }
             }
         },
         .budget_exhausted => {

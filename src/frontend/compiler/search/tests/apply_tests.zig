@@ -424,19 +424,14 @@ test "exact ref index filters multi-hyp reference tuples" {
         \\------
         \\l1: $ T $ by exact?
     ;
+    // The legacy direct search's ref index, which the generation ladder
+    // still uses.
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{ .timing = true };
-    var suggestions = try suggestionsAtNeedle(
-        &arena,
-        mm0_src,
-        proof_src,
-        "exact?",
-        .{ .counters = &counters },
-    );
-    defer suggestions.deinit();
+    const rules = try helpers.legacyExactRules(&arena, mm0_src, proof_src, &counters);
 
-    try std.testing.expectEqual(@as(usize, 1), suggestions.items.len);
+    try std.testing.expectEqual(@as(usize, 1), rules.len);
     try std.testing.expectEqual(@as(usize, 4), counters.ref_pool_size);
     try std.testing.expectEqual(
         @as(usize, 2),
@@ -471,19 +466,14 @@ test "exact search propagates sibling hyp bindings while filtering refs" {
         \\------
         \\l1: $ Goal $ by exact?
     ;
+    // The legacy direct search's ref index, which the generation ladder
+    // still uses.
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try suggestionsAtNeedle(
-        &arena,
-        mm0_src,
-        proof_src,
-        "exact?",
-        .{ .counters = &counters },
-    );
-    defer suggestions.deinit();
+    const rules = try helpers.legacyExactRules(&arena, mm0_src, proof_src, &counters);
 
-    try std.testing.expectEqual(@as(usize, 1), suggestions.items.len);
+    try std.testing.expectEqual(@as(usize, 1), rules.len);
     try std.testing.expectEqual(@as(usize, 5), counters.ref_pool_size);
     try std.testing.expectEqual(
         @as(usize, 1),

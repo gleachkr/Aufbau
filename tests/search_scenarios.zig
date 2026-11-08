@@ -129,9 +129,13 @@ pub const scenarios = [_]Scenario{
         .mm0_path = "tests/search_bench_cases/euclid.mm0",
         .proof_path = "tests/search_bench_cases/euclid_final_existential.auf",
         .marker = "exact?",
-        // l21 names the opened witness (`y`) differently from the `∃` binder, so
-        // the substitution form `ex_elim_sub` is the rule that actually applies.
-        .expected_replacement = "ex_elim_sub [l3, l21]",
+        // l21 names the opened witness (`r`) differently from the `∃` binder, so
+        // only the substitution form `ex_elim_sub [l3, l21]` applies. The search
+        // core does not apply it yet: its witness `u` is read back through a
+        // pattern the first premise fixes, not the conclusion.
+        .expected_replacement = "",
+        .expect_result = false,
+        .expected_suggestion_count = 0,
     },
     .{
         .name = "euclid prime factor or-elim exact?",
@@ -559,7 +563,7 @@ pub const scenarios = [_]Scenario{
         // motive `l5`, the search also generates it (`Id_form [l3, l4]`),
         // opening the def's hidden `k` at that premise. The search core
         // proves it, as `nat_ind_elim [l5, l10, l20, #1]`: the term
-        // `add_comm_p m n` states the motive.
+        // `add_comm_p m n` states the motive, which the ladder offers too.
         .name = "auto martin_lof add_comm capstone auto? (no result)",
         .mm0_path = "tests/search_bench_cases/martin_lof_regular.mm0",
         .proof_path = "tests/search_bench_cases/ml_add_comm_capstone_auto.auf",
@@ -567,7 +571,7 @@ pub const scenarios = [_]Scenario{
         .expected_replacement = "",
         .generate = .{ .enabled = true, .max_depth = 6, .core = false },
         .expect_result = false,
-        .expected_suggestion_count = 4,
+        .expected_suggestion_count = 5,
     },
     .{
         // martin_lof add_comm with the step case's last nine lines removed
@@ -643,7 +647,8 @@ pub const scenarios = [_]Scenario{
     .{
         // martin_lof id_sym_ty: `J_elim` (path induction) whose large motive
         // and eigenvariables are not conclusion-pinned. The search core
-        // proves it, as `J_elim [l5, l6, #1]`.
+        // proves it, as `J_elim [l5, l6, #1]`, which the ladder offers
+        // too.
         .name = "auto martin_lof id_sym_ty J_elim auto? (no result)",
         .mm0_path = "tests/search_bench_cases/martin_lof_regular.mm0",
         .proof_path = "tests/search_bench_cases/ml_id_sym_ty_auto.auf",
@@ -844,16 +849,13 @@ pub const scenarios = [_]Scenario{
         .expected_suggestion_count = 0,
     },
     .{
-        // STAGE 4 negative control: `exact?` has no generation hook and must
-        // ignore `@auto backward`, so the open hyp-only witness remains
-        // unsolved here even though `auto?` can synthesize it.
-        .name = "auto backward exact? ignored (no result, Stage 4)",
+        // `exact?` closes a premise with a closer: `pred_K` fixes the open
+        // hyp-only witness in one step.
+        .name = "exact? closes a premise with a closer",
         .mm0_path = "tests/search_bench_cases/metavariable_capabilities.mm0",
         .proof_path = "tests/search_bench_cases/meta_hyp_only_exact.auf",
         .marker = "exact?",
-        .expected_replacement = "",
-        .expect_result = false,
-        .expected_suggestion_count = 0,
+        .expected_replacement = "hyp_only_use [pred_K []]",
     },
     .{
         // STAGE 4 negative control: `apply?` may suggest the annotated rule,

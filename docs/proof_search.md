@@ -60,8 +60,11 @@ look.
 `exact?` looks for a single rule whose conclusion matches your goal and
 whose hypotheses are all discharged by things you *already have* — the
 theorem's hypotheses (`#1`, `#2`, …) and earlier proof lines (`l1`,
-`l2`, …), collectively the *reference pool*. It does **not** invent
-intermediate steps.
+`l2`, …), collectively the *reference pool* — or by a rule with no
+premises of its own (`and_intro [#1, true_intro []]`). It
+does **not** prove a premise with a rule that needs premises. Proofs come
+fewest nested steps first, then in the order the theory declares their
+rules.
 
 Use it when you know the goal follows in one step from facts on hand and
 you just don't want to spell out the rule name and its argument bindings:
@@ -95,7 +98,8 @@ prove it will give up rather than run forever — but a hard goal can still
 take a couple of seconds before it does.
 
 **Two searches, one budget.** `auto?` first hands the goal to the *search
-core*, which leaves a quantifier witness it has not chosen as an unknown
+core*, which tries the one-step proofs `exact?` would find before it
+deepens. The core leaves a quantifier witness it has not chosen as an unknown
 shared by the whole proof and fills it in when a later step needs a
 particular term, as tableau provers do. A premise variable a rule's
 conclusion leaves open, such as the middle formula of a transitivity
@@ -391,10 +395,10 @@ and over. That is your cue to look at the rule's annotations (should it
 really be enrolled backward?) or at the goal shape that keeps attracting
 it.
 
-`exact?` and `apply?` misses are simpler — they are single-shot, so a
-miss just reports how many candidate rules and pool references were
-considered, and reminds you that `auto?` can additionally synthesize
-sub-proofs.
+`exact?` and `apply?` misses are simpler — they are single-shot. An
+`exact?` miss reports how many pool references were in reach and reminds
+you that `auto?` can additionally synthesize sub-proofs; an `apply?` miss
+reports how many candidate rules and pool references were considered.
 
 ## Tuning a single search (per-call parameters)
 

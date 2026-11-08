@@ -541,6 +541,57 @@ pub fn expectApplyRuleOrder(
     try std.testing.expectEqual(@as(usize, 0), harness.checked.items.len);
 }
 
+/// What the legacy backtracker's direct search (`backtrack.exactWithSession`,
+/// which the generation ladder still runs) finds for the goal of
+/// `proof_src`'s one `exact?` line: the rule each result applies, in order.
+/// For the tests of that search's prunes, which `exact?` itself no longer
+/// reaches.
+pub fn legacyExactRules(
+    arena: *std.heap.ArenaAllocator,
+    mm0_src: []const u8,
+    proof_src: []const u8,
+    counters: *types.SearchCounters,
+) ![]const []const u8 {
+    const allocator = arena.allocator();
+    var proof_parser = ProofParser.init(allocator, proof_src);
+    const block = (try proof_parser.nextBlock()) orelse return error.MissingBlock;
+    var fixture = try fixtureFor(allocator, mm0_src, block.name);
+    var sink = DiagnosticSink.init(mm0_src, proof_src);
+    var compiler = CompilerContext.init(mm0_src, proof_src, .none, &sink);
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
+    defer theorem_vars.deinit();
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const target = for (block.lines, 0..) |line, idx| {
+        if (std.mem.eql(u8, line.application.rule_name, "exact?")) break idx;
+    } else return error.MissingNeedle;
+    for (block.lines[0..target]) |line| {
+        const line_idx = try commitSearchLine(
+            allocator,
+            &compiler,
+            &fixture,
+            &harness.labels,
+            &harness.checked,
+            &theorem,
+            &theorem_vars,
+            &harness.diag_scratch,
+            &harness.cache,
+            line,
+        );
+        try harness.labels.put(line.label, line_idx);
+    }
+    const context = harness.context(&fixture);
+    const goal = try parseGoal(&fixture, &theorem, &theorem_vars, block.lines[target].assertion.text);
+    var results = try exact(&compiler, &context, goal, &theorem, &theorem_vars, .{ .counters = counters });
+    defer results.deinit();
+    const rules = try allocator.alloc([]const u8, results.candidates.len);
+    for (rules, results.candidates) |*rule, candidate| rule.* = try allocator.dupe(u8, candidate.rule_name);
+    return rules;
+}
+
 pub fn expectExactRuleOrderWithPrefix(
     mm0_src: []const u8,
     proof_src: []const u8,

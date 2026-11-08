@@ -69,12 +69,18 @@
 //! which only adds proofs; a run the depth limit or the budget stops never
 //! gets one.
 //!
+//! A proof of one step (`one_step`) applies a rule to the root goal, any
+//! rule, and closes its premises by facts and closers only. A safe rule
+//! that applies does not commit the goal then: its premises may need more
+//! than one step where another rule's do not.
+//!
 //! A bridge's premises are closed by facts only, never by a rule: the
 //! step costs no depth, and `weak`'s premise, with a fresh share for the
 //! part of the context it keeps, is a new goal each time, so a premise
 //! open to rules could take the bridge again without end. A fact that
 //! states the bridge's goal itself is skipped, since it closes that goal
-//! directly, and a step whose premise no fact might close is not taken.
+//! directly, unless that goal is the root, which a fact closes in no proof
+//! line; and a step whose premise no fact might close is not taken.
 //! A premise that no fact closes has failed only as a bridge's, so it is
 //! not memoized; neither is a premise a passing step left to facts.
 //!
@@ -371,6 +377,9 @@ pub const Prover = struct {
     depth_cut: bool = false,
     /// The limits on a passed cut are off (`relax`).
     relaxed: bool = false,
+    /// Only the root goal takes rules other than closers: its premises are
+    /// closed by facts and closers, a proof of one step (`exact?`).
+    one_step: bool = false,
     /// Per goal not keyed: the greatest depth at which it has no proof.
     failed: std.AutoHashMapUnmanaged(ExprId, usize) = .empty,
     /// The same per key of a keyed goal.
@@ -404,6 +413,12 @@ pub const Prover = struct {
     /// what the search under them remembered.
     pub fn relax(self: *Prover) void {
         self.relaxed = true;
+        self.forget();
+    }
+
+    /// Forget what the search remembered: it holds only under the limits
+    /// in force when it was found.
+    pub fn forget(self: *Prover) void {
         self.failed.clearRetainingCapacity();
         self.failed_open.clearRetainingCapacity();
         self.failed_shared.clearRetainingCapacity();
@@ -560,7 +575,7 @@ pub const Prover = struct {
         if (self.repeats(goal.path, goal.expr)) return .failed;
         // A goal only facts may close has not run out of proofs as the
         // same goal closed by rules would.
-        const full = goal.bridged == null and goal.pass.len == 0;
+        const full = goal.bridged == null and goal.pass.len == 0 and !self.closersOnly(goal);
         if (memo_key) |at| if (full) if (tables.get(at)) |table| if (table.depth == goal.depth) {
             return self.replay(table, goal, order, next);
         };
@@ -873,6 +888,12 @@ pub const Prover = struct {
         return result;
     }
 
+    /// Whether only facts and closers close `goal`: a premise of a
+    /// one-step proof.
+    fn closersOnly(self: *const Prover, goal: Goal) bool {
+        return self.one_step and goal.path != null;
+    }
+
     /// Whether `expr` is a goal on `path`, which prunes it (`prune_floor`).
     fn repeats(self: *Prover, path: ?*const PathCell, expr: ExprId) bool {
         var on_path = path;
@@ -903,7 +924,9 @@ pub const Prover = struct {
             while (picks.next()) |n| {
                 const fact = self.facts[n];
                 if (try self.terms.excludes(screen, fact.expr, fact.shape)) continue;
-                if (goal.bridged) |bridged| if (try self.states(fact.expr, bridged)) continue;
+                // Except at the root, whose close by a fact is no proof
+                // line (`CloseOut.tryRoot`).
+                if (goal.bridged) |bridged| if (goal.path.?.level != 0 and try self.states(fact.expr, bridged)) continue;
                 var applier = Applier{
                     .prover = self,
                     .frame = frame,
@@ -1019,11 +1042,23 @@ pub const Prover = struct {
                 .picks = if (index) |found| found.query(self.terms, target, scratch) else null,
             };
             // A bare-binder or rewritten-head conclusion matches the goal as
-            // it stands.
-            const bare = Picked{ .rules = if (at == 0) self.catalog.forHead(catalog_mod.bare_head) else &.{} };
-            for ([_]Picked{ by_head, bare }, [_]bool{ false, true }) |picked, from_bare| {
+            // it stands; one headed by a definition that unfolds to the
+            // goal's head matches it unfolded.
+            var lists = std.ArrayListUnmanaged(Picked).empty;
+            defer lists.deinit(self.allocator);
+            try lists.append(self.allocator, by_head);
+            try lists.append(self.allocator, .{ .rules = if (at == 0) self.catalog.forHead(catalog_mod.bare_head) else &.{} });
+            // Not where an earlier target, which this one unfolds, has that
+            // head: its rules were tried there.
+            if (head) |id| folds: for (self.catalog.foldsInto(id)) |def| {
+                for (targets.items[0..at]) |earlier| if (self.terms.headOf(earlier) == def) continue :folds;
+                try lists.append(self.allocator, .{ .rules = self.catalog.forHead(def) });
+            };
+            for (lists.items, 0..) |picked, list_idx| {
+                const from_bare = list_idx == 1;
                 var rules = picked;
                 while (rules.next()) |entry| {
+                    if (self.closersOnly(goal) and entry.role != .closer) continue;
                     switch (entry.role) {
                         .closer, .bridge => {},
                         .safe => {},
@@ -1062,7 +1097,9 @@ pub const Prover = struct {
                         .path = path,
                     };
                     const stopped = try self.terms.matchConclusion(rule, target, Applier, &applier);
-                    if (applier.matched and entry.role == .safe) any_safe = true;
+                    // One step leaves the premises to facts, so a safe
+                    // rule that matched says nothing of the others.
+                    if (applier.matched and entry.role == .safe and !self.one_step) any_safe = true;
                     if (stopped) return applier.outcome;
                 }
             }

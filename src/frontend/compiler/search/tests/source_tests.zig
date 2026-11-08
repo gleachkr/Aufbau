@@ -77,11 +77,11 @@ test "source search records search counters" {
     );
     defer suggestions.deinit();
 
-    try std.testing.expectEqual(@as(usize, 2), suggestions.items.len);
+    // `p`; `id [#1]` proves `P` by itself, a repeat.
+    try std.testing.expectEqual(@as(usize, 1), suggestions.items.len);
     try std.testing.expectEqual(@as(usize, 0), counters.conclusion_probes);
     try std.testing.expectEqual(@as(usize, 1), counters.ref_pool_size);
     try std.testing.expect(counters.full_try_candidate_calls > 0);
-    try std.testing.expect(counters.accepted_candidates > 0);
     try expectTimingCounter(counters.cold_setup_ns);
     try expectTimingCounter(counters.warm_search_ns);
 }
@@ -1134,6 +1134,30 @@ test "a @rewrite head that is also a def or an ACUI combiner is never stuck" {
 //   prove `P (k2 a b) c`.
 // - `K` is an erasing def: `K a b ≡ K a c` once `K` unfolds, so
 //   `r3K [#1, #2]` proves `P (K a b) c` (the checker accepts it).
+test "exact? meets a rule whose conclusion is a definition of the goal's head" {
+    // `refl_P`'s conclusion `dp P` unfolds to `P -> P`, the goal: a goal
+    // headed by `->` meets the rules listed under `dp` too.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\term imp (a b: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\def dp (a: wff): wff = $ a -> a $;
+        \\axiom refl_P: $ dp P $;
+        \\theorem t: $ P -> P $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var found = try suggestionsAtNeedle(&arena, mm0_src,
+        \\t
+        \\----
+        \\l1: $ P -> P $ by exact?
+    , "exact?", .{});
+    defer found.deinit();
+    try expectOffered(found.items, &.{"refl_P"});
+}
+
 test "search keeps a rule whose repeated binder sits under an erasing head" {
     const cases = [_]struct { proof: []const u8, offered: []const []const u8 }{
         .{

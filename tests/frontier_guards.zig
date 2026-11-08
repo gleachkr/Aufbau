@@ -1,7 +1,8 @@
 //! Frontier regression guards run by `zig build test-frontier-smoke` (part of
 //! `zig build test`). build.zig turns each entry into one `search-bench` run
 //! with `--require-no-miss`, which exits nonzero on any MISS/ERR (or an empty
-//! selection), failing the build. Several fixes (the `matchOneHypViaView`
+//! selection), failing the build. A line pinned with `expect_miss` may miss,
+//! and fails the build once it is found. Several fixes (the `matchOneHypViaView`
 //! ACUI split, the `shape.zig` index pre-filter) have no unit coverage; these
 //! runs are their only automated check.
 //!
@@ -32,12 +33,19 @@ pub const FrontierGuard = struct {
     fwd_facts: ?usize = null,
     fwd_attempts: ?usize = null,
     fwd_layers: ?usize = null,
+    // Breadth: comma-separated `theorem/label` lines known to miss
+    // (`--expect-miss`). The guard fails when one of them is found, so the
+    // pin is dropped with the gap it marks.
+    expect_miss: ?[]const u8 = null,
 };
 
 pub const guards = [_]FrontierGuard{
     .{
         .filter = "exists_prime_factor",
         .files = "tests/proof_cases/euclid.mm0:tests/proof_cases/euclid.auf",
+        // `ex_elim [l34, l40]`: the search core does not read this
+        // `@recover` witness back through a pattern a premise fixes.
+        .expect_miss = "exists_prime_factor/l41",
     },
     .{
         .filter = "cb_branch_fg_injective_mixed",
@@ -687,6 +695,11 @@ pub const guards = [_]FrontierGuard{
         .files = "tests/search_bench_cases/nd_fol.mm0:" ++
             "tests/search_bench_cases/nd_fol.auf",
         .mode = "breadth",
+        // `ex_intro [l1]` with l1 `¬ [x/u] p` for `[x/t] (¬ p)`, and
+        // `all_intro [l5]`: the search core does not match a substitution
+        // into a schematic formula, and spends the budget before the ladder,
+        // which finds them, runs.
+        .expect_miss = "not_all_left/l2,not_all_left/l6,not_ex_left/l2,not_ex_left/l6",
     },
     // One FULL depth guard per search shape: eager intros with imp_left
     // chains (s_comb), raa + negation (cases_classical), or_left splits

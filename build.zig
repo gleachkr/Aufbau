@@ -530,6 +530,7 @@ pub fn build(b: *std.Build) void {
         if (guard.fwd_facts) |n| run.addArg(b.fmt("--fwd-facts={d}", .{n}));
         if (guard.fwd_attempts) |n| run.addArg(b.fmt("--fwd-attempts={d}", .{n}));
         if (guard.fwd_layers) |n| run.addArg(b.fmt("--fwd-layers={d}", .{n}));
+        if (guard.expect_miss) |pins| run.addArg(b.fmt("--expect-miss={s}", .{pins}));
         frontier_smoke_step.dependOn(&run.step);
     }
 
