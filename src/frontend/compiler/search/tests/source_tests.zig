@@ -1399,7 +1399,7 @@ fn expectNdFolTrim(proof_src: []const u8, expected: []const u8) !void {
     var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
         .max_results = 3,
         .exact_result_limit = 1,
-        .generate = .{ .enabled = true, .core = false },
+        .generate = .{ .enabled = true, .core = false, .ladder = true },
     });
     defer suggestions.deinit();
     try expectOffered(suggestions.items, &.{expected});

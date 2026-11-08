@@ -1549,13 +1549,12 @@ pub const GenerateOptions = struct {
     /// memory: a chain of rules traps between 1 and 1.5 MiB of them, and
     /// Pelletier 34 between 1.5 and 2 MiB. Overridable only for tests.
     stack_guard_bytes: usize = if (@import("builtin").target.cpu.arch.isWasm()) 768 * 1024 else 4 * 1024 * 1024,
-    /// Try the search core (`core/`, `docs/design_notes/shared_witness.md`
-    /// revision 2) before the generation ladder, which still runs when the
-    /// core abstains or misses. Off only to measure the ladder alone.
+    /// Run the search core (`core/`, `docs/design_notes/shared_witness.md`
+    /// revision 2). Off only to measure the ladder alone.
     core: bool = true,
-    /// Run the generation ladder after the core. Off only to measure the
-    /// core alone.
-    ladder: bool = true,
+    /// Run the generation ladder after the core when it abstains or misses.
+    /// On only to compare against the ladder before it is deleted.
+    ladder: bool = false,
 
     /// Where the ladder stops when the call sets no limit.
     pub const ladder_depth: usize = 6;

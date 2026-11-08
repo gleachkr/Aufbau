@@ -40,19 +40,17 @@ repeated, the last occurrence wins.
 
 | Parameter | Default | Range | Meaning |
 |---|---|---|---|
-| `depth` | none | 1–64 | Iterative-deepening limit: maximum nesting of *generated* proof steps. `@auto eager` steps are exempt. Deepening stops at the shallowest depth that closes the goal. With no limit, the search core deepens until it closes the goal, the work budget runs out, or a pass leaves nothing unsearched, and the generation search stops at depth 6. With `budget: 0` and no limit, both stop at depth 6. |
+| `depth` | none | 1–64 | Iterative-deepening limit: maximum nesting of *generated* proof steps. `@auto eager` steps are exempt. Deepening stops at the shallowest depth that closes the goal. With no limit, the search core deepens until it closes the goal, the work budget runs out, or a pass leaves nothing unsearched. With `budget: 0` and no limit, it stops at depth 6. |
 | `nodes` | 256 | 1–1 000 000 | Budget of distinct generated sub-goal solves per pass (one depth of one search phase), reset at each pass. |
 | `fuel` | 4096 | 1–100 000 000 | Candidate-validation budget per search phase, refilled for each retry of the whole ladder. |
 | `budget` | ≈2.3 | 0–100 000 | Whole-call cap on cost-weighted work, in units of roughly one second of search effort (the default is 2.3 units). `budget: 0` is legal and disables the cap entirely. |
 
-`auto?` first tries the goal with the search core, then, when the core finds
-no proof at the limit, with the generation search, in what is left of the
-budget. `depth` and `budget` bound both; `nodes` and `fuel` bound only the
-generation search.
+`auto?` searches with the search core, which `depth` and `budget` bound.
+`nodes` and `fuel` bound only the generation search, which no longer runs.
 
 When `auto?` fails, the failure report indicates which limits it hit and 
 suggests a retry that raises them together with the budget, e.g.
-`auto? (nodes: 512, fuel: 8192, budget: 6)`. Retries are available in editors as a
+`auto? (depth: 8, budget: 6)`. Retries are available in editors as a
 **Retry with …** code action, via `abc search --retry N`, which retries up to 
 `N` times.
 

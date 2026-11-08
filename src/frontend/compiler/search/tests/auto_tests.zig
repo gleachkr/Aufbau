@@ -202,6 +202,7 @@ fn ndOrSuggestions(
         .generate = .{
             .enabled = true,
             .core = false,
+            .ladder = true,
             .search_memo = policy.search_memo,
             .deep_member_prune = policy.deep_member_prune,
         },
@@ -434,7 +435,7 @@ test "inline auto generates a longer chain in a slot" {
     try std.testing.expect(mm0_src.len < auto_inline_mm0.len);
     var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
         .counters = &counters,
-        .generate = .{ .enabled = true, .core = false },
+        .generate = .{ .enabled = true, .core = false, .ladder = true },
     });
     defer suggestions.deinit();
 
@@ -459,7 +460,7 @@ test "inline auto grounds an existential meta inside a slot" {
     // The ladder's open slot (`r2`'s `a`); the search core leaves `r2` out.
     var suggestions = try autoInlineSuggestions(&arena, proof_src, "auto?", .{
         .counters = &counters,
-        .generate = .{ .enabled = true, .core = false },
+        .generate = .{ .enabled = true, .core = false, .ladder = true },
     });
     defer suggestions.deinit();
 
@@ -922,7 +923,7 @@ test "auto global fuel floor stops the search and reports exhaustion" {
         auto_depth2_mm0,
         proof_src,
         "auto?",
-        .{ .counters = &counters, .generate = .{ .enabled = true, .fuel = 1, .core = false } },
+        .{ .counters = &counters, .generate = .{ .enabled = true, .fuel = 1, .core = false, .ladder = true } },
     );
     defer suggestions.deinit();
     // Budget exhaustion is reported distinctly, and surfaces no suggestion.
@@ -1056,9 +1057,12 @@ test "the @auto eager cut still tries the other eager rules" {
 }
 
 test "the @auto eager cut still tries an eager rule that splits the context" {
-    // Split-ness sorts before priority, so `mix` (which splits the context
-    // into `g , h`) comes after the non-split rules: after `wk`, which the
-    // cut skips once `rleft` or `ror` arms it at the root.
+    // Every eager rule that applies is tried before the goal gives up, and
+    // `wk` not at all once `rleft` or `ror` applies at the root: the proof
+    // is `mix`'s, which splits the context into `g , h`. Under `ctx_idem`
+    // a share may take the whole context, the `&` with it, so `mix` would
+    // grow its own premise without end unless the goal it repeats is seen
+    // as such.
     const mm0_src =
         \\delimiter $ ( ) $;
         \\provable sort wff;
@@ -1147,7 +1151,7 @@ fn focusChainSuggestions(
         \\l1: $ (P C → (P D → P E)) , P C , P D ⊢ P E $ by auto?
     ;
     return suggestionsAtNeedle(arena, mm0_src, proof_src, "auto?", .{
-        .generate = .{ .enabled = true, .max_depth = max_depth },
+        .generate = .{ .enabled = true, .max_depth = max_depth, .ladder = true },
     });
 }
 
@@ -1270,7 +1274,7 @@ test "auto stack guard stops the search and reports exhaustion" {
         "auto?",
         .{
             .counters = &counters,
-            .generate = .{ .enabled = true, .stack_guard_bytes = 1 },
+            .generate = .{ .enabled = true, .ladder = true, .stack_guard_bytes = 1 },
         },
     );
     defer suggestions.deinit();

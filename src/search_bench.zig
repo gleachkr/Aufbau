@@ -91,13 +91,12 @@ const BenchOptions = struct {
     /// Content-keyed query-shape cache (Lever M-content); `--no-shape-cache`
     /// turns it off to measure its effect.
     shape_cache: bool = true,
-    /// The search core runs before the generation ladder
-    /// (`GenerateOptions.core`); `--no-core` leaves it out to measure the
-    /// ladder alone.
+    /// The search core (`GenerateOptions.core`); `--no-core` with
+    /// `--ladder` leaves it out to measure the ladder alone.
     core: bool = true,
-    /// `--core-only` leaves the generation ladder out to measure the core
-    /// alone (`GenerateOptions.ladder`).
-    ladder: bool = true,
+    /// `--ladder` runs the generation ladder after the core
+    /// (`GenerateOptions.ladder`).
+    ladder: bool = false,
     /// Discrimination/scaling sweep. When set, the
     /// scenario/frontier benches are skipped and the sweep runs instead.
     sweep: ?SweepSpec = null,
@@ -438,8 +437,8 @@ fn parseOptions(
             options.core = false;
             continue;
         }
-        if (std.mem.eql(u8, arg, "--core-only")) {
-            options.ladder = false;
+        if (std.mem.eql(u8, arg, "--ladder")) {
+            options.ladder = true;
             continue;
         }
         if (std.mem.eql(u8, arg, "--counters")) {
@@ -477,7 +476,7 @@ fn printUsage() !void {
             "       [--require-no-miss] [--retry-misses] [--max-k=N]\n" ++
             "       [--no-search-memo] [--no-deep-member-prune]\n" ++
             "       [--no-persist-negative]\n" ++
-            "       [--no-shape-cache] [--no-core] [--core-only]\n" ++
+            "       [--no-shape-cache] [--no-core] [--ladder]\n" ++
             "       [--gen-nodes=N] [--gen-fuel=N] [--phase5-fuel=N]\n" ++
             "       [--global-budget=TICKS] [--alloc-trap=MIB]\n" ++
             "       [--fwd-facts=N] [--fwd-layers=N] [--fwd-attempts=N]\n" ++

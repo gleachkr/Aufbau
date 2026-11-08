@@ -413,7 +413,7 @@ test "derived ref with universal meta matches a later concrete goal" {
         proof_src,
         "auto?",
         // The ladder alone: the search core proves it first, by `all_elim` backward.
-        .{ .counters = &counters, .generate = .{ .enabled = true, .core = false } },
+        .{ .counters = &counters, .generate = .{ .enabled = true, .core = false, .ladder = true } },
     );
     defer suggestions.deinit();
 
@@ -629,7 +629,7 @@ test "derived recipe through a binder def names its hidden variables from the @v
         proof_src,
         "auto?",
         // The ladder alone: the search core proves it first, by `all_elim` backward.
-        .{ .generate = .{ .enabled = true, .core = false } },
+        .{ .generate = .{ .enabled = true, .core = false, .ladder = true } },
     );
     defer suggestions.deinit();
 
@@ -680,7 +680,7 @@ test "derived recipe names a hidden variable apart from a sibling binding" {
         proof_src,
         "auto?",
         // The ladder alone: the search core proves it first, by `all_elim` backward.
-        .{ .counters = &counters, .generate = .{ .enabled = true, .core = false } },
+        .{ .counters = &counters, .generate = .{ .enabled = true, .core = false, .ladder = true } },
     );
     defer suggestions.deinit();
     try std.testing.expectEqual(types.SearchStatus.found, suggestions.status);
@@ -1439,7 +1439,7 @@ test "auto co-solves a context-member/succedent two-meta ax leaf" {
         mm0,
         proof_src,
         "auto?",
-        .{ .generate = .{ .enabled = true, .core = false } },
+        .{ .generate = .{ .enabled = true, .core = false, .ladder = true } },
     );
     defer suggestions.deinit();
 

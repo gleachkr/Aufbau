@@ -161,10 +161,8 @@ the proof must use a particular one. The core deepens until it finds a proof,
 the budget runs out, or a pass reaches no goal the limit stops, since a deeper
 pass would then find nothing either. A `depth:` the call sets ends it there. A
 goal the core does not take (one with an idempotent but non-commutative `@acui`
-combiner), or one it misses at its limit or stops on, goes on to the generation
-search, in what is left of the same work budget, to depth 6 unless `depth:` says
-otherwise.
-Either way the checker validates a proof before it is offered.
+combiner) is not searched.
+The checker validates a proof before it is offered.
 
 A suggestion from `exact?` or `auto?` names a rule argument only when the
 checker cannot infer it from the goal and the cited references, as with
@@ -426,8 +424,8 @@ The parameters (`depth`, `nodes`, `fuel` and `budget` for `auto?`;
 `iters` and `nodes` for `conversion?`), their defaults and their ranges are
 listed in the manual's
 [search parameters appendix](../manual/src/appendix-search-parameters.md).
-`depth` and `budget` bound both of `auto?`'s searches; `nodes` and `fuel`
-bound only the generation search.
+`depth` and `budget` bound the search core; `nodes` and `fuel` bound only
+the generation search, which no longer runs.
 
 The parameters scope to **that one placeholder** — the engine defaults
 never move. This is deliberate: the defaults are tuned so that the

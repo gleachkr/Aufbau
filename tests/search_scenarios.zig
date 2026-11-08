@@ -288,7 +288,7 @@ pub const scenarios = [_]Scenario{
         .expected_replacement = "imp_intro [and_intro " ++
             "(G := $ p ∧ q $, H := $ p ∧ q $) " ++
             "[and_elim_r [ax []], and_elim_l [ax []]]]",
-        .generate = .{ .enabled = true, .core = false },
+        .generate = .{ .enabled = true, .core = false, .ladder = true },
     },
     .{
         // Zermelo ND tautology over equality (probe): deep chain with eq rules.
@@ -406,16 +406,15 @@ pub const scenarios = [_]Scenario{
     .{
         // STAGE 5 toy (ambiguous member choices, deterministic order).
         // Both context members in the tagged finite domain fill the repeated
-        // fragment `?t ∈ ?t`. The open hint is too broad to return a concrete
-        // child conclusion, so Stage 5 enumerates both concrete witnesses;
-        // the suggestions are ranked in context-member order.
+        // fragment `?t ∈ ?t`: under the idempotent law `tag_member`'s `p`
+        // may be a member its `D` already holds. The first, `A ∈ A`, wins.
         .name = "stage5 ambiguous members auto? (deterministic order)",
         .mm0_path = "tests/search_bench_cases/zermelo_exists_intro_stage5.mm0",
         .proof_path = "tests/search_bench_cases/nd_exists_intro_ambiguous_auto.auf",
         .marker = "auto?",
-        .expected_replacement = "ex_intro (t := $ A $) [tag_member []]",
+        .expected_replacement = "ex_intro [tag_member (D := $ A e. A , B e. B $, p := $ A e. A $) []]",
         .generate = .{ .enabled = true, .max_depth = 6 },
-        .expected_suggestion_count = 2,
+        .expected_suggestion_count = 1,
     },
     .{
         // STAGE 5 negative control (ACUI unit). The empty context is the
@@ -445,7 +444,7 @@ pub const scenarios = [_]Scenario{
         .marker = "auto?",
         .expected_replacement = "union_intro (y := $ y $) [ax [], ax []]",
         // The search core proves it too, naming each `ax`'s context.
-        .generate = .{ .enabled = true, .core = false },
+        .generate = .{ .enabled = true, .core = false, .ladder = true },
     },
     .{
         // Multiplicative `ex_elim` with a non-trivial complement: the major
@@ -565,7 +564,7 @@ pub const scenarios = [_]Scenario{
         .proof_path = "tests/search_bench_cases/ml_add_comm_capstone_auto.auf",
         .marker = "auto?",
         .expected_replacement = "",
-        .generate = .{ .enabled = true, .max_depth = 6, .core = false },
+        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
         .expect_result = false,
         .expected_suggestion_count = 5,
     },
@@ -588,14 +587,15 @@ pub const scenarios = [_]Scenario{
             "ap_suc_ty [l15, l23, add_ty [l15, l17, l16], l22], id_sym_ty [l18, " ++
             "add_ty [l15, l17, l19], weaken [l7, suc_intro [l6]], " ++
             "add_suc_right [l15, l17, l16]]]], #2]",
-        .generate = .{ .enabled = true, .max_depth = 6, .core = false },
+        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
     },
     .{
         // add_comm with only the `g , k : Nat ⊢ …` lines left. The step
         // premise opens both `k` and `ih`; the first free `@vars` names
         // (sorted, `ih` before `k`) would swap them, and no line would fit.
         // The pool rung names them after the lines instead
-        // (`open_slot.assignRefNames`).
+        // (`open_slot.assignRefNames`). The search core misses it (martin_lof
+        // is parked), so the ladder runs alone.
         .name = "auto martin_lof add_comm step names auto?",
         .mm0_path = "tests/search_bench_cases/martin_lof_frontier.mm0",
         .proof_path = "tests/search_bench_cases/ml_add_comm_step_names_auto.auf",
@@ -625,7 +625,7 @@ pub const scenarios = [_]Scenario{
             "l6], suc_intro [l3]]], weaken [Id_form [l5, l6], suc_intro " ++
             "[l6]], weaken [Id_form [l5, l6], add_suc_right [l2, l4, " ++
             "l3]]]]], #2]",
-        .generate = .{ .enabled = true, .max_depth = 6 },
+        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
     },
     .{
         // martin_lof add_comm: rebuild the WHOLE tail of the `id_trans` DAG
@@ -650,7 +650,7 @@ pub const scenarios = [_]Scenario{
         .proof_path = "tests/search_bench_cases/ml_id_sym_ty_auto.auf",
         .marker = "auto?",
         .expected_replacement = "",
-        .generate = .{ .enabled = true, .max_depth = 6, .core = false },
+        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
         .expect_result = false,
         .expected_suggestion_count = 4,
     },
@@ -798,7 +798,7 @@ pub const scenarios = [_]Scenario{
         .proof_path = "tests/search_bench_cases/euclid_ex_intro_open_auto.auf",
         .marker = "auto?",
         .expected_replacement = "ex_intro (t := $ 0 $) [eq_intro_nd []]",
-        .generate = .{ .enabled = true, .max_depth = 6, .core = false },
+        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
     },
     .{
         // PHASE 5 (constrained backward MP) reclassification. Before 256e05d a
@@ -816,7 +816,7 @@ pub const scenarios = [_]Scenario{
         .proof_path = "tests/search_bench_cases/meta_plain_hyp_only.auf",
         .marker = "auto?",
         .expected_replacement = "plain_only_use [pred_K []]",
-        .generate = .{ .enabled = true, .max_depth = 6, .core = false },
+        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
     },
     .{
         // STAGE 4 negative control: an annotated rule whose deferred
@@ -926,7 +926,7 @@ pub const scenarios = [_]Scenario{
         .expected_replacement = "all_elim [all_elim (t := $ v $) [all_elim (t := $ u $, p := $ " ++
             "∀ a ∀ b (pair (pair g c) a = pair a b → c = b) $) [#1]]]",
         // The search core proves it too, by `all_elim` backward.
-        .generate = .{ .enabled = true, .max_depth = 6, .core = false },
+        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
     },
     .{
         // STAGE 8 realistic two-layer chain in the full euclid theory: the
@@ -965,7 +965,7 @@ pub const scenarios = [_]Scenario{
         .marker = "auto?",
         .expected_replacement = "le_iff_add [lt_implies_le_ax [and_elim_l [l1]]]",
         // The search core proves it too, through `pos_of_one_lt_ax`.
-        .generate = .{ .enabled = true, .max_depth = 6, .core = false },
+        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
     },
     .{
         // STAGES 4+7 composition, Hilbert style (minor premise in the pool):
@@ -1045,7 +1045,7 @@ pub const scenarios = [_]Scenario{
         .marker = "auto?",
         .expected_replacement = "imp_elim (a := $ P K $) " ++
             "[all_elim [#1], P_K_nd []]",
-        .generate = .{ .enabled = true, .max_depth = 6, .core = false },
+        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
     },
     .{
         // STAGE 8 saturation-loop stress (bounded, no result). `step` and

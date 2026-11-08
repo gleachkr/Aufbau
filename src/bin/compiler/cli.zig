@@ -85,13 +85,13 @@ const SearchCommand = struct {
     retries: usize = 0,
     depth: ?u64 = null,
     budget: ?u64 = null,
-    /// `--no-core`: leave the search core out, so only the generation
-    /// ladder runs (`GenerateOptions.core`). A development switch for
-    /// measuring the ladder alone, so the usage text does not list it.
+    /// `--no-core`: leave the search core out (`GenerateOptions.core`), so
+    /// with `--ladder` the generation ladder runs alone. A development
+    /// switch for measuring the ladder, so the usage text does not list it.
     core: bool = true,
-    /// `--core-only`: leave the generation ladder out, so only the search
-    /// core runs (`GenerateOptions.ladder`). Unlisted, like `--no-core`.
-    ladder: bool = true,
+    /// `--ladder`: run the generation ladder after the core
+    /// (`GenerateOptions.ladder`). Unlisted, like `--no-core`.
+    ladder: bool = false,
 };
 
 const JoinCommand = struct {
@@ -193,8 +193,8 @@ fn parseSearchFlag(
         search.budget = try flagNumber(argv, i);
     } else if (std.mem.eql(u8, arg, "--no-core")) {
         search.core = false;
-    } else if (std.mem.eql(u8, arg, "--core-only")) {
-        search.ladder = false;
+    } else if (std.mem.eql(u8, arg, "--ladder")) {
+        search.ladder = true;
     } else return false;
     return true;
 }

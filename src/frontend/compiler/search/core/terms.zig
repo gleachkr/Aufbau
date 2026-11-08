@@ -1588,9 +1588,13 @@ fn Matcher(comptime Sink: type) type {
                 after.index += 1;
                 return self.bag(after, next);
             }
+            // Under an idempotent law a member the match has fixed may be
+            // one an earlier part took (`tag_member`'s `p`, which its bound
+            // `D` holds).
+            const overlap = state.combiner.law.isIdempotent() and !Rules.templateHasUnboundBinder(part, self.bindings);
             for (state.goal, 0..) |member, at| {
                 const bit = @as(u64, 1) << @intCast(at);
-                if (state.used & bit != 0) continue;
+                if (state.used & bit != 0 and !overlap) continue;
                 var after = state;
                 after.used |= bit;
                 after.index += 1;

@@ -79,19 +79,6 @@ pub const guards = [_]FrontierGuard{
         .files = "tests/search_bench_cases/additive_fol.mm0:tests/search_bench_cases/additive_fol.auf",
         .mode = "depth",
     },
-    // Depth guard for the idempotent principal-retention pass (phase 4,
-    // `GenerationHook.allow_retain_principal` / `exact_split.buildEnumerator`).
-    // This goal is provable ONLY by keeping the conjunction `A∧B` in `lan`'s
-    // premise (a non-minimal ACUI complement `g , g = g`); minimal-complement
-    // pinning dead-ends. The only automated check that generation explores the
-    // non-minimal complement — breadth finds it through the pool ref and never
-    // exercises the split enumerator's retention path.
-    .{
-        .filter = "idem_complement_probe",
-        .files = "tests/search_bench_cases/idem_complement_probe.mm0:" ++
-            "tests/search_bench_cases/idem_complement_probe.auf",
-        .mode = "depth",
-    },
     // Depth guard for carrying an open witness through generated steps
     // (`backtrack.carriesAncestorWitness`): `ex_intro`'s child search must
     // close `imp_intro`/`all_intro` premises that carry its witness meta.

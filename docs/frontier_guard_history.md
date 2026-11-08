@@ -159,3 +159,12 @@ left out `ex_elim_sub`, whose `@recover` pattern and hole only its first
 premise fixes. They are now cuts that premise's fact fixes, and the witness
 is read off the second premise's hypothesis once both are proved. No guard
 pins a line now.
+
+When the generation search was turned off by default (2026-11-08), the
+`idem_complement_probe` guard was dropped. Its goal needs `lan`'s premise
+to keep the conjunction it takes apart, a rest binder under an idempotent
+context that also holds a member the rule's own formula took, and only the
+generation search's principal-retention phase tried that. The search core
+lets a member the match has fixed take one an earlier part took, which is
+what `tag_member`'s `D , p` needs, but it does not widen an unbound rest
+binder that way.

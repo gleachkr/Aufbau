@@ -1340,7 +1340,7 @@ test "auto? hands a generated context split to the checker as explicit bindings"
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
-        .generate = .{ .enabled = true, .core = false },
+        .generate = .{ .enabled = true, .core = false, .ladder = true },
     });
     defer suggestions.deinit();
     try expectOffered(suggestions.items, &.{"two (g := $ join (hyp B) (hyp A) $) [la [], lb []]"});
@@ -2864,7 +2864,7 @@ test "copy-instance prune keeps a proof that needs two instances" {
         mm0_src,
         proof_src,
         "auto?",
-        .{ .counters = &counters, .generate = .{ .enabled = true, .core = false } },
+        .{ .counters = &counters, .generate = .{ .enabled = true, .core = false, .ladder = true } },
     );
     defer suggestions.deinit();
 

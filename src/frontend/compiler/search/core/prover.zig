@@ -633,7 +633,7 @@ pub const Prover = struct {
         self.next_frame += 1;
         const close = Agenda{ .item = .{ .close = &frame }, .next = next };
         const level = if (goal.path) |above| above.level + 1 else 0;
-        const path = PathCell{ .expr = goal.expr, .level = level, .next = goal.path };
+        var path = PathCell{ .expr = goal.expr, .level = level, .next = goal.path };
         var cut_off = false;
         switch (try self.expand(&frame, &close, &path)) {
             .proved => return .proved,
@@ -940,7 +940,7 @@ pub const Prover = struct {
 
     /// Try every alternative for `frame`'s goal until one leads to a proof
     /// or a cut.
-    fn expand(self: *Prover, frame: *Frame, close: *const Agenda, path: *const PathCell) Error!Outcome {
+    fn expand(self: *Prover, frame: *Frame, close: *const Agenda, path: *PathCell) Error!Outcome {
         const goal = frame.goal;
         // Facts meet the goal and its normal form, and unification unfolds
         // definitions itself.
@@ -994,9 +994,13 @@ pub const Prover = struct {
                 if (!try self.wvars.bind(idx, value)) break;
             } else {
                 // With its shares bound, the goal may be one it was reached
-                // through.
+                // through, and the goals below it repeat it in this form:
+                // under an idempotent law a share may take the whole bag, so
+                // a safe rule could otherwise grow a goal without end.
                 const bound = try self.terms.resolveGoal(goal.expr);
                 if (self.repeats(path, bound)) continue;
+                path.expr = bound;
+                defer path.expr = goal.expr;
                 const outcome = try self.expandRules(frame, bound, close, path);
                 if (outcome != .failed) return outcome;
             }

@@ -33,8 +33,9 @@ ref index) so repeated queries in one theorem amortize.
   rule declaration order.
 - **`apply?`** → `apply.zig`: the rules whose conclusion matches the goal,
   probed against the checker.
-- **`auto?`** → `generate.zig:generateTopLevel`. The search core first (which
-  tries one-step proofs, then deepens), then the generation ladder: legacy
+- **`auto?`** → `generate.zig:generateTopLevel`. The search core (which
+  tries one-step proofs, then deepens); with `GenerateOptions.ladder`, off by
+  default, the generation ladder after it: legacy
   `backward/backtrack.zig:exactWithSession` under a `generator` hook that can
   *synthesize* sub-proofs for unmet hypotheses, with iterative deepening and a
   global fuel budget.
@@ -251,11 +252,13 @@ for *committing*. See the `@acui can be a subset` note.
 Before any of this, `generateTopLevel` hands a concrete goal to the search
 core (`core/`, `runCore`), in the same tick budget. A proof the core finds is
 the call's result (`gen_last_phase` = `ladder_phases.len + 1`, "the search
-core"); when it abstains, misses, or runs out of stack, the ladder below runs
-in what is left of the budget. With no `depth:` the core deepens until the
-budget runs out or a pass stops no goal at the limit (`Prover.depth_cut`), and
-the ladder stops at `GenerateOptions.ladder_depth`. `GenerateOptions.core =
-false` (`abc search --no-core`, bench `--no-core`) leaves the core out.
+core"). With `GenerateOptions.ladder` (off by default; `abc search --ladder`,
+bench `--ladder`), when the core abstains, misses, or runs out of stack, the
+ladder below runs in what is left of the budget. With no `depth:` the core
+deepens until the budget runs out or a pass stops no goal at the limit
+(`Prover.depth_cut`), and the ladder stops at `GenerateOptions.ladder_depth`.
+`GenerateOptions.core = false` (`--no-core`) leaves the core out, so with the
+ladder on the ladder runs alone.
 
 `generateTopLevel` runs **five** retry phases over single-depth passes
 (`runDepthPass`) inside `runPhaseLadder`, and a sixth outer retry against a
@@ -334,8 +337,8 @@ which the persisted-memo covering rule requires:
    Needed when a proof must retain the principal *and* its decomposition (a
    `lan`/`lim` premise that keeps `a∧b` alongside `a , b`) and the principal
    cannot be rebuilt. Broadens every additive split node, hence last and gated;
-   the minimal-complement majority never pays. Guarded by the
-   `idem_complement_probe` depth-frontier regression test. An `@auto eager`
+   the minimal-complement majority never pays. The search core does not
+   retain, so `idem_complement_probe` is found only with the ladder on. An `@auto eager`
    rule never retains: it is declared invertible, so the premises without
    the principal suffice. On tait this halves depth-frontier ticks. Nor does
    a rule whose premise restates the principal in a set context (`rex`'s

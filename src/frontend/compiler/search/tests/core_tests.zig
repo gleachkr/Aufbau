@@ -84,7 +84,8 @@ fn search(
 ) !types.SourceSuggestions {
     return suggestionsAtNeedle(arena, nd_rules ++ theorem, proof, "auto?", .{
         .counters = counters,
-        .generate = .{ .enabled = true, .core = core },
+        // Without the core, the ladder alone.
+        .generate = .{ .enabled = true, .core = core, .ladder = !core },
     });
 }
 
@@ -130,17 +131,17 @@ test "the search core closes a goal with a hypothesis that states it" {
     try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
 }
 
-test "a goal the search core cannot prove still runs the ladder" {
+test "with the ladder on, a goal the search core cannot prove runs the ladder" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try search(&arena,
+    var suggestions = try suggestionsAtNeedle(&arena, nd_rules ++
         \\theorem unprovable (a b: wff): $ ∅ ⊢ a → b $;
     ,
         \\unprovable
         \\----------
         \\l1: $ ∅ ⊢ a → b $ by auto?
-    , &counters, true);
+    , "auto?", .{ .counters = &counters, .generate = .{ .enabled = true, .ladder = true } });
     defer suggestions.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);

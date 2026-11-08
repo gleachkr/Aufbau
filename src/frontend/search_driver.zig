@@ -143,10 +143,10 @@ pub const Options = struct {
     retries: usize = 0,
     /// `auto?` parameters for every marker that does not set them itself.
     params: []const ProofScript.SearchParam = &.{},
-    /// Try the search core first (`GenerateOptions.core`).
+    /// Run the search core (`GenerateOptions.core`).
     core: bool = true,
     /// Run the generation ladder after it (`GenerateOptions.ladder`).
-    ladder: bool = true,
+    ladder: bool = false,
 };
 
 pub const Result = struct {

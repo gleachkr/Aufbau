@@ -130,6 +130,17 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Changed
 
+- `auto?` runs the search core alone: the generation search no longer takes
+  over a goal the core misses or does not take. On the bench corpus this
+  loses no proof. A goal the core does not take, one with an idempotent but
+  not commutative `@acui` combiner, is not searched, and `nodes` and `fuel`
+  bound nothing now. Two kinds of proof only the generation search found are
+  gone: two eliminations in a row from a hypothesis with no `@auto forward`
+  (`x ⊢ c` from `x ⊢ a ∧ (b ∧ c)`), which `@auto forward` reaches, and a step under an
+  idempotent context that keeps the formula it takes apart beside its parts
+  (`g , a ∧ b ⊢ c` from `g , a ∧ b , a , b ⊢ c`). `abc search` and the search
+  bench take `--ladder` to run the generation search after the core, until
+  it is removed.
 - A search stops after about 3 seconds at the default budget, down from about
   22. The work budget now also counts the search core's matching, comparing
   and term walks, which it used to miss, and its default is 2.3 units instead
@@ -137,14 +148,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   report suggests the `budget:` to retry with.
 - `auto?` has no depth limit by default. The search core deepens until it finds
   a proof, the work budget runs out, or a pass reaches no goal the limit stops,
-  since a deeper pass could then find nothing. `depth:` still sets a limit, and
-  then the generation search takes its turn when the core misses. The generation
-  search also runs when the core does not take the goal or stops. On the bench
-  corpus this finds 53 more proofs and 7 more theorems whole, with the slowest
-  search under 3 seconds. A search that used to stop at depth 6 may now use its
-  whole budget before it misses. Proofs only the generation search finds, such
-  as two eliminations in a row with no `@auto forward` (`a ∧ (b ∧ c) ⊢ c`), now
-  need `depth: 6`; 2 proofs on the corpus do.
+  since a deeper pass could then find nothing. `depth:` still sets a limit. On
+  the bench corpus this finds 53 more proofs and 7 more theorems whole, with
+  the slowest search under 3 seconds. A search that used to stop at depth 6 may
+  now use its whole budget before it misses.
 - When the search core has tried everything at every depth without finding a
   proof, and no limit cut it short, it searches once more with fewer limits on
   the unknowns a rule leaves to its premises: a premise holding one may then be
@@ -309,6 +316,15 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- `auto?` could recurse until its stack guard stopped it on an `@auto eager`
+  rule that splits an idempotent context (`mix`'s `g , h` in
+  `|- (a & b) , g , h`): a part may take the whole context, the `&` with it,
+  so each premise held the goal again with one more copy of a member. A goal
+  repeats the one it was reached through now whichever part of the context
+  it was given.
+- `auto?` did not apply a rule whose context names a formula its other part
+  already holds, such as `tag_member`'s `D , p ⊢ tag D p` with `p` one of
+  `D`'s members, though an idempotent context allows it.
 - `auto?` could not give a witness a variable the formula binds somewhere else:
   it refused `y` for `x` in `P x → ∀ y P y`, where `x` is not under the `∀`.
 - `auto?` treated a rule's `@freshen` as covering a variable the context holds
