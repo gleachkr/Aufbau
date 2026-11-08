@@ -101,9 +101,12 @@ particular term, as tableau provers do. A premise variable a rule's
 conclusion leaves open, such as the middle formula of a transitivity
 rule, is such an unknown too; while a goal holds it unchosen, only a
 hypothesis, an axiom, or a rule whose conclusion fixes it may prove that
-goal. The core unfolds a definition where a rule or another formula
-needs what it stands for, in a goal, a hypothesis, or a rule's own
-statement (except a definition with dummies there). It also tries a goal
+goal. Once the core has run out of proofs to try under that limit at
+every depth, it searches once more without it, so such a goal may also
+go to a rule that leaves the unknown to its own premises. The core
+unfolds a definition where a rule or another formula needs what it
+stands for, in a goal, a hypothesis, or a rule's own statement (except a
+definition with dummies there). It also tries a goal
 in its `@rewrite` normal form, so a premise a rule states as a redex (an
 induction rule's `sb_f x 0 p`) meets the hypotheses and rules for the
 form it reduces to. A part that holds a witness the core has not chosen

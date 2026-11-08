@@ -774,34 +774,23 @@ test "the search core unfolds a rule's definition to match a goal" {
 
 // `all_p` stated by an axiom: proving `∀ x P x` from it unfolds the
 // axiom's conclusion, whose dummy the core has no binder for
-// (`Terms.unfoldTemplate`).
+// (`Terms.unfoldTemplate`). Once the search relaxes, the core goes around
+// it: `imp_elim` cuts `all_p → P u`, a premise only a rule closes.
 const all_p_axiom =
     "def all_p {.y: obj}: wff = $ ∀ y P y $;\n" ++
     "axiom all_p_ax (g: ctx): $ g ⊢ all_p $;\n" ++
     "theorem all_p_x {x: obj}: $ ∅ ⊢ ∀ x P x ∧ ∀ x P x $;\n";
 
-test "a goal that needs a rule's definition with a dummy unfolded goes on to the ladder" {
+test "a goal that needs a rule's definition with a dummy unfolded is proved through a cut" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try ndFolSearch(&arena, all_p_axiom, "all_p_x", "∅ ⊢ ∀ x P x ∧ ∀ x P x", &counters, .{});
-    defer suggestions.deinit();
-
-    try std.testing.expect(suggestions.items.len > 0);
-    try std.testing.expect(counters.core_nodes > 0);
-    try std.testing.expect(!std.mem.eql(u8, "the search core", generate.phaseName(counters.gen_last_phase)));
-}
-
-test "with the ladder off, a goal the search core cannot prove has no proof" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var counters = types.SearchCounters{};
-    // The ladder proves this goal (test above).
     var suggestions = try ndFolSearch(&arena, all_p_axiom, "all_p_x", "∅ ⊢ ∀ x P x ∧ ∀ x P x", &counters, .{ .ladder = false });
     defer suggestions.deinit();
 
-    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
-    try std.testing.expect(counters.core_nodes > 0);
+    try std.testing.expect(suggestions.items.len > 0);
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
 // `imp_elim`'s `a` is a cut: the conclusion does not fix it.
@@ -1846,25 +1835,93 @@ test "a rule passes a goal's open cut to a premise a fact closes" {
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
-// On `and_l`'s premise `p ∧ ?b`, `and_i` would pass the cut on to its
+// On `and_t`'s premise `p ∧ ?b`, `and_i` would pass the cut on to its
 // premise `?b`, which every hypothesis closes; the core does not take it
-// (17 goals if it did).
+// (22 nodes if it did), relaxed or not. `and_t` cannot meet its own
+// premise, so the relaxed search ends too.
 test "a rule never passes an open cut to a premise that is the bare cut" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
     var suggestions = try search(&arena,
+        \\term T (a: wff): wff;
         \\axiom and_i (a b: wff): $ a $ > $ b $ > $ a ∧ b $;
-        \\axiom and_l (a b: wff): $ a ∧ b $ > $ a $;
-        \\theorem no_p (p q r s t u v: wff): $ q $ > $ r $ > $ s $ > $ t $ > $ u $ > $ v $ > $ p $;
+        \\axiom and_t (a b: wff): $ a ∧ b $ > $ T a $;
+        \\theorem no_p (p q r s t u v: wff): $ q $ > $ r $ > $ s $ > $ t $ > $ u $ > $ v $ > $ T p $;
     ,
         \\no_p
         \\----
-        \\l1: $ p $ by auto?
+        \\l1: $ T p $ by auto?
     , &counters, true);
     defer suggestions.deinit();
 
     try std.testing.expect(counters.core_nodes <= 12);
+}
+
+// `parent`'s premise `N ?x` holds its cut, and `child` passes it on to
+// `M ?x`, which no fact closes, only the rule `mark`. The search finds the
+// proof once it has run out of others and relaxes.
+test "a premise holding a passed cut takes rules once the search relaxes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try suggestionsAtNeedle(&arena,
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort obj;
+        \\term K: obj;
+        \\term M (x: obj): wff;
+        \\term N (x: obj): wff;
+        \\term C: wff;
+        \\axiom mark: $ M K $;
+        \\axiom child (x: obj): $ M x $ > $ N x $;
+        \\axiom parent (x: obj): $ N x $ > $ C $;
+        \\theorem t: $ C $;
+    ,
+        \\t
+        \\---
+        \\l1: $ C $ by auto?
+    , "auto?", .{
+        .counters = &counters,
+        .generate = .{ .enabled = true, .ladder = false },
+    });
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"parent [child [mark []]]"});
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+// `top`'s premise `N ?x` holds its cut, and `up`, a cut rule, would pass
+// it on to `P ?x ?y`, which the hypothesis closes. The search stacks the
+// cuts once it has run out of other proofs and relaxes.
+test "a cut rule passes a cut on once the search relaxes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try suggestionsAtNeedle(&arena,
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort obj;
+        \\term K: obj;
+        \\term L: obj;
+        \\term P (x y: obj): wff;
+        \\term N (x: obj): wff;
+        \\term C: wff;
+        \\axiom up (x y: obj): $ P x y $ > $ N x $;
+        \\axiom top (x: obj): $ N x $ > $ C $;
+        \\theorem t: $ P K L $ > $ C $;
+    ,
+        \\t
+        \\---
+        \\l1: $ C $ by auto?
+    , "auto?", .{
+        .counters = &counters,
+        .generate = .{ .enabled = true, .ladder = false },
+    });
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"top [up [#1]]"});
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
 // `syl`'s premise `?m → (a → c)` meets `a2i`'s conclusion

@@ -145,6 +145,16 @@ This file records notable user-facing changes to Aufbau. The project follows
   whole budget before it misses. Proofs only the generation search finds, such
   as two eliminations in a row with no `@auto forward` (`a ∧ (b ∧ c) ⊢ c`), now
   need `depth: 6`; 2 proofs on the corpus do.
+- When the search core has tried everything at every depth without finding a
+  proof, and no limit cut it short, it searches once more with fewer limits on
+  the unknowns a rule leaves to its premises: a premise holding one may then be
+  proved by rules as well as hypotheses, and a rule with unknowns of its own
+  may leave one to its premises too. This finds typing derivations whose
+  unknown type comes from a rule, such as those for Church lists and numerals in
+  `reynolds`. On the bench corpus it finds 31 more proofs and 4 more theorems
+  whole. 6 proofs of 4 `martin_lof` theorems that only the generation search
+  found are now missed, since the second search uses the budget first, and a
+  goal with no proof can now use the whole budget where it used to end early.
 - A theorem's or axiom's bound variable named only in dependency lists
   (`{k: set} (G: hyps k)` with no `k` in any hypothesis or the
   conclusion) is now reported as an unused parameter. Such a variable is

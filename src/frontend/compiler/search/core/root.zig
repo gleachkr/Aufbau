@@ -156,7 +156,10 @@ pub fn run(request: Request) !Result {
         if (try prover.solve(goal, depth)) {
             return .{ .found = .{ .application = close_out.found.?, .depth = depth } };
         }
-        if (!prover.depth_cut) break;
+        if (prover.depth_cut) continue;
+        if (prover.relaxed) break;
+        prover.relax();
+        depth = 0;
     }
     return .missed;
 }

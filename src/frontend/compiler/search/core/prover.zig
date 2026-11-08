@@ -57,6 +57,18 @@
 //! them, or one no fact might close and holding all of them, which a rule
 //! may fix where the first only guessed.
 //!
+//! Those limits on a passed cut keep the search small but lose proofs: of
+//! a premise holding it that only a rule closes, or of a cut only another
+//! cut rule fixes. So a search that runs out of alternatives at a depth
+//! without cutting a goal short there (`depth_cut`) runs once more from
+//! depth 1 without them (`relaxed`): a premise holding a passed cut takes
+//! rules too, whether or not a fact might close it, and a cut rule may
+//! pass one on. A premise that is the bare wvar stays barred. The first
+//! run's memos hold only under the limits, so the second starts without
+//! them. The first run is the search as it would be without the second,
+//! which only adds proofs; a run the depth limit or the budget stops never
+//! gets one.
+//!
 //! A bridge's premises are closed by facts only, never by a rule: the
 //! step costs no depth, and `weak`'s premise, with a fresh share for the
 //! part of the context it keeps, is a new goal each time, so a premise
@@ -357,6 +369,8 @@ pub const Prover = struct {
     /// one deeper than through the pass before, so that route misses the memo
     /// and searches the goal's rules.
     depth_cut: bool = false,
+    /// The limits on a passed cut are off (`relax`).
+    relaxed: bool = false,
     /// Per goal not keyed: the greatest depth at which it has no proof.
     failed: std.AutoHashMapUnmanaged(ExprId, usize) = .empty,
     /// The same per key of a keyed goal.
@@ -385,6 +399,19 @@ pub const Prover = struct {
     /// a failure depend on the path, and then it is not memoized.
     prune_floor: usize = no_prune,
     stats: Stats = .{},
+
+    /// Lift the limits on a passed cut for the rest of the run, and forget
+    /// what the search under them remembered.
+    pub fn relax(self: *Prover) void {
+        self.relaxed = true;
+        self.failed.clearRetainingCapacity();
+        self.failed_open.clearRetainingCapacity();
+        self.failed_shared.clearRetainingCapacity();
+        self.proved.clearRetainingCapacity();
+        self.proved_open.clearRetainingCapacity();
+        self.answers_open.clearRetainingCapacity();
+        self.answers_shared.clearRetainingCapacity();
+    }
 
     pub fn deinit(self: *Prover) void {
         self.failed.deinit(self.allocator);
@@ -889,8 +916,9 @@ pub const Prover = struct {
             }
         }
         if (goal.bridged != null) return .failed;
-        // While it holds a cut its step passed on, only a fact closes it.
-        if (goal.pass.len != 0) {
+        // While it holds a cut its step passed on, only a fact closes it,
+        // until the search relaxes.
+        if (goal.pass.len != 0 and !self.relaxed) {
             var open = std.ArrayListUnmanaged(u32).empty;
             defer open.deinit(self.allocator);
             try self.wvars.collectUnbound(self.allocator, goal.expr, &open);
@@ -1240,7 +1268,7 @@ pub const Prover = struct {
                 if (entry.role != .closer and entry.role != .bridge and !try self.bindsCut(applier.frame.cuts)) {
                     // A cut rule passing the goal's cut on would stack one
                     // guess on another.
-                    if (entry.cuts.len != 0) return .failed;
+                    if (entry.cuts.len != 0 and !self.relaxed) return .failed;
                     applier.pass = applier.frame.cuts;
                 }
                 const full = try self.arena.alloc(ExprId, bindings.len);
@@ -1322,7 +1350,7 @@ pub const Prover = struct {
                     held[at] = true;
                     holds = true;
                 };
-                if (!holds) continue;
+                if (!holds or self.relaxed) continue;
                 if (!try self.factMightEqual(expr.*)) return .failed;
             }
             for (applier.pass, held) |pass_wvar, is_held| {
