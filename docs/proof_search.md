@@ -118,7 +118,13 @@ is normalized with the witness standing for a fresh variable, which
 fixes the witness where the goal says what it is (`∀ x P x` gives `P C`
 by taking `t` to be `C`); a witness still open after that is kept clear
 of the formula's bound variables, as the fresh one was. A definition's
-bound variable counts as a fresh one too. A rule's conclusion gives an
+bound variable counts as a fresh one too. A quantifier rule's premise is
+the instance its `@view` states, the formula with the witness in place
+of the bound variable. A schematic formula that may depend on that
+variable (`p: wff x`) has no such instance to write, so only a hypothesis
+or axiom proves the premise then, and the core reads the witness off it
+as the checker reads the rule's `@recover` (`[x/u] p` gives `u`). A
+rule's conclusion gives an
 unknown the structure the rest of the conclusion fixes: `R a (f a)`
 against `R C ?t` makes `?t` be `f C`. It never invents one, so a
 conclusion part with a variable nothing else fixes does not meet an

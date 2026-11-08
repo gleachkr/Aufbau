@@ -146,3 +146,10 @@ schematic formula (`[x/t] (¬ p)` against `¬ [x/u] p`), which the core does
 not match; it spends the budget before the generation search, which finds
 them, runs. The guards pin these lines with `expect_miss`, which fails once
 a pinned line is found.
+
+The `nd_fol` lines came back the same day. The core built a quantifier
+rule's premise by putting the witness in place of the bound variable, and a
+schematic `p: wff x` holds `x` only by its dependency, so the premise lost
+the substitution. Such an instance now takes its premise from a fact and
+reads the witness off it as the checker reads the `@recover`; the four pins
+are gone. `exists_prime_factor` l41 stays pinned.

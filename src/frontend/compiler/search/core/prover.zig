@@ -268,6 +268,8 @@ const Agenda = struct {
         settle: *const Split,
         check: *const Check,
         abstract: *const Abstract,
+        /// The premises of a step whose witnesses are read back are proved.
+        recover: []const Recover,
         /// Some of an abstraction's premises are proved.
         ready: *const Ready,
         close: *Frame,
@@ -305,6 +307,20 @@ const Check = struct {
 const Abstract = struct {
     abstraction: *const catalog_mod.Abstraction,
     values: []const ExprId,
+};
+
+/// A witness of a step whose view instance has no syntactic form: with
+/// `p: wff x`, the instance `[x/t] p` is no swap of `t` for `x` in `p`.
+/// The premise holds a cut wvar for the view's source instead,
+/// which a closure fixes, and the witness is read off it once the premises
+/// are proved, as the checker reads the `@recover` (`Prover.readBack`).
+const Recover = struct {
+    witness: ExprId,
+    source: ExprId,
+    pattern: ExprId,
+    hole: ExprId,
+    /// The witness binder's sort.
+    sort_name: []const u8,
 };
 
 /// The view binders an abstraction's walk reads: its two sides, then its
@@ -463,6 +479,7 @@ pub const Prover = struct {
             .settle => |split| return self.settle(split, cell.next),
             .check => |check_cell| return self.check(check_cell, cell.next),
             .abstract => |made| return self.abstractTarget(made, cell.next),
+            .recover => |reads| return self.readBack(reads, cell.next),
             .ready => |ready| {
                 const made = ready.abstract;
                 if (!try self.inputsFixed(made.abstraction.decl, made.values, ready.rest)) return .failed;
@@ -1296,6 +1313,8 @@ pub const Prover = struct {
         var split: ?Split = null;
         var checks: []const Check = &.{};
         var abstract: ?Abstract = null;
+        // On the arena, as the step's other records are.
+        var reads = std.ArrayListUnmanaged(Recover).empty;
         if (!try self.sharesFit()) return .failed;
         applier.pass = &.{};
         const invented = self.terms.invented;
@@ -1320,7 +1339,7 @@ pub const Prover = struct {
                 const eigen_deps = self.eigenDeps(entry);
                 var shares = std.ArrayListUnmanaged(u32).empty;
                 try self.share(entry, eigen_deps, false, full, filled, &shares);
-                if (entry.view) |view| values = try self.witness(entry, view, full, filled, applier.target);
+                if (entry.view) |view| values = try self.witness(entry, view, full, filled, applier.target, &reads);
                 if (entry.cuts.len != 0) try self.cut(entry, full, filled, applier.target);
                 try self.share(entry, eigen_deps, true, full, filled, &shares);
                 // An abstraction's hole and target are made once its
@@ -1433,6 +1452,12 @@ pub const Prover = struct {
         if (abstract) |*made| {
             abstract_cell = .{ .item = .{ .abstract = made }, .next = head };
             head = &abstract_cell;
+        }
+        // A witness is read off its source once the premises fixed it.
+        var recover_cell: Agenda = undefined;
+        if (reads.items.len != 0) {
+            recover_cell = .{ .item = .{ .recover = reads.items }, .next = head };
+            head = &recover_cell;
         }
         var settle_cell: Agenda = undefined;
         if (split) |*made| {
@@ -1586,6 +1611,45 @@ pub const Prover = struct {
         const start = self.wvars.mark();
         defer self.wvars.rollback(start);
         if (!try self.wvars.bind(self.wvars.of(made.values[decl.target_view_idx]).?, value)) return .failed;
+        return self.run(next);
+    }
+
+    /// The premises of a step whose witnesses `reads` have no syntactic
+    /// instance are proved: each witness is read off the source a closure
+    /// fixed, as the checker reads the rule's `@recover`. A source or
+    /// pattern still holding a wvar would make the reading a guess, so the
+    /// step fails then. A pattern that accepts the source without showing
+    /// the hole leaves the witness to close-out.
+    fn readBack(self: *Prover, reads: []const Recover, next: ?*const Agenda) Error!Outcome {
+        const start = self.wvars.mark();
+        defer self.wvars.rollback(start);
+        for (reads) |read| {
+            const source = try self.terms.resolveGoal(read.source);
+            const pattern = try self.terms.resolveGoal(read.pattern);
+            if (try self.wvars.holdsWVar(source) or try self.wvars.holdsWVar(pattern)) return .failed;
+            const reading = DerivedBindings.concreteRecoverCandidate(
+                self.terms.theorem,
+                self.context.env,
+                self.context.registry,
+                source,
+                pattern,
+                self.wvars.resolve(read.hole),
+                read.sort_name,
+                false,
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return .failed,
+            };
+            const value = switch (reading) {
+                .found => |found| found,
+                .vacuous => continue,
+                .none => return .failed,
+            };
+            const target = self.wvars.resolve(read.witness);
+            if (self.wvars.of(target)) |idx| {
+                if (!try self.wvars.bind(idx, value)) return .failed;
+            } else if (target != value) return .failed;
+        }
         return self.run(next);
     }
 
@@ -1812,7 +1876,9 @@ pub const Prover = struct {
 
     /// Fill `entry`'s witnesses in `full` (a fresh wvar for each γ, an
     /// eigenvariable introduced at `goal` for each δ) and return the view's
-    /// binder values.
+    /// binder values. A witness whose instance has no syntactic form
+    /// (`Terms.swap`) gets a cut wvar for its source instead, and goes on
+    /// `reads`.
     fn witness(
         self: *Prover,
         entry: *const catalog_mod.Rule,
@@ -1820,6 +1886,7 @@ pub const Prover = struct {
         full: []ExprId,
         filled: []bool,
         goal: ExprId,
+        reads: *std.ArrayListUnmanaged(Recover),
     ) Error![]const ExprId {
         const rule = &self.context.env.rules.items[entry.rule_id];
         const patterns = try self.arena.alloc(ExprId, entry.witnesses.len);
@@ -1841,7 +1908,18 @@ pub const Prover = struct {
             if (mapped) |arg| value.* = full[arg];
         }
         for (entry.witnesses, patterns) |w, pattern| {
-            values[w.source] = try self.terms.swap(pattern, full[w.hole], full[w.arg]);
+            if (try self.terms.swap(pattern, full[w.hole], full[w.arg])) |instance| {
+                values[w.source] = instance;
+                continue;
+            }
+            values[w.source] = try self.wvars.mint(view.arg_infos[w.source].sort_name, &.{}, true);
+            try reads.append(self.arena, .{
+                .witness = full[w.arg],
+                .source = values[w.source],
+                .pattern = pattern,
+                .hole = full[w.hole],
+                .sort_name = rule.args[w.arg].sort_name,
+            });
         }
         return values;
     }

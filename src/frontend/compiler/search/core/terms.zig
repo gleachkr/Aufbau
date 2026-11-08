@@ -606,19 +606,22 @@ pub const Terms = struct {
     /// `pattern` with each free occurrence of the variable `hole` replaced
     /// by `value`, canonical: the instance a quantifier rule's view states.
     /// An occurrence under a binder of `hole` belongs to that binder and
-    /// stays.
-    pub fn swap(self: *Terms, pattern: ExprId, hole: ExprId, value: ExprId) Error!ExprId {
-        return self.canonical(try self.swapWalk(pattern, hole, value, self.wvars.sortOf(value)));
+    /// stays. Null when the pattern holds a variable that depends on `hole`
+    /// (`p` in `p: wff x`): the instance has no syntactic form then.
+    pub fn swap(self: *Terms, pattern: ExprId, hole: ExprId, value: ExprId) Error!?ExprId {
+        const swapped = (try self.swapWalk(pattern, hole, value, self.wvars.sortOf(value))) orelse return null;
+        return try self.canonical(swapped);
     }
 
     /// A coercion chain around `hole` ending in `value`'s sort (`v2t x` for
     /// a term in place of the variable `x`) is replaced whole, as the
     /// checker reads a cross-sort `@recover` (`derived_bindings.zig`).
-    fn swapWalk(self: *Terms, expr: ExprId, hole: ExprId, value: ExprId, value_sort: ?[]const u8) Error!ExprId {
+    fn swapWalk(self: *Terms, expr: ExprId, hole: ExprId, value: ExprId, value_sort: ?[]const u8) Error!?ExprId {
         if (expr == hole) return value;
         const app = switch (self.theorem.interner.node(expr).*) {
             .app => |app| app,
-            .variable, .placeholder => return expr,
+            .variable => return if (self.wvars.dependsOn(expr, hole)) null else expr,
+            .placeholder => return expr,
         };
         if (app.args.len > catalog.max_args) return error.Unsupported;
         const decl = &self.context.env.terms.items[app.term_id];
@@ -629,11 +632,11 @@ pub const Terms = struct {
         var args: [catalog.max_args]ExprId = undefined;
         var changed = false;
         for (app.args, 0..) |arg, idx| {
-            args[idx] = try self.swapWalk(arg, hole, value, value_sort);
+            args[idx] = (try self.swapWalk(arg, hole, value, value_sort)) orelse return null;
             if (args[idx] != arg) changed = true;
         }
         if (!changed) return expr;
-        return self.theorem.interner.internApp(app.term_id, args[0..app.args.len]);
+        return try self.theorem.interner.internApp(app.term_id, args[0..app.args.len]);
     }
 
     /// Whether `expr` is a chain of one or more coercions around `hole`.

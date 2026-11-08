@@ -429,6 +429,48 @@ test "the search core names a witness the proof leaves open" {
     try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
 }
 
+test "an eigenvariable is read off the fact that closes a schematic instance" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `[x/y] p` with `p: wff x` has no syntactic instance: the premise's
+    // formula is fixed by the hypothesis, and `y` read back from it.
+    var suggestions = try ndFolSearch(
+        &arena,
+        "theorem sch_all {x u: obj} (g: ctx x) (p: wff x): $ g ⊢ [x/u] p $ > $ g ⊢ ∀ x p $;\n",
+        "sch_all",
+        "g ⊢ ∀ x p",
+        &counters,
+        .{ .ladder = false },
+    );
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"all_intro [#1]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
+test "a witness is read off a fact whose substitution the theory pushed inward" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // The hypothesis `¬ [x/u] p` is `[x/t] (¬ p)` with the substitution
+    // pushed inward: `@recover` reads `t` off the `[x/u]` around `p`.
+    var suggestions = try ndFolSearch(
+        &arena,
+        "theorem sch_ex_not {x u: obj} (g: ctx x) (p: wff x): $ g ⊢ ¬ [x/u] p $ > $ g ⊢ ∃ x (¬ p) $;\n",
+        "sch_ex_not",
+        "g ⊢ ∃ x (¬ p)",
+        &counters,
+        .{ .ladder = false },
+    );
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"ex_intro [#1]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
 test "a witness never takes an eigenvariable introduced after it" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

@@ -695,11 +695,6 @@ pub const guards = [_]FrontierGuard{
         .files = "tests/search_bench_cases/nd_fol.mm0:" ++
             "tests/search_bench_cases/nd_fol.auf",
         .mode = "breadth",
-        // `ex_intro [l1]` with l1 `¬ [x/u] p` for `[x/t] (¬ p)`, and
-        // `all_intro [l5]`: the search core does not match a substitution
-        // into a schematic formula, and spends the budget before the ladder,
-        // which finds them, runs.
-        .expect_miss = "not_all_left/l2,not_all_left/l6,not_ex_left/l2,not_ex_left/l6",
     },
     // One FULL depth guard per search shape: eager intros with imp_left
     // chains (s_comb), raa + negation (cases_classical), or_left splits

@@ -167,18 +167,19 @@ This file records notable user-facing changes to Aufbau. The project follows
   meets a rule whose conclusion is a definition that unfolds to the goal, and
   a definition that drops one of its arguments in its body is compared
   unfolded. Proofs come fewest nested steps first, then in the order the
-  theory declares their rules. On the bench corpus `exact?` finds 9 lines it
-  missed and misses 7 it found, gives the expected proof first on 22 more, and
-  its slowest call drops from 58 ms to 5 ms. The 7 are a rule whose `@recover`
+  theory declares their rules. A quantifier rule whose `@view` instance has
+  no syntactic form, a schematic formula that may depend on the bound
+  variable (`p: wff x` in `ex_intro`'s `[x/t] p`), takes its premise from a
+  hypothesis or axiom, and the witness is read off it as the checker reads
+  the rule's `@recover`. On the bench corpus `exact?` finds 9 lines it missed
+  and misses 5 it found, gives the expected proof first on 23 more, and its
+  slowest call drops from 58 ms to 5 ms. The 5 are a rule whose `@recover`
   witness a premise fixes rather than the conclusion (`ex_elim_sub` in
-  `euclid`, 3 lines), an instance stated through a schematic substitution
-  (`[x/t](¬P)` with `P` depending on `x`, 2 lines), and 2 `martin_lof` lines;
-  `auto?` still finds 4 of them. `auto?` now tries one-step proofs before it
-  deepens, and no longer runs a separate direct pass first; 3 of its proofs on
-  the corpus (2 in `euclid`'s `not_forall`, 1 in `exists_prime_factor`) are
-  now missed, as are 4 lines of `nd_fol`'s derived left rules, which the
-  generation search finds but no longer gets the budget for. The `exact?` miss
-  report says how many references were in reach.
+  `euclid`, 3 lines) and 2 `martin_lof` lines; `auto?` still finds 4 of them.
+  `auto?` now tries one-step proofs before it deepens, and no longer runs a
+  separate direct pass first; 1 of its proofs on the corpus
+  (`exists_prime_factor` in `euclid`) is now missed. The `exact?` miss report
+  says how many references were in reach.
 - A theorem's or axiom's bound variable named only in dependency lists
   (`{k: set} (G: hyps k)` with no `k` in any hypothesis or the
   conclusion) is now reported as an unused parameter. Such a variable is

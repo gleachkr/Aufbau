@@ -17,7 +17,10 @@
 //!   is not a bound variable is γ (`all_left`'s `t`): it becomes a fresh
 //!   witness variable. A bound one is δ (`all_intro`'s `y`), an
 //!   eigenvariable. Such a rule's premises are the view's, so a premise
-//!   holds the instance itself, not a substitution redex;
+//!   holds the instance itself, not a substitution redex. An instance with
+//!   no syntactic form (`p: wff x` holds `x` only by its dependency) is a
+//!   cut wvar a closure fixes, and the witness is read off it as the
+//!   checker reads the `@recover` (`Prover.readBack`);
 //! - in a rule without a view, a **cut** (`imp_trans`'s `q`, `t_app`'s
 //!   `A`): a binder that is not bound becomes a fresh witness variable,
 //!   which only a premise's closure binds. A bound one (`subset_intro`'s
