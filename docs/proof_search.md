@@ -343,6 +343,11 @@ distinguishes the cases, because they call for different responses:
   the budget grows with the depth because a deeper search spends more.
   If that fails too, make the space richer: prove an intermediate lemma
   line for the pool, or enroll rules with `@auto` annotations.
+- **"no proof found. The search core ran out of alternatives at every
+  depth (… goals expanded) …"**: the search core tried every rule it can
+  use at every depth, and no limit cut it short, so no retry is
+  suggested: a larger search would find nothing more. Make the space
+  richer as above.
 - **"the search was cut short: …"**: one or more limits stopped the
   search before it finished, so the empty result is *inconclusive*. The
   report names every limit that was hit, and usually there are several:

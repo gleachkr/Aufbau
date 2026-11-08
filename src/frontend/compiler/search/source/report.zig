@@ -270,7 +270,26 @@ fn writeStatusDetail(
     switch (status) {
         .found => unreachable,
         .miss => {
-            if (generation_ran) {
+            if (generation_ran and report.core) {
+                if (report.exhausted) {
+                    try w.print(
+                        "no proof found. The search core ran out of " ++
+                            "alternatives at every depth ({d} goals " ++
+                            "expanded), so a proof, if one exists, needs a " ++
+                            "rule the search cannot use backward here.",
+                        .{counters.core_nodes},
+                    );
+                } else {
+                    try w.print(
+                        "no proof found within depth {d} ({d} goals " ++
+                            "expanded), so a proof, if one exists, is deeper " ++
+                            "or needs a rule the search cannot use backward " ++
+                            "here.",
+                        .{ gen.ladderDepth(), counters.core_nodes },
+                    );
+                }
+                if (retry) |r| try writeRetryAdvice(w, keyword, r, false);
+            } else if (generation_ran) {
                 try w.print(
                     "no proof found within depth {d}. The search space was " ++
                         "exhausted ({d} applications validated: {d} " ++
@@ -303,16 +322,15 @@ fn writeStatusDetail(
                 // the process stack itself), so the actionable advice is to
                 // shrink the search, not to grow a budget.
                 try w.print(
-                    "stopped by the call-stack guard during {s} at depth " ++
-                        "{d} of {d}: one search branch recursed deep " ++
-                        "enough to risk exhausting the process stack and " ++
-                        "was abandoned. A proof may still exist — try a " ++
-                        "smaller goal or prove an intermediate lemma first.",
-                    .{
-                        generate_mod.phaseName(counters.gen_last_phase),
-                        counters.gen_last_depth,
-                        gen.ladderDepth(),
-                    },
+                    "stopped by the call-stack guard during {s} at depth {d}",
+                    .{ generate_mod.phaseName(counters.gen_last_phase), counters.gen_last_depth },
+                );
+                if (hasDepthLimit(report, gen)) try w.print(" of {d}", .{gen.ladderDepth()});
+                try w.writeAll(
+                    ": one search branch recursed deep enough to risk " ++
+                        "exhausting the process stack and was abandoned. A " ++
+                        "proof may still exist — try a smaller goal or prove " ++
+                        "an intermediate lemma first.",
                 );
             } else {
                 // Every limit that was hit, not just the first: they bind
@@ -339,10 +357,7 @@ fn writeStatusDetail(
                                 counters.gen_last_depth,
                             },
                         );
-                        // By default only the ladder has a depth limit.
-                        if (gen.max_depth != null or counters.gen_last_phase != generate_mod.search_core_phase) {
-                            try w.print(" of {d}", .{gen.ladderDepth()});
-                        }
+                        if (hasDepthLimit(report, gen)) try w.print(" of {d}", .{gen.ladderDepth()});
                     } else {
                         try w.print(
                             "the per-call work budget (~{d}s of work) ran out " ++
@@ -378,10 +393,14 @@ fn writeStatusDetail(
                             "fixpoint, so the derived-fact pool is incomplete",
                     );
                 }
-                try w.print(
-                    ". {d} applications validated ({d} accepted).",
-                    .{ validated, accepted },
-                );
+                if (report.core) {
+                    try w.print(". {d} goals expanded.", .{counters.core_nodes});
+                } else {
+                    try w.print(
+                        ". {d} applications validated ({d} accepted).",
+                        .{ validated, accepted },
+                    );
+                }
                 if (generation_ran and gen.max_depth != null and
                     report.searchedBelowDepthLimit(gen.ladderDepth()))
                 {
@@ -416,6 +435,12 @@ fn writeStatusDetail(
     // (attempts ≠ accepts — a rule tried 500 times with 0 accepted is a
     // reject-flood, the usual budget sink). Only recorded under `collect`.
     try appendTopRuleAttempts(w, counters);
+}
+
+/// Whether the search that ran last had a depth limit: by default only the
+/// ladder has one (`GenerateOptions.coreDepth`).
+fn hasDepthLimit(report: miss.MissReport, gen: types.GenerateOptions) bool {
+    return !report.core or gen.coreDepth() != null;
 }
 
 /// " Try 'auto? (nodes: 512, budget: 6)'." — on a cut-short miss, with

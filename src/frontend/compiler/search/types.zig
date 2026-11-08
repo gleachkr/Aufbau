@@ -509,6 +509,20 @@ pub const SearchRuntime = struct {
     deep_member_prune_enabled: bool = false,
 };
 
+/// How a search core run that found no proof ended
+/// (`SearchCounters.core_end`).
+pub const CoreEnd = enum {
+    /// It searched every depth up to `max_depth`, so the proof may be
+    /// deeper.
+    depth_limit,
+    /// It ran out of alternatives at every depth, with and without the
+    /// limits on a passed cut: no limit hid a proof from it.
+    exhausted,
+    budget,
+    /// The call-stack guard stopped one branch, and with it the run.
+    stack,
+};
+
 /// Search statistics: a value-only observation sink. Every field is a plain
 /// count, flag, or duration; nothing the search DOES depends on this block
 /// (policy and memos travel in `SearchRuntime`), and it holds no pointers, so
@@ -601,6 +615,10 @@ pub const SearchCounters = struct {
     /// expanded, and finished proofs the checker rejected at close-out.
     core_nodes: usize = 0,
     core_rejects: usize = 0,
+    /// How the search core's run ended without a proof; null when it did
+    /// not run, abstained, or found one. Read by `miss.MissReport` while the
+    /// core is the last search to run (`gen_last_phase`).
+    core_end: ?CoreEnd = null,
     rule_index_build_ns: u64 = 0,
     ref_index_build_ns: u64 = 0,
     shape_emission_ns: u64 = 0,

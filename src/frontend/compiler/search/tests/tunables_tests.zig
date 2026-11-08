@@ -208,7 +208,8 @@ test "auto? miss detail reports the exhausted space" {
         \\----
         \\l1: $ S $ by auto? (depth: 3)
     , .{
-        .generate = .{ .enabled = true },
+        // The ladder's report: the core's is the next test's.
+        .generate = .{ .enabled = true, .ladder = true },
         .status_detail = true,
         .counters = &counters,
     });
@@ -309,7 +310,7 @@ test "auto? fuel exhaustion is reported as truncation with a fuel hint" {
         \\t
         \\----
         \\l1: $ R $ by auto? (fuel: 1)
-    , .{ .generate = .{ .enabled = true, .core = false }, .status_detail = true });
+    , .{ .generate = .{ .enabled = true, .core = false, .ladder = true }, .status_detail = true });
     defer starved.deinit();
     try std.testing.expectEqual(
         types.SearchStatus.budget_exhausted,
@@ -341,7 +342,7 @@ test "auto? node-cap truncation is reported as truncation with a nodes hint" {
         \\l1: $ R $ by auto? (nodes: 1)
     , .{
         // The node cap bounds the ladder, so the search core is off.
-        .generate = .{ .enabled = true, .core = false },
+        .generate = .{ .enabled = true, .core = false, .ladder = true },
         .status_detail = true,
         .counters = &counters,
     });
@@ -519,6 +520,101 @@ test "miss retry leaves an uncapped budget uncapped" {
         .{ .global_budget = null },
     ) orelse return error.MissingRetry;
     try std.testing.expectEqual(miss_mod.Retry{ .nodes = 512 }, retry);
+}
+
+test "a search core miss that ran out of alternatives gets no retry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // No rule concludes `S`, so the core runs out of alternatives at depth
+    // 1, with and without the limits on a passed cut, and no limit hid a
+    // proof.
+    var counters = types.SearchCounters{};
+    var missed = try tunableChainSuggestions(&arena,
+        \\ts
+        \\----
+        \\l1: $ S $ by auto?
+    , .{
+        .generate = .{ .enabled = true, .ladder = false },
+        .status_detail = true,
+        .counters = &counters,
+    });
+    defer missed.deinit();
+    try std.testing.expectEqual(types.SearchStatus.miss, missed.status);
+    try std.testing.expectEqual(@as(?types.CoreEnd, .exhausted), counters.core_end);
+    const detail = missed.status_detail orelse return error.MissingStatusDetail;
+    try std.testing.expect(std.mem.indexOf(u8, detail, "ran out of alternatives at every depth") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "Try") == null);
+    try std.testing.expectEqual(@as(?types.SourceSuggestion, null), missed.retry);
+}
+
+test "a search core miss at the call's depth limit suggests more depth" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // The chain to `R` takes two steps, so depth 1 cuts it short.
+    var counters = types.SearchCounters{};
+    var narrowed = try tunableChainSuggestions(&arena,
+        \\t
+        \\----
+        \\l1: $ R $ by auto? (depth: 1)
+    , .{
+        .generate = .{ .enabled = true, .ladder = false },
+        .status_detail = true,
+        .counters = &counters,
+    });
+    defer narrowed.deinit();
+    try std.testing.expectEqual(types.SearchStatus.miss, narrowed.status);
+    try std.testing.expectEqual(@as(?types.CoreEnd, .depth_limit), counters.core_end);
+    const detail = narrowed.status_detail orelse return error.MissingStatusDetail;
+    try std.testing.expect(std.mem.indexOf(u8, detail, "no proof found within depth 1") != null);
+    const retry = narrowed.retry orelse return error.MissingRetry;
+    try std.testing.expectEqualStrings("auto? (depth: 3, budget: 6)", retry.replacement);
+}
+
+test "the search core's stack guard is reported, with no retry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // A 1-byte guard trips at the core's first check.
+    var counters = types.SearchCounters{};
+    var stopped = try tunableChainSuggestions(&arena,
+        \\t
+        \\----
+        \\l1: $ R $ by auto?
+    , .{
+        .generate = .{ .enabled = true, .ladder = false, .stack_guard_bytes = 1 },
+        .status_detail = true,
+        .counters = &counters,
+    });
+    defer stopped.deinit();
+    try std.testing.expectEqual(types.SearchStatus.budget_exhausted, stopped.status);
+    try std.testing.expectEqual(@as(?types.CoreEnd, .stack), counters.core_end);
+    const detail = stopped.status_detail orelse return error.MissingStatusDetail;
+    try std.testing.expect(std.mem.indexOf(u8, detail, "stopped by the call-stack guard during the search core at depth 1:") != null);
+    try std.testing.expectEqual(@as(?types.SourceSuggestion, null), stopped.retry);
+}
+
+test "the search core's budget stop at the depth limit suggests more depth" {
+    const at_limit = try budgetDetail(.{
+        .work_budget_exhausted = true,
+        .gen_last_phase = generate.search_core_phase,
+        .gen_last_depth = 6,
+        .core_end = .budget,
+    });
+    defer std.testing.allocator.free(at_limit);
+    try std.testing.expect(std.mem.indexOf(u8, at_limit, "ran out during the search core at depth 6 of 6") != null);
+    try std.testing.expect(std.mem.indexOf(u8, at_limit, "Every depth below 6 was searched") != null);
+    try std.testing.expect(std.mem.indexOf(u8, at_limit, "try 'auto? (depth: 8, budget: 12)'") != null);
+
+    const before = try budgetDetail(.{
+        .work_budget_exhausted = true,
+        .gen_last_phase = generate.search_core_phase,
+        .gen_last_depth = 5,
+        .core_end = .budget,
+    });
+    defer std.testing.allocator.free(before);
+    try std.testing.expect(std.mem.indexOf(u8, before, "try 'auto? (budget: 12)'") != null);
 }
 
 test "searchPlaceholders carries parsed search params" {

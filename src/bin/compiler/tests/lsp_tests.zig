@@ -1086,8 +1086,11 @@ test "LSP code action offers a retry with raised limits after an auto? miss" {
     try handler.putDocument(mm0_uri,
         \\provable sort wff;
         \\term top: wff;
+        \\term mid: wff;
         \\term bot: wff;
         \\axiom top_i: $ top $;
+        \\axiom top_mid: $ top $ > $ mid $;
+        \\axiom mid_bot: $ mid $ > $ bot $;
         \\theorem main: $ top $;
     , 1);
     try handler.putDocument(proof_uri, proof_text, 1);
@@ -1100,8 +1103,9 @@ test "LSP code action offers a retry with raised limits after an auto? miss" {
             try codeActionParamsAt(proof_uri, proof_text, "auto?"),
         ),
     );
-    // The search exhausted depth 1, so the retry raises depth and, since a
-    // deeper search spends more, the budget with it.
+    // The proof is two steps deep, so depth 1 cuts the search short: the
+    // retry raises depth and, since a deeper search spends more, the budget
+    // with it.
     const action = codeActionWithReplacement(
         actions,
         proof_uri,

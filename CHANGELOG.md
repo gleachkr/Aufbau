@@ -155,6 +155,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   whole. 6 proofs of 4 `martin_lof` theorems that only the generation search
   found are now missed, since the second search uses the budget first, and a
   goal with no proof can now use the whole budget where it used to end early.
+- A failed `auto?` that the search core ended reports how it ended. A core
+  that tried everything at every depth says so and suggests no retry, since no
+  limit hid a proof from it; one that reached the call's depth limit, or spent
+  the budget at it, suggests more depth along with more budget; and one the
+  call-stack guard stopped says so. Run without the generation search, such a
+  miss used to read as one that never searched, with no retry.
 - A theorem's or axiom's bound variable named only in dependency lists
   (`{k: set} (G: hyps k)` with no `k` in any hypothesis or the
   conclusion) is now reported as an unused parameter. Such a variable is

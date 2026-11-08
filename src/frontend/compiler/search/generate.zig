@@ -564,15 +564,13 @@ fn runCore(
         .out = driver.arena,
         .scratch = driver.scratch,
     }) catch |err| switch (err) {
-        error.SearchBudgetExhausted => {
-            if (driver.counters) |c| c.gen_last_phase = search_core_phase;
-            return;
-        },
-        error.SearchStackExhausted => return,
+        error.SearchBudgetExhausted => return endCore(driver, .budget),
+        error.SearchStackExhausted => return endCore(driver, .stack),
         else => |e| return e,
     };
     switch (result) {
-        .abstained, .missed => {},
+        .abstained => {},
+        .missed => |missed| endCore(driver, if (missed.exhausted) .exhausted else .depth_limit),
         .found => |found| {
             if (driver.counters) |c| {
                 c.gen_last_depth = found.depth;
@@ -583,6 +581,13 @@ fn runCore(
             try applications.append(driver.arena, try cloneApplication(driver.arena, found.application));
         },
     }
+}
+
+/// Record how the core's run ended without a proof, for the miss report.
+fn endCore(driver: *Driver, end: types.CoreEnd) void {
+    const c = driver.counters orelse return;
+    c.gen_last_phase = search_core_phase;
+    c.core_end = end;
 }
 
 /// A fresh meta of the hole's sort for each hole of a holey line assertion.
@@ -690,8 +695,8 @@ const ladder_phases = [_]Phase{
     .{ .name = "constrained modus ponens", .split = true, .retain_principal = true, .constrained_mp = true },
 };
 
-/// `SearchCounters.gen_last_phase` when the search core found the proof or
-/// spent the budget.
+/// `SearchCounters.gen_last_phase` when the search core ran last: it found
+/// the proof, or ran without one and the ladder did not run after it.
 pub const search_core_phase = ladder_phases.len + 1;
 
 /// The name of ladder phase `phase_1based` (`SearchCounters.gen_last_phase`).

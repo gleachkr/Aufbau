@@ -75,8 +75,9 @@ pub const Request = struct {
 pub const Result = union(enum) {
     /// The goal is outside what the core searches.
     abstained,
-    /// No proof within `max_depth`, or none at any depth.
-    missed,
+    /// No proof: either none within `max_depth`, every depth up to it
+    /// searched, or none at any depth (`exhausted`, `types.CoreEnd`).
+    missed: struct { exhausted: bool },
     found: struct { application: RuleApplication, depth: usize },
 };
 
@@ -157,11 +158,11 @@ pub fn run(request: Request) !Result {
             return .{ .found = .{ .application = close_out.found.?, .depth = depth } };
         }
         if (prover.depth_cut) continue;
-        if (prover.relaxed) break;
+        if (prover.relaxed) return .{ .missed = .{ .exhausted = true } };
         prover.relax();
         depth = 0;
     }
-    return .missed;
+    return .{ .missed = .{ .exhausted = false } };
 }
 
 /// A hole's wvar, minted before the search starts (`WVars.mintHole`).
