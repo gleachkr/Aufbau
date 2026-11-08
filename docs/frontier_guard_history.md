@@ -153,3 +153,9 @@ schematic `p: wff x` holds `x` only by its dependency, so the premise lost
 the substitution. Such an instance now takes its premise from a fact and
 reads the witness off it as the checker reads the `@recover`; the four pins
 are gone. `exists_prime_factor` l41 stays pinned.
+
+`exists_prime_factor` l41 came back on 2026-11-08 too. The core's catalog
+left out `ex_elim_sub`, whose `@recover` pattern and hole only its first
+premise fixes. They are now cuts that premise's fact fixes, and the witness
+is read off the second premise's hypothesis once both are proved. No guard
+pins a line now.

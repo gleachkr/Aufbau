@@ -123,7 +123,13 @@ the instance its `@view` states, the formula with the witness in place
 of the bound variable. A schematic formula that may depend on that
 variable (`p: wff x`) has no such instance to write, so only a hypothesis
 or axiom proves the premise then, and the core reads the witness off it
-as the checker reads the rule's `@recover` (`[x/u] p` gives `u`). A
+as the checker reads the rule's `@recover` (`[x/u] p` gives `u`). So
+does a premise whose formula only another premise fixes: `ex_elim_sub`
+reads `u` off the hypothesis `[x/u] p` of its second premise once its
+first, `∃ x p`, is proved. An eigenvariable a rule's `@freshen` lets an
+argument hold under a binder of that argument's own may take a name the
+argument binds (`ex_elim`'s `x` in `c`), as the checker renames it, when
+that binder's term has an `@alpha` rule. A
 rule's conclusion gives an
 unknown the structure the rest of the conclusion fixes: `R a (f a)`
 against `R C ?t` makes `?t` be `f C`. It never invents one, so a

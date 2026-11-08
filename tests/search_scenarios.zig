@@ -130,12 +130,8 @@ pub const scenarios = [_]Scenario{
         .proof_path = "tests/search_bench_cases/euclid_final_existential.auf",
         .marker = "exact?",
         // l21 names the opened witness (`r`) differently from the `∃` binder, so
-        // only the substitution form `ex_elim_sub [l3, l21]` applies. The search
-        // core does not apply it yet: its witness `u` is read back through a
-        // pattern the first premise fixes, not the conclusion.
-        .expected_replacement = "",
-        .expect_result = false,
-        .expected_suggestion_count = 0,
+        // the substitution form `ex_elim_sub` is the rule that actually applies.
+        .expected_replacement = "ex_elim_sub [l3, l21]",
     },
     .{
         .name = "euclid prime factor or-elim exact?",

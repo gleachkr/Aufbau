@@ -43,9 +43,6 @@ pub const guards = [_]FrontierGuard{
     .{
         .filter = "exists_prime_factor",
         .files = "tests/proof_cases/euclid.mm0:tests/proof_cases/euclid.auf",
-        // `ex_elim [l34, l40]`: the search core does not read this
-        // `@recover` witness back through a pattern a premise fixes.
-        .expect_miss = "exists_prime_factor/l41",
     },
     .{
         .filter = "cb_branch_fg_injective_mixed",

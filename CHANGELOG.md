@@ -171,15 +171,20 @@ This file records notable user-facing changes to Aufbau. The project follows
   no syntactic form, a schematic formula that may depend on the bound
   variable (`p: wff x` in `ex_intro`'s `[x/t] p`), takes its premise from a
   hypothesis or axiom, and the witness is read off it as the checker reads
-  the rule's `@recover`. On the bench corpus `exact?` finds 9 lines it missed
-  and misses 5 it found, gives the expected proof first on 23 more, and its
-  slowest call drops from 58 ms to 5 ms. The 5 are a rule whose `@recover`
-  witness a premise fixes rather than the conclusion (`ex_elim_sub` in
-  `euclid`, 3 lines) and 2 `martin_lof` lines; `auto?` still finds 4 of them.
-  `auto?` now tries one-step proofs before it deepens, and no longer runs a
-  separate direct pass first; 1 of its proofs on the corpus
-  (`exists_prime_factor` in `euclid`) is now missed. The `exact?` miss report
-  says how many references were in reach.
+  the rule's `@recover`. So is a witness whose formula a premise fixes rather
+  than the conclusion (`ex_elim_sub`'s `u`, read off its second premise once
+  the first, `∃ x p`, is proved). On the bench corpus `exact?` finds 9 lines
+  it missed and misses 2 it found (both `martin_lof`, which `auto?` still
+  finds), gives the expected proof first on 24 more, and its slowest call
+  drops from 58 ms to 5 ms. `auto?` now tries one-step proofs before it
+  deepens, and no longer runs a separate direct pass first; it finds every
+  line of the corpus. The `exact?` miss report says how many references were
+  in reach.
+- The search core lets an eigenvariable take a name an argument binds when
+  the rule's `@freshen` renames it there (`ex_elim`'s `x` in a `c` that
+  binds the same name), as the checker does. It counts a binder as
+  renamable only when its term has an `@alpha` rule, which is all the
+  checker's `@freshen` can rename through.
 - A theorem's or axiom's bound variable named only in dependency lists
   (`{k: set} (G: hyps k)` with no `k` in any hypothesis or the
   conclusion) is now reported as an unused parameter. Such a variable is

@@ -471,6 +471,31 @@ test "a witness is read off a fact whose substitution the theory pushed inward" 
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
+test "a witness is read back through a pattern a premise fixes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // `ex_elim` needs `#2`'s hypothesis to name the existential's own `p`;
+    // `ex_elim_sub` reads `u := q` off it against `#1`'s body. `x := p`
+    // holds in `c` only under `c`'s own `∃ p`, which `@freshen c x` renames.
+    var suggestions = try ndFolSearch(
+        &arena,
+        "theorem sub_elim {p q: nat} (d m: nat) (g h: ctx):\n" ++
+            "  $ g ⊢ ∃ p (prime p ∧ p ∣ d) $ >\n" ++
+            "  $ h , prime q ∧ q ∣ d ⊢ ∃ p (prime p ∧ p ∣ m) $ >\n" ++
+            "  $ g , h ⊢ ∃ p (prime p ∧ p ∣ m) $;\n",
+        "sub_elim",
+        "g , h ⊢ ∃ p (prime p ∧ p ∣ m)",
+        &counters,
+        .{ .ladder = false, .fixture = "euclid", .dir = "proof_cases" },
+    );
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"ex_elim_sub [#1, #2]"});
+    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
+    try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
+}
+
 test "a witness never takes an eigenvariable introduced after it" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

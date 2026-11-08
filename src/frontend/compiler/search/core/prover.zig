@@ -270,6 +270,9 @@ const Agenda = struct {
         abstract: *const Abstract,
         /// The premises of a step whose witnesses are read back are proved.
         recover: []const Recover,
+        /// The premises of a step whose eigenvariables `@freshen` lets an
+        /// argument hold bound are proved.
+        free: []const Free,
         /// Some of an abstraction's premises are proved.
         ready: *const Ready,
         close: *Frame,
@@ -310,17 +313,28 @@ const Abstract = struct {
 };
 
 /// A witness of a step whose view instance has no syntactic form: with
-/// `p: wff x`, the instance `[x/t] p` is no swap of `t` for `x` in `p`.
-/// The premise holds a cut wvar for the view's source instead,
-/// which a closure fixes, and the witness is read off it once the premises
-/// are proved, as the checker reads the `@recover` (`Prover.readBack`).
+/// `p: wff x`, the instance `[x/t] p` is no swap of `t` for `x` in `p`;
+/// nor has it one while a premise is still to fix the pattern or the hole
+/// (`ex_elim_sub`'s `p` and `x`). The premise holds a cut wvar for the
+/// view's source instead, which a closure fixes, and the witness is read
+/// off it once the premises are proved, as the checker reads the
+/// `@recover` (`Prover.readBack`).
 const Recover = struct {
-    witness: ExprId,
+    witness: catalog_mod.Witness,
+    /// The step's rule binder values.
+    values: []const ExprId,
     source: ExprId,
-    pattern: ExprId,
-    hole: ExprId,
     /// The witness binder's sort.
     sort_name: []const u8,
+};
+
+/// An eigenvariable of a step's δ binder and an argument that may hold it
+/// only under a binder of its own (`@freshen c x`, which the checker
+/// applies by renaming): once the premises are proved, the argument must
+/// not hold the eigenvariable's variable free (`Prover.keptFree`).
+const Free = struct {
+    eigen: ExprId,
+    value: ExprId,
 };
 
 /// The view binders an abstraction's walk reads: its two sides, then its
@@ -480,6 +494,7 @@ pub const Prover = struct {
             .check => |check_cell| return self.check(check_cell, cell.next),
             .abstract => |made| return self.abstractTarget(made, cell.next),
             .recover => |reads| return self.readBack(reads, cell.next),
+            .free => |frees| return self.keptFree(frees, cell.next),
             .ready => |ready| {
                 const made = ready.abstract;
                 if (!try self.inputsFixed(made.abstraction.decl, made.values, ready.rest)) return .failed;
@@ -1315,6 +1330,7 @@ pub const Prover = struct {
         var abstract: ?Abstract = null;
         // On the arena, as the step's other records are.
         var reads = std.ArrayListUnmanaged(Recover).empty;
+        var frees = std.ArrayListUnmanaged(Free).empty;
         if (!try self.sharesFit()) return .failed;
         applier.pass = &.{};
         const invented = self.terms.invented;
@@ -1339,9 +1355,17 @@ pub const Prover = struct {
                 const eigen_deps = self.eigenDeps(entry);
                 var shares = std.ArrayListUnmanaged(u32).empty;
                 try self.share(entry, eigen_deps, false, full, filled, &shares);
-                if (entry.view) |view| values = try self.witness(entry, view, full, filled, applier.target, &reads);
-                if (entry.cuts.len != 0) try self.cut(entry, full, filled, applier.target);
+                var view_values: []ExprId = &.{};
+                if (entry.view) |view| view_values = try self.witness(entry, view, full, filled, applier.target, &reads);
+                if (entry.cuts.len != 0) try self.cut(entry, full, filled, applier.target, &frees);
                 try self.share(entry, eigen_deps, true, full, filled, &shares);
+                if (entry.view) |view| {
+                    for (view.binder_map, view_values) |mapped, *value| {
+                        if (mapped) |arg| value.* = full[arg];
+                    }
+                    values = view_values;
+                    if (!try self.barWitnesses(entry, full, &frees)) return .failed;
+                }
                 // An abstraction's hole and target are made once its
                 // premises can fix the walk's inputs: the hole after the
                 // cuts, so none can hold it, and the target after the hole,
@@ -1452,6 +1476,12 @@ pub const Prover = struct {
         if (abstract) |*made| {
             abstract_cell = .{ .item = .{ .abstract = made }, .next = head };
             head = &abstract_cell;
+        }
+        // After the read-back, which may name an eigenvariable.
+        var free_cell: Agenda = undefined;
+        if (frees.items.len != 0) {
+            free_cell = .{ .item = .{ .free = frees.items }, .next = head };
+            head = &free_cell;
         }
         // A witness is read off its source once the premises fixed it.
         var recover_cell: Agenda = undefined;
@@ -1625,15 +1655,16 @@ pub const Prover = struct {
         defer self.wvars.rollback(start);
         for (reads) |read| {
             const source = try self.terms.resolveGoal(read.source);
-            const pattern = try self.terms.resolveGoal(read.pattern);
-            if (try self.wvars.holdsWVar(source) or try self.wvars.holdsWVar(pattern)) return .failed;
+            const pattern = try self.terms.resolveGoal(read.values[read.witness.pattern]);
+            const hole = self.wvars.resolve(read.values[read.witness.hole]);
+            if (try self.wvars.holdsWVar(source) or try self.wvars.holdsWVar(pattern) or self.wvars.of(hole) != null) return .failed;
             const reading = DerivedBindings.concreteRecoverCandidate(
                 self.terms.theorem,
                 self.context.env,
                 self.context.registry,
                 source,
                 pattern,
-                self.wvars.resolve(read.hole),
+                hole,
                 read.sort_name,
                 false,
             ) catch |err| switch (err) {
@@ -1645,7 +1676,7 @@ pub const Prover = struct {
                 .vacuous => continue,
                 .none => return .failed,
             };
-            const target = self.wvars.resolve(read.witness);
+            const target = self.wvars.resolve(read.values[read.witness.arg]);
             if (self.wvars.of(target)) |idx| {
                 if (!try self.wvars.bind(idx, value)) return .failed;
             } else if (target != value) return .failed;
@@ -1876,9 +1907,11 @@ pub const Prover = struct {
 
     /// Fill `entry`'s witnesses in `full` (a fresh wvar for each γ, an
     /// eigenvariable introduced at `goal` for each δ) and return the view's
-    /// binder values. A witness whose instance has no syntactic form
-    /// (`Terms.swap`) gets a cut wvar for its source instead, and goes on
-    /// `reads`.
+    /// binder values with the witnesses' sources set; the caller sets the
+    /// others once the step's cuts and shares are filled. A witness whose
+    /// instance has no syntactic form yet (`Terms.swap`, or a pattern or
+    /// hole a cut leaves to a premise) gets a cut wvar for its source
+    /// instead, and goes on `reads`.
     fn witness(
         self: *Prover,
         entry: *const catalog_mod.Rule,
@@ -1887,41 +1920,86 @@ pub const Prover = struct {
         filled: []bool,
         goal: ExprId,
         reads: *std.ArrayListUnmanaged(Recover),
-    ) Error![]const ExprId {
+    ) Error![]ExprId {
         const rule = &self.context.env.rules.items[entry.rule_id];
-        const patterns = try self.arena.alloc(ExprId, entry.witnesses.len);
+        // Null for a witness whose pattern or hole a cut fills.
+        const patterns = try self.arena.alloc(?ExprId, entry.witnesses.len);
         for (entry.witnesses, patterns) |w, *pattern| {
-            pattern.* = try self.wvars.deref(full[w.pattern], null);
+            const known = filled[w.pattern] and filled[w.hole];
+            pattern.* = if (known) try self.wvars.deref(full[w.pattern], null) else null;
             const sort_name = rule.args[w.arg].sort_name;
             switch (w.kind) {
                 .gamma => {
                     var capture = std.ArrayListUnmanaged(ExprId).empty;
-                    try self.terms.boundAround(self.arena, pattern.*, full[w.hole], &capture);
+                    if (pattern.*) |at| try self.terms.boundAround(self.arena, at, full[w.hole], &capture);
                     full[w.arg] = try self.wvars.mint(sort_name, capture.items, false);
                 },
-                .delta => full[w.arg] = try self.wvars.introduce(sort_name, goal, null),
+                // Kept out of the goal, or, when an argument may hold it
+                // (`ex_elim_sub`'s `g: ctx x u`), out of the arguments that
+                // do not depend on it once all are filled (`barWitnesses`).
+                .delta => {
+                    const fresh_in: ?[]const ExprId = if (Rules.isEigenvariable(rule.args, w.arg)) null else &.{};
+                    full[w.arg] = try self.wvars.introduce(sort_name, goal, fresh_in);
+                },
             }
             filled[w.arg] = true;
         }
         const values = try self.arena.alloc(ExprId, view.num_binders);
-        for (view.binder_map, values) |mapped, *value| {
-            if (mapped) |arg| value.* = full[arg];
-        }
         for (entry.witnesses, patterns) |w, pattern| {
-            if (try self.terms.swap(pattern, full[w.hole], full[w.arg])) |instance| {
+            if (pattern) |at| if (try self.terms.swap(at, full[w.hole], full[w.arg])) |instance| {
                 values[w.source] = instance;
                 continue;
-            }
+            };
             values[w.source] = try self.wvars.mint(view.arg_infos[w.source].sort_name, &.{}, true);
             try reads.append(self.arena, .{
-                .witness = full[w.arg],
+                .witness = w,
+                .values = full,
                 .source = values[w.source],
-                .pattern = pattern,
-                .hole = full[w.hole],
                 .sort_name = rule.args[w.arg].sort_name,
             });
         }
         return values;
+    }
+
+    /// Bar each δ witness of `entry` that an argument may hold from the
+    /// step's arguments `full` that do not depend on it, but for those
+    /// that `@freshen` lets hold it bound, which go on `frees`; false when
+    /// one holds it.
+    fn barWitnesses(self: *Prover, entry: *const catalog_mod.Rule, full: []const ExprId, frees: *std.ArrayListUnmanaged(Free)) Error!bool {
+        const args = self.context.env.rules.items[entry.rule_id].args;
+        var others = std.ArrayListUnmanaged(ExprId).empty;
+        defer others.deinit(self.allocator);
+        for (entry.witnesses) |w| {
+            if (w.kind != .delta or Rules.isEigenvariable(args, w.arg)) continue;
+            others.clearRetainingCapacity();
+            for (args, full, 0..) |other, value, idx| {
+                if (idx == w.arg or other.deps & args[w.arg].deps != 0) continue;
+                if (self.freshens(entry.rule_id, idx, w.arg)) {
+                    try frees.append(self.arena, .{ .eigen = full[w.arg], .value = value });
+                } else try others.append(self.allocator, value);
+            }
+            if (!try self.wvars.bar(self.wvars.of(full[w.arg]).?, others.items)) return false;
+        }
+        return true;
+    }
+
+    /// The premises of a step are proved: each eigenvariable of `frees`
+    /// is held by its argument only under the argument's own binders,
+    /// which the checker's `@freshen` renames. One still unnamed is kept
+    /// out of the argument altogether.
+    fn keptFree(self: *Prover, frees: []const Free, next: ?*const Agenda) Error!Outcome {
+        const start = self.wvars.mark();
+        defer self.wvars.rollback(start);
+        for (frees) |free| {
+            const variable = self.wvars.resolve(free.eigen);
+            if (self.wvars.of(variable)) |idx| {
+                if (!try self.wvars.bar(idx, &.{free.value})) return .failed;
+                continue;
+            }
+            if (self.terms.holdsFree(free.value, variable)) return .failed;
+            try self.terms.keepOut(free.value, variable);
+        }
+        return self.run(next);
     }
 
     /// Whether a goal whose unbound cut wvars were `cuts` has none, or the
@@ -2197,8 +2275,16 @@ pub const Prover = struct {
     /// hold the variable of a bound binder of the conclusion it does not
     /// depend on. A δ cut may become a variable only the arguments that
     /// depend on it mention (`ex_elim`'s `x`, which `G` may hold but not
-    /// `H` or `c`).
-    fn cut(self: *Prover, entry: *const catalog_mod.Rule, full: []ExprId, filled: []bool, goal: ExprId) Error!void {
+    /// `H` or `c`), except under an argument's own binders where `@freshen`
+    /// renames it (`c` again), which goes on `frees`.
+    fn cut(
+        self: *Prover,
+        entry: *const catalog_mod.Rule,
+        full: []ExprId,
+        filled: []bool,
+        goal: ExprId,
+        frees: *std.ArrayListUnmanaged(Free),
+    ) Error!void {
         const args = entry.statement(self.context).args;
         var cut_mask: u64 = 0;
         var delta_deps: u64 = 0;
@@ -2230,11 +2316,16 @@ pub const Prover = struct {
                 },
                 .delta => blk: {
                     var fresh_in = std.ArrayListUnmanaged(ExprId).empty;
+                    const first = frees.items.len;
                     for (args, full, filled, 0..) |other, value, known, idx| {
                         if (!known or idx == c.arg or other.deps & arg.deps != 0) continue;
-                        try fresh_in.append(self.arena, value);
+                        if (entry.abstraction == null and self.freshens(entry.rule_id, idx, c.arg)) {
+                            try frees.append(self.arena, .{ .eigen = undefined, .value = value });
+                        } else try fresh_in.append(self.arena, value);
                     }
-                    break :blk try self.wvars.introduce(arg.sort_name, goal, fresh_in.items);
+                    const eigen = try self.wvars.introduce(arg.sort_name, goal, fresh_in.items);
+                    for (frees.items[first..]) |*free| free.eigen = eigen;
+                    break :blk eigen;
                 },
             };
             filled[c.arg] = true;

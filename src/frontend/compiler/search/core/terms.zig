@@ -709,8 +709,16 @@ pub const Terms = struct {
         return closed;
     }
 
-    /// Whether `expr` holds `variable` other than under a binder of its own,
-    /// which alpha conversion could rename.
+    /// `closedBy`, for a term with an `@alpha` rule, which can rename its
+    /// binders; none for another.
+    fn renamedBy(self: *Terms, app: expr_mod.ExprNode.App, variable: ExprId) u55 {
+        if (self.context.registry.getAlphaRules(app.term_id).len == 0) return 0;
+        return self.closedBy(app, variable);
+    }
+
+    /// Whether `expr` holds `variable` other than under a binder of its own
+    /// that alpha conversion could rename: one of a term with an `@alpha`
+    /// rule, as the checker's `@freshen` renames.
     pub fn holdsFree(self: *Terms, expr: ExprId, variable: ExprId) bool {
         const at = self.wvars.resolve(expr);
         const app = switch (self.theorem.interner.node(at).*) {
@@ -718,7 +726,7 @@ pub const Terms = struct {
             .variable, .placeholder => return self.wvars.mentions(at, variable),
         };
         const decl = &self.context.env.terms.items[app.term_id];
-        const closed = self.closedBy(app, variable);
+        const closed = self.renamedBy(app, variable);
         for (app.args, 0..) |arg, idx| {
             if (idx < decl.args.len and decl.args[idx].deps & closed != 0) continue;
             if (self.holdsFree(arg, variable)) return true;
@@ -727,7 +735,8 @@ pub const Terms = struct {
     }
 
     /// Keep `variable` out of the wvars `expr` holds outside a binder of its
-    /// own: as a value it would be free where `holdsFree` looks.
+    /// own that alpha conversion could rename: as a value it would be free
+    /// where `holdsFree` looks.
     pub fn keepOut(self: *Terms, expr: ExprId, variable: ExprId) Error!void {
         const at = self.wvars.resolve(expr);
         if (!try self.wvars.holdsWVar(at)) return;
@@ -742,7 +751,7 @@ pub const Terms = struct {
             },
         };
         const decl = &self.context.env.terms.items[app.term_id];
-        const closed = self.closedBy(app, variable);
+        const closed = self.renamedBy(app, variable);
         for (app.args, 0..) |arg, idx| {
             if (idx < decl.args.len and decl.args[idx].deps & closed != 0) continue;
             try self.keepOut(arg, variable);

@@ -20,7 +20,9 @@
 //!   holds the instance itself, not a substitution redex. An instance with
 //!   no syntactic form (`p: wff x` holds `x` only by its dependency) is a
 //!   cut wvar a closure fixes, and the witness is read off it as the
-//!   checker reads the `@recover` (`Prover.readBack`);
+//!   checker reads the `@recover` (`Prover.readBack`). So is one whose
+//!   pattern or hole the conclusion leaves to the premises: they are cuts
+//!   (`ex_elim_sub`'s `p` and `x`, which `g ⊢ ∃ x p` fixes);
 //! - in a rule without a view, a **cut** (`imp_trans`'s `q`, `t_app`'s
 //!   `A`): a binder that is not bound becomes a fresh witness variable,
 //!   which only a premise's closure binds. A bound one (`subset_intro`'s
@@ -51,8 +53,7 @@
 //! ordinary term constructor: the core unfolds definitions in goals and
 //! facts (`terms.zig`), never in a rule's own templates. A relation's transport (`mpbi`) is left out:
 //! the core converts by unification, unfolding and normal forms instead.
-//! Rules mixing cuts with a view and other rules with fresh variables wait
-//! for the later stages.
+//! Rules with `@fresh` variables wait for the later stages.
 
 const std = @import("std");
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
@@ -351,15 +352,10 @@ fn admit(allocator: std.mem.Allocator, context: *const Context, rule_id: u32) !?
         if (view.binder_map[recover.source_view_idx] != null) return null;
         const pattern = view.binder_map[recover.pattern_view_idx] orelse return null;
         const hole = view.binder_map[recover.hole_view_idx] orelse return null;
-        if ((concl_mask.mask >> @intCast(pattern)) & 1 == 0) return null;
-        if ((concl_mask.mask >> @intCast(hole)) & 1 == 0) return null;
         if (!rule.args[hole].bound) return null;
-        const kind: Kind = if (!rule.args[arg].bound)
-            .gamma
-        else if (Rules.isEigenvariable(rule.args, arg))
-            .delta
-        else
-            return null;
+        // A bound one is δ even when other binders may depend on it
+        // (`ex_elim_sub`'s `u`, with `g: ctx x u`), as for a cut.
+        const kind: Kind = if (rule.args[arg].bound) .delta else .gamma;
         try witnesses.append(allocator, .{
             .kind = kind,
             .arg = arg,
@@ -369,17 +365,35 @@ fn admit(allocator: std.mem.Allocator, context: *const Context, rule_id: u32) !?
         });
         sources |= @as(u64, 1) << @intCast(recover.source_view_idx);
     }
-    // Every unfixed binder is a witness, and every view binder is a rule
-    // binder or a witness's instance.
-    var fixed = concl_mask.mask;
-    for (witnesses.items) |witness| fixed |= @as(u64, 1) << @intCast(witness.arg);
-    if (fixed != all) return null;
+    // Every view binder is a rule binder or a witness's instance.
     for (view.binder_map, 0..) |mapped, idx| {
         if (mapped == null and (sources >> @intCast(idx)) & 1 == 0) return null;
     }
+    var held: u64 = 0;
     for (view.hyps) |hyp| {
         if (!templateSupported(context, view.arg_infos, hyp, .premise)) return null;
+        const mask = Rules.templateBinderMask(hyp);
+        if (mask.overflow) return null;
+        for (view.binder_map, 0..) |mapped, idx| {
+            if (mapped) |at| if ((mask.mask >> @intCast(idx)) & 1 != 0) {
+                held |= @as(u64, 1) << @intCast(at);
+            };
+        }
     }
+    // A binder that is no witness and that the conclusion does not fix is
+    // a cut the view's premises hold (`ex_elim_sub`'s `p` and `x`, the
+    // pattern and hole of its witness's read-back).
+    var fixed = concl_mask.mask;
+    for (witnesses.items) |witness| fixed |= @as(u64, 1) << @intCast(witness.arg);
+    var cuts = std.ArrayListUnmanaged(Cut).empty;
+    errdefer cuts.deinit(allocator);
+    for (rule.args, 0..) |arg, idx| {
+        if ((fixed >> @intCast(idx)) & 1 != 0) continue;
+        if ((held >> @intCast(idx)) & 1 == 0) return null;
+        try cuts.append(allocator, .{ .kind = if (arg.bound) .delta else .gamma, .arg = idx });
+    }
+    const owned_cuts = try cuts.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_cuts);
     const owned_witnesses = try witnesses.toOwnedSlice(allocator);
     errdefer allocator.free(owned_witnesses);
     return .{
@@ -388,6 +402,7 @@ fn admit(allocator: std.mem.Allocator, context: *const Context, rule_id: u32) !?
         .premises = view.hyps,
         .view = view,
         .witnesses = owned_witnesses,
+        .cuts = owned_cuts,
         .shares = try shares.toOwnedSlice(allocator),
     };
 }
