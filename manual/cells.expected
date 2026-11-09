@@ -50,8 +50,10 @@ sorts-and-terms.md doc:prefix: ok
 sorts-and-terms.md doc:arith: ok
 sorts-and-terms.md doc:coercion: ok
 variables-and-binders.md doc:binders: ok
-views-and-recovery.md cell1: error: error: the statement and cited premises could not be matched against this rule
-views-and-recovery.md cell2: ok
+views-and-recovery.md cell1: ok
+views-and-recovery.md cell2: error: error: the statement and cited premises could not be matched against this rule
 views-and-recovery.md cell3: ok
 views-and-recovery.md cell4: ok
 views-and-recovery.md cell5: ok
+views-and-recovery.md cell6: ok
+views-and-recovery.md cell7: ok

@@ -1,0 +1,9 @@
+cab_direct
+----------
+l1: $ F a ⊢ F a $ by ax
+l2: $ F a ⊢ a ∈ {x | F x} $ by cab_intro [l1]
+
+cab_through_def
+---------------
+l1: $ F a ⊢ F a $ by ax
+l2: $ F a ⊢ a ∈ fx $ by cab_intro [l1]

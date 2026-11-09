@@ -962,7 +962,18 @@ pub const TheoremContext = struct {
         self: *TheoremContext,
         sort_name: []const u8,
     ) !ExprId {
-        const deps = try self.takePlaceholderDep();
+        return self.addDependentPlaceholderResolved(sort_name, 0);
+    }
+
+    /// `addPlaceholderResolved` for a placeholder that may also depend on
+    /// the variables behind `may_depend`: its deps are its own bit plus
+    /// those, so no dependency check can count it free of them.
+    pub fn addDependentPlaceholderResolved(
+        self: *TheoremContext,
+        sort_name: []const u8,
+        may_depend: u55,
+    ) !ExprId {
+        const deps = (try self.takePlaceholderDep()) | may_depend;
         const placeholder_id = self.next_placeholder_id;
         self.next_placeholder_id = try std.math.add(
             PlaceholderId,

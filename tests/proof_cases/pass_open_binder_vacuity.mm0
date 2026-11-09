@@ -1,0 +1,73 @@
+-- Lean0 11-09 (B1): `cab_intro`'s premise `[x/t] p` is read before the
+-- conclusion, while `x` and `p` are open. The vacuity rewrite `sb_f_irrel`
+-- (`[x/t] p ↔ p` for `p` free of `x`) must not fire on the open `p`, which
+-- may depend on `x`: firing it fixed `p := F a` and the conclusion
+-- `a ∈ {x | F x}` then failed. The premise has to wait for the conclusion,
+-- which fixes `x` and `p`, directly or through the definition `fx`.
+delimiter $ ( ) [ / ] { } | $;
+import "lib/ctx.mm0";
+
+--| @vars x y z u
+sort nat;
+sort cls;
+
+term iff (p q: wff): wff;
+infixr iff: $↔$ prec 20;
+
+term F (t: nat): wff;
+term mem (t: nat) (c: cls): wff;
+infixl mem: $∈$ prec 50;
+term cab {x: nat} (p: wff x): cls;
+notation cab {x: nat} (p: wff x): cls = (${$:max) x ($|$:0) p ($}$:0);
+
+term sb_t {x: nat} (t: nat x) (s: nat x): nat;
+notation sb_t {x: nat} (t: nat x) (s: nat x): nat =
+  ($subst$:41) x ($/$:0) t s;
+term sb_f {x: nat} (t: nat x) (p: wff x): wff;
+notation sb_f {x: nat} (t: nat x) (p: wff x): wff =
+  ($[$:41) x ($/$:0) t ($]$:0) p;
+
+notation emp: ctx = ($_$:max);
+
+term nd (g: ctx) (p: wff): wff;
+infixl nd: $⊢$ prec 0;
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (p: wff): $ p ↔ p $;
+axiom iff_trans (p q r: wff): $ p ↔ q $ > $ q ↔ r $ > $ p ↔ r $;
+axiom iff_sym (p q: wff): $ p ↔ q $ > $ q ↔ p $;
+axiom iff_mp (p q: wff): $ p ↔ q $ > $ p $ > $ q $;
+
+term eq (s t: nat): wff;
+--| @relation nat eq eq_refl eq_trans eq_sym _
+axiom eq_refl (s: nat): $ eq s s $;
+axiom eq_trans (s t v: nat): $ eq s t $ > $ eq t v $ > $ eq s v $;
+axiom eq_sym (s t: nat): $ eq s t $ > $ eq t s $;
+
+--| @congr
+axiom hyp_congr (p q: wff): $ p ↔ q $ > $ ctx_eq (hyp p) (hyp q) $;
+--| @congr
+axiom nd_congr (g h: ctx) (p q: wff):
+  $ ctx_eq g h $ > $ p ↔ q $ > $ (g ⊢ p) ↔ (h ⊢ q) $;
+--| @congr
+axiom F_congr (s t: nat): $ eq s t $ > $ F s ↔ F t $;
+
+--| @rewrite
+axiom sb_f_F {x: nat} (t: nat x) (s: nat x):
+  $ [x/t] (F s) ↔ F (subst x / t s) $;
+--| @rewrite
+axiom sb_f_irrel {x: nat} (t: nat x) (p: wff): $ [x/t] p ↔ p $;
+--| @rewrite
+axiom sb_t_var {x: nat} (t: nat x): $ eq (subst x / t x) t $;
+--| @rewrite
+axiom sb_t_irrel {x: nat} (t: nat x) (s: nat): $ eq (subst x / t s) s $;
+
+axiom ax (g: ctx) (p: wff): $ g , p ⊢ p $;
+
+axiom cab_intro {x: nat} (g: ctx) (t: nat) (p: wff x):
+  $ g ⊢ [x/t] p $ > $ g ⊢ t ∈ {x | p} $;
+
+def fx (.x: nat): cls = $ {x | F x} $;
+
+theorem cab_direct {x: nat} (a: nat): $ F a ⊢ a ∈ {x | F x} $;
+theorem cab_through_def (a: nat): $ F a ⊢ a ∈ fx $;

@@ -21,7 +21,10 @@ axiom ex_intro {x: obj} (g: ctx) (t: obj x) (p: wff x):
 ```
 
 To conclude `g ⊢ ∃ x p`, cite a proof of `p` with the witness `t` substituted
-for `x`. Without annotations, this cell fails:
+for `x`. The cited line shows the substitution already carried out, but the
+compiler can usually still infer the witness. The goal determines `x` and
+`p := P x`. The compiler then normalizes `[x := t] (P x)` with `t` still
+unknown, gets `P t`, and reads `t := y` off the cited `P y`:
 
 ```aufbau-proof prelude=nd-base,nd-rules,fol-base,fol-rules
 @@mm0
@@ -34,17 +37,32 @@ l1: $ P y ⊢ P y $ by ax
 l2: $ P y ⊢ ∃ x (P x) $ by ex_intro_raw [l1]
 ```
 
+This fails when the substitution erases the witness. In `∃ x (P y)` the body
+does not mention `x`, so `[x := t] (P y)` normalizes to `P y` whatever `t`
+is, and nothing in the line determines `t`:
+
+```aufbau-proof prelude=nd-base,nd-rules,fol-base,fol-rules
+@@mm0
+axiom ex_intro_raw {x: obj} (g: ctx) (t: obj x) (p: wff x):
+  $ g ⊢ [x := t] p $ > $ g ⊢ ∃ x p $;
+@@auf
+lemma exists_vac {x y: obj}: $ P y ⊢ ∃ x (P y) $
+----
+l1: $ P y ⊢ P y $ by ax
+l2: $ P y ⊢ ∃ x (P y) $ by ex_intro_raw [l1]
+```
+
 ```
 the statement and cited premises could not be matched against this rule
 note: hypothesis 1 of the rule holds a term with @rewrite rules (sb); a @view annotation may be required to help infer the rule's variables
 ```
 
-The goal determines `p := P x`. But the witness `t` occurs inside `[x := t] p`, 
-which doesn't occur in the written line (instead, the cited line
-shows the substitution already carried out: `P y`). The line does check with
-the bindings spelled out, `(x := $ x $, t := $ y $, p := $ P x $)`, but
-repeating these bindings is unnecessary work: the cited line already shows
-the witness `y`.
+Any witness would do, and the line checks with one given, `(t := $ y $)`.
+But inference only accepts bindings that the line forces. The annotations
+below let a rule say how to choose a witness the line does not determine.
+They also tell proof search how to apply the rule, so they are worth
+declaring on a theory's quantifier rules even where inference would not
+need them.
 
 ## `@view`: an alternative signature
 
@@ -104,7 +122,16 @@ operator's binder for its witness.
 
 If source and pattern are identical, recovery assigns the hole itself to the
 target: substituting a variable for itself leaves the expression unchanged.
-Any other structural mismatch makes recovery fail.
+Any other structural mismatch makes recovery fail. This is what solves the
+vacuous case from the start of the chapter: `@recover t q p x` walks `P y`
+against `P y`, so `t := x`.
+
+```aufbau-proof prelude=nd-base,nd-rules,fol-base,fol-rules
+lemma exists_vac {x y: obj}: $ P y ⊢ ∃ x (P y) $
+----
+l1: $ P y ⊢ P y $ by ax
+l2: $ P y ⊢ ∃ x (P y) $ by ex_intro [l1]
+```
 
 ∀-elimination is the same pattern on the conclusion side:
 

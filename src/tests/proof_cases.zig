@@ -730,6 +730,9 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "cardano", .outcome = .pass },
     .{ .stem = "zach", .outcome = .pass },
     .{ .stem = "knaster", .outcome = .pass },
+    // Lean0 11-09: a premise's open binder may depend on `x`, so no vacuity
+    // rewrite fixes it before the conclusion does.
+    .{ .stem = "pass_open_binder_vacuity", .outcome = .pass },
     .{
         .stem = "fail_two_sort_eigen_smuggle",
         .outcome = .{ .fail = error.DepViolation },

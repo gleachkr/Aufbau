@@ -198,9 +198,14 @@ const NormalizedView = struct {
         } else blk: {
             // Mirror-only allocation: placeholder in temporary mirror context,
             // not the real theorem. Does not consume real dependency slots.
+            // It carries the bits of the bound binders the rule lets it
+            // depend on, so a rewrite that needs it free of one (`[x/t] p ⟺
+            // p` for `p: fml x`) cannot fire and fix it before a later part
+            // of the rule does.
             const placeholder = try self.mirror.theorem
-                .addPlaceholderResolved(
+                .addDependentPlaceholderResolved(
                 session.rule_args[idx].sort_name,
+                try self.mayDependDeps(session, idx),
             );
             try self.placeholder_targets.put(
                 session.shared.allocator,
@@ -212,6 +217,25 @@ const NormalizedView = struct {
         self.mirror_binders[idx] = value;
         self.binder_status[idx] = 2;
         return value;
+    }
+
+    /// The mirror deps of the bound binders rule binder `idx` may depend on.
+    fn mayDependDeps(
+        self: *NormalizedView,
+        session: *RuleMatchSession,
+        idx: usize,
+    ) anyerror!u55 {
+        const arg = session.rule_args[idx];
+        if (arg.bound or arg.deps == 0) return 0;
+        var deps: u55 = 0;
+        for (session.rule_args, 0..) |other, other_idx| {
+            if (!other.bound or other.deps & arg.deps == 0) continue;
+            deps |= try self.mirror.theorem.exprDeps(
+                try self.ensureMirrorBinder(session, other_idx),
+                .{},
+            );
+        }
+        return deps;
     }
 
     fn ensureMirrorSymbolicSlot(

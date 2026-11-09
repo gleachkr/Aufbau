@@ -12,29 +12,44 @@ is available only after the lemma proof has checked.
 
 ## Mental model
 
-### The core problem
+### Two ways to infer binders
 
-Every rule has a *raw form* — the conclusion as literally stated in the
-`.mm0` file — and a *user-facing form* — the expression a proof author
-actually wants to write. For simple rules these are the same thing, and
-ordinary unification suffices to recover any omitted arguments. For more
-complex rules, especially rules whose conclusions normalize, the two can diverge significantly.
-
-Consider a universal instantiation rule:
+Every rule has a *raw form* — its statement as written in the `.mm0` file —
+and the form a proof line states. When the rule contains a substitution, or
+another term with `@rewrite` rules, the two differ. The raw conclusion of
 ```
 axiom ax_inst {x: set} (t: set) (p: wff x):
   $ A. x p -> sb t x p $;
 ```
+is `A. x p -> sb t x p`, but a line states `A. x (P x) -> P u`.
 
-The raw conclusion is `sb t x p` — a substitution term. After normalization
-it reduces to something like `P u`, with `t` no longer syntactically visible.
-Ordinary unification matches the user's line against the raw conclusion, so
-it cannot recover `t` from `P u`. The user would be forced to supply `t`
-explicitly every time.
+Binder inference has two mechanisms for this, with separate jobs.
 
-`@view`, `@recover`, and `@abstract` address this problem in three ways,
-covering progressively more complex shapes of "witness hidden by
-normalization":
+**Normalize-and-match** needs no annotation. While some binders are still
+unknown, the compiler compares the raw rule with the line modulo `@rewrite`
+normalization, the comparison the final check makes, and keeps what that
+comparison forces. For `ax_inst`, `A. x p` fixes `p := P x`; `sb t x (P x)`
+with `t` unknown normalizes to `P t`, and the line's `P u` gives `t := u`.
+This covers every rule whose binders the line determines up to rewriting.
+
+**Views** (`@view`, with `@recover`, `@abstract` and `@fresh`) supply what the
+line does not force, and what normalize-and-match cannot solve:
+
+- a binder the line leaves free: the witness of a vacuous quantifier (`t` in
+  an `ex_intro` that concludes `∃ x (P y)`), or a fresh bound variable;
+- a one-hole context, as in a replacement rule `sb a x r > sb b x r`: neither
+  side fixes `r`, and more than one `r` fits, so `@abstract` states which one
+  (every occurrence of the plug pair);
+- shapes normalize-and-match does not reach yet, such as a quantifier hidden
+  behind a definition, where the premise must be unfolded and normalized
+  together.
+
+A view also tells proof search how to apply its rule (`docs/proof_search.md`),
+so annotating a theory's quantifier and substitution rules is good practice
+even where normalize-and-match infers every binder. When a rule has a view,
+the view is matched first; the final check is the same either way.
+
+The view annotations cover progressively more complex shapes:
 
 - **`@view`** provides an alternative surface shape for the rule that the
   compiler can match against the user's line and cited references. It solves
@@ -137,16 +152,19 @@ conclusion, then one retry of any premise that did not match. Within a single
 premise or conclusion the walk is left to right, except that a subterm whose
 head has `@rewrite` rules (a substitution, say) and whose binders are still
 open is set aside until the rest of the formula has been matched; it is then
-instantiated and normalized against the concrete subterm. So `[x/t] p` is
-matched by instantiation, and `x` and `p` must be fixed elsewhere in the
-rule: by a sibling subterm, a literal comprehension, or a definition that
-unfolds to one.
+instantiated and normalized against the concrete subterm. A binder still
+unknown at that point stands in the normal form as a placeholder that may
+depend on the bound variables its declaration allows, so no rewrite that
+needs it free of one (`[x/t] p ↔ p`) fires early, and the normal form fixes
+what it can. So `[x/t] p` needs `x` and `p` fixed elsewhere in the rule: by a
+sibling subterm, a literal comprehension, or a definition that unfolds to
+one. `t` can then be read off the normal form: `[x/t] (P x)` becomes `P t`.
 
-A `@view` is still needed when no premise or conclusion determines a binder
-except through the substitution itself, when a hidden definition dummy must
-be named and no `@vars` pool is declared, or when two premises each wait on
-a binder the other would provide (the retry is a single pass, not a
-fixpoint).
+A `@view` is still needed when the line does not force a binder (a vacuous
+substitution erases its witness), when a binder is a one-hole context
+(`@abstract`), when a hidden definition dummy must be named and no `@vars`
+pool is declared, or when two premises each wait on a binder the other would
+provide (the retry is a single pass, not a fixpoint).
 
 ### Syntax
 ```

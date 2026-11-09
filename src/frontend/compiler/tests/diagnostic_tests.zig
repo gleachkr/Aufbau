@@ -1275,9 +1275,9 @@ test "structural inference names the binder no reading solves" {
 }
 
 test "inference on a @rewrite premise points at a @view" {
-    // The structural solver reads `[x/t] p` by `sb_vac`, binding `p` to the
-    // whole premise, so the conclusion fails although `t := y` fits: the
-    // failure is not "no filling matches", and a @view is the fix.
+    // `ex x (P y)` fixes `p := P y`, which does not mention `x`, so `sb_vac`
+    // erases the witness and nothing in the line forces `t`: any filling
+    // fits, the failure is not "no filling matches", and a @view is the fix.
     const mm0_src =
         \\delimiter $ ( ) $;
         \\provable sort wff;
@@ -1315,12 +1315,12 @@ test "inference on a @rewrite premise points at a @view" {
         \\axiom sb_P {x: obj} (t: obj x): $ iff (sb x t (P x)) (P t) $;
         \\axiom ex_intro_raw {x: obj} (g: ctx x) (t: obj x) (p: wff x):
         \\  $ g |- sb x t p $ > $ g |- ex x p $;
-        \\theorem exists_wit {x: obj} (g: ctx) (y: obj): $ g |- P y $ > $ g |- ex x (P x) $;
+        \\theorem exists_vac {x: obj} (g: ctx) (y: obj): $ g |- P y $ > $ g |- ex x (P y) $;
     ;
     const proof_src =
-        \\exists_wit
+        \\exists_vac
         \\----------
-        \\l1: $ g |- ex x (P x) $ by ex_intro_raw [#1]
+        \\l1: $ g |- ex x (P y) $ by ex_intro_raw [#1]
     ;
 
     var compiler = Compiler.initWithProof(
@@ -1342,16 +1342,20 @@ test "inference on a @rewrite premise points at a @view" {
         },
         else => return error.ExpectedInferenceFailureDetail,
     }
-    try std.testing.expectEqual(@as(usize, 2), diag.noteSlice().len);
+    try std.testing.expectEqual(@as(usize, 3), diag.noteSlice().len);
     try expectNoteText(
-        "the statement does not match the rule's conclusion",
+        "cited premise 1 does not match hypothesis 1 of the rule",
         diag.noteSlice()[0],
+    );
+    try expectNoteText(
+        "the cited premise proves: g |- P y",
+        diag.noteSlice()[1],
     );
     try expectNoteText(
         "hypothesis 1 of the rule holds a term with @rewrite rules (sb); " ++
             "a @view annotation may be required to help infer the rule's " ++
             "variables",
-        diag.noteSlice()[1],
+        diag.noteSlice()[2],
     );
 }
 
