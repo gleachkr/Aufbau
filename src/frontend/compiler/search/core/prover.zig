@@ -21,7 +21,14 @@
 //! other shares leave of the context or to the whole context, and once the
 //! premises are proved the shares must make up the context again, a member
 //! holding a wvar counting as any it unifies with. A share a step binds
-//! must hold only members of its context from then on.
+//! must hold only members of its context from then on. Without a set law
+//! that binding would guess how the context divides while another share is
+//! still open, so the goal's rules see its shares open instead: a
+//! conclusion node facing one takes the members it names of what the
+//! share may hold, and the node's rest binders become fresh wvars in the
+//! share's value. Such a wvar is a part of the context like a share
+//! (`openParts`) and takes what the others leave. Members are counted
+//! then: no two shares hold one copy of a member.
 //!
 //! A conclusion node the match postponed with binders it left unbound
 //! (`Terms.postponed`) is checked once the premises are proved and have
@@ -561,7 +568,7 @@ pub const Prover = struct {
             try self.wvars.collectUnbound(self.allocator, goal.expr, &cuts);
             var kept: usize = 0;
             for (cuts.items) |idx| {
-                if (self.splitOf(idx) != null) shared = true;
+                if (try self.splitOf(idx) != null) shared = true;
                 if (!self.wvars.vars.items[idx].cut) continue;
                 cuts.items[kept] = idx;
                 kept += 1;
@@ -982,6 +989,15 @@ pub const Prover = struct {
         var held = std.ArrayListUnmanaged(u32).empty;
         defer held.deinit(self.allocator);
         const split = try self.heldShares(goal.expr, &held) orelse return self.expandRules(frame, goal.expr, close, path);
+        // Without a set law, while another share of the split is open,
+        // binding the goal's now would guess how the bag divides: a rule's
+        // conclusion takes what it names of the bag instead, and its rest
+        // binder becomes a part too (`openParts`). Under a set law a
+        // share may take the whole bag, as below, which the others may
+        // hold too.
+        if (!split.bag.combiner.law.isIdempotent() and try self.othersOpen(split, held.items)) {
+            return self.expandRules(frame, goal.expr, close, path);
+        }
         // The rules see the goal with its shares bound: to what the other
         // shares leave of the bag, or to the whole bag.
         const rest = try self.remainder(split);
@@ -1229,6 +1245,10 @@ pub const Prover = struct {
             return inventable(self.entry, binder);
         }
 
+        pub fn shareMembers(self: *const Scorer, idx: u32, out: *AcuiBag.ExprBag) ProveError!?AcuiBag.Combiner {
+            return self.prover.shareMembers(idx, out);
+        }
+
         pub fn match(self: *Scorer, bindings: []const ?ExprId) ProveError!bool {
             const prover = self.prover;
             const rule = self.entry.statement(prover.context);
@@ -1277,6 +1297,10 @@ pub const Prover = struct {
             return self.applier.mayInvent(binder);
         }
 
+        pub fn shareMembers(self: *const Picker, idx: u32, out: *AcuiBag.ExprBag) ProveError!?AcuiBag.Combiner {
+            return self.applier.shareMembers(idx, out);
+        }
+
         pub fn match(self: *Picker, bindings: []const ?ExprId) ProveError!bool {
             defer self.index += 1;
             if (self.index != self.target) return false;
@@ -1309,6 +1333,15 @@ pub const Prover = struct {
             return switch (self.how) {
                 .rule => |entry| inventable(entry, binder),
                 .ref => false,
+            };
+        }
+
+        /// A rule's conclusion may take members of a share it faces
+        /// (`Terms` `growShare`); a fact unifies with the share instead.
+        pub fn shareMembers(self: *const Applier, idx: u32, out: *AcuiBag.ExprBag) ProveError!?AcuiBag.Combiner {
+            return switch (self.how) {
+                .rule => self.prover.shareMembers(idx, out),
+                .ref => null,
             };
         }
 
@@ -2111,13 +2144,74 @@ pub const Prover = struct {
         try out.appendSlice(allocator, std.mem.asBytes(&value));
     }
 
-    /// The split wvar `idx` is a share of, if any.
-    fn splitOf(self: *const Prover, idx: u32) ?*const Split {
+    /// The split the unbound wvar `idx` is an open part of (`openParts`),
+    /// if any.
+    fn splitOf(self: *Prover, idx: u32) Error!?*const Split {
+        var parts = std.ArrayListUnmanaged(u32).empty;
+        defer parts.deinit(self.allocator);
         var at = self.splits;
         while (at) |split| : (at = split.outer) {
             if (std.mem.indexOfScalar(u32, split.shares, idx) != null) return split;
+            if (!std.mem.eql(u8, self.wvars.vars.items[idx].sort_name, self.wvars.vars.items[split.shares[0]].sort_name)) continue;
+            parts.clearRetainingCapacity();
+            try self.openParts(split, &parts);
+            if (std.mem.indexOfScalar(u32, parts.items, idx) != null) return split;
         }
         return null;
+    }
+
+    /// The open parts of `split`'s bag, into `out`: its unbound shares,
+    /// and without a set law the unbound wvars of the bag's sort that a
+    /// bound share holds and the bag does not. Such a wvar stands for a
+    /// part of the bag (`Terms` `pairBags`), such as the rest of a share a
+    /// rule's conclusion took members of (`Terms` `growShare`), and is
+    /// settled like a share. Under a set law shares may overlap, so it is
+    /// no part the others leave.
+    fn openParts(self: *Prover, split: *const Split, out: *std.ArrayListUnmanaged(u32)) Error!void {
+        for (split.shares) |idx| {
+            if (self.wvars.vars.items[idx].value == null) try out.append(self.allocator, idx);
+        }
+        const bag = split.bag;
+        if (bag.combiner.law.isIdempotent()) return;
+        const sort = self.wvars.vars.items[split.shares[0]].sort_name;
+        var members: ?AcuiBag.ExprBag = null;
+        for (split.shares) |idx| {
+            const value = self.wvars.vars.items[idx].value orelse continue;
+            const held = bag.combiner.flatten(self.terms.theorem, try self.terms.resolveGoal(value)) orelse
+                return error.Unsupported;
+            for (held.slice()) |member| {
+                const part = self.wvars.of(member) orelse continue;
+                if (!std.mem.eql(u8, self.wvars.vars.items[part].sort_name, sort)) continue;
+                if (members == null) {
+                    members = .{};
+                    for (bag.members) |other| _ = members.?.append(try self.terms.resolveGoal(other));
+                }
+                if (std.mem.indexOfScalar(ExprId, members.?.slice(), member) != null) continue;
+                if (std.mem.indexOfScalar(u32, out.items, part) == null) try out.append(self.allocator, part);
+            }
+        }
+    }
+
+    /// Whether an open part of `split` other than those in `held` is left.
+    fn othersOpen(self: *Prover, split: *const Split, held: []const u32) Error!bool {
+        var parts = std.ArrayListUnmanaged(u32).empty;
+        defer parts.deinit(self.allocator);
+        try self.openParts(split, &parts);
+        for (parts.items) |idx| {
+            if (std.mem.indexOfScalar(u32, held, idx) == null) return true;
+        }
+        return false;
+    }
+
+    /// The members the unbound wvar `idx` may take, into `out`, with its
+    /// bag's combiner: those the remainder holds (`left`). Null when `idx`
+    /// is no open part of a split, its bag has a set law (`expand`), or a
+    /// bound share holds more than the bag has.
+    fn shareMembers(self: *Prover, idx: u32, out: *AcuiBag.ExprBag) Error!?AcuiBag.Combiner {
+        const split = try self.splitOf(idx) orelse return null;
+        if (split.bag.combiner.law.isIdempotent()) return null;
+        if (!try self.left(split, out)) return null;
+        return split.bag.combiner;
     }
 
     /// The split of the first unbound share `expr` holds, with the unbound
@@ -2128,7 +2222,7 @@ pub const Prover = struct {
         var found: ?*const Split = null;
         var kept: usize = 0;
         for (held.items) |idx| {
-            const split = self.splitOf(idx) orelse continue;
+            const split = try self.splitOf(idx) orelse continue;
             if (found == null) found = split;
             if (split != found.?) continue;
             held.items[kept] = idx;
@@ -2138,30 +2232,50 @@ pub const Prover = struct {
         return found;
     }
 
-    /// The members of `split`'s bag that neither the template's own
-    /// members took nor a bound share holds, as one expression; null when
-    /// there are none and the bag has no unit.
+    /// The members of `split`'s bag, resolved, that neither the template's
+    /// own members took nor a bound share holds, as one expression; null
+    /// when there are none and the bag has no unit, or a bound share holds
+    /// more than the bag has.
     fn remainder(self: *Prover, split: *const Split) Error!?ExprId {
-        const bag = split.bag;
-        var left: AcuiBag.ExprBag = .{};
-        for (bag.members, 0..) |member, at| {
-            if (bag.taken & (@as(u64, 1) << @intCast(at)) != 0) continue;
-            if (try self.shareHolds(split, member)) continue;
-            _ = left.append(member);
-        }
-        return bag.combiner.build(self.terms.theorem, left.slice());
+        var members: AcuiBag.ExprBag = .{};
+        if (!try self.left(split, &members)) return null;
+        return split.bag.combiner.build(self.terms.theorem, members.slice());
     }
 
-    /// Whether a bound share of `split` holds the bag member `member`.
-    fn shareHolds(self: *Prover, split: *const Split, member: ExprId) Error!bool {
-        const want = try self.terms.resolveGoal(member);
+    /// The members of `split`'s bag, resolved, that neither the template's
+    /// own members took nor a bound share holds, into `out`, counted: each
+    /// member a share holds takes one copy, or under a set law any. False
+    /// when a share holds a bag member of which no copy is left without a
+    /// set law. A share's member that is no bag member is left to `settle`.
+    fn left(self: *Prover, split: *const Split, out: *AcuiBag.ExprBag) Error!bool {
+        const bag = split.bag;
+        var all: AcuiBag.ExprBag = .{};
+        var used: u64 = bag.taken;
+        for (bag.members) |member| _ = all.append(try self.terms.resolveGoal(member));
+        const idempotent = bag.combiner.law.isIdempotent();
+        // An open part a share holds is held through it: only the
+        // shares count.
         for (split.shares) |idx| {
             const value = self.wvars.vars.items[idx].value orelse continue;
-            const members = split.bag.combiner.flatten(self.terms.theorem, try self.terms.resolveGoal(value)) orelse
+            const held = bag.combiner.flatten(self.terms.theorem, try self.terms.resolveGoal(value)) orelse
                 return error.Unsupported;
-            if (std.mem.indexOfScalar(ExprId, members.slice(), want) != null) return true;
+            held: for (held.slice()) |member| {
+                var known = false;
+                for (all.slice(), 0..) |candidate, at| {
+                    if (candidate != member) continue;
+                    known = true;
+                    const bit = @as(u64, 1) << @intCast(at);
+                    if (used & bit != 0) continue;
+                    used |= bit;
+                    continue :held;
+                }
+                if (known and !idempotent) return false;
+            }
         }
-        return false;
+        for (all.slice(), 0..) |member, at| {
+            if (used & (@as(u64, 1) << @intCast(at)) == 0) _ = out.append(member);
+        }
+        return true;
     }
 
     /// Whether every bound share holds only members of its bag, as far as
@@ -2208,10 +2322,14 @@ pub const Prover = struct {
     fn settle(self: *Prover, split: *const Split, next: ?*const Agenda) Error!Outcome {
         const start = self.wvars.mark();
         defer self.wvars.rollback(start);
-        for (split.shares) |idx| {
-            if (self.wvars.vars.items[idx].value != null) continue;
+        var open = std.ArrayListUnmanaged(u32).empty;
+        defer open.deinit(self.allocator);
+        while (true) {
+            open.clearRetainingCapacity();
+            try self.openParts(split, &open);
+            if (open.items.len == 0) break;
             const value = (try self.remainder(split)) orelse return .failed;
-            if (!try self.wvars.bind(idx, value)) return .failed;
+            if (!try self.wvars.bind(open.items[0], value)) return .failed;
         }
         const bag = split.bag;
         var members: AcuiBag.ExprBag = .{};
@@ -2234,10 +2352,8 @@ pub const Prover = struct {
     fn placeStrays(self: *Prover, split: *const Split, strays: []const ExprId, next: ?*const Agenda) Error!Outcome {
         const bag = split.bag;
         if (strays.len == 0) {
-            for (bag.members, 0..) |member, at| {
-                if (bag.taken & (@as(u64, 1) << @intCast(at)) != 0) continue;
-                if (!try self.shareHolds(split, member)) return .failed;
-            }
+            var unheld: AcuiBag.ExprBag = .{};
+            if (!try self.left(split, &unheld) or unheld.len != 0) return .failed;
             return self.run(next);
         }
         // An earlier placement may have made it a member already.

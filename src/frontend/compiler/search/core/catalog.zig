@@ -47,7 +47,7 @@
 //!
 //! Rules are admitted over `@acui` bags, commutative ones and sequences
 //! (`martin_lof`'s ordered contexts `g , x : A`). A conclusion bag with
-//! more than one rest binder (`or_elim`'s `G , H , K`) needs an idempotent
+//! more than one rest binder (`or_elim`'s `G , H , K`) needs a commutative
 //! law: its rest binders are **shares**, which split the goal's context
 //! between the premises (`Prover.Split`). A definition in a rule is an
 //! ordinary term constructor: the core unfolds definitions in goals and
@@ -485,7 +485,7 @@ fn readsBack(context: *const Context, rule_id: u32, concl_mask: u64) ?*const Vie
 /// A template the core can match and build: applications of at most
 /// `max_args` arguments and only `@acui` combiners the core reads
 /// (`readsLaw`). A conclusion bag with more than one rest binder also
-/// needs an idempotent law, so its shares can overlap.
+/// needs a commutative law, so its shares are parts of a bag.
 fn templateSupported(
     context: *const Context,
     args: []const ArgInfo,
@@ -509,7 +509,7 @@ fn templateSupported(
             },
             .app => if (!templateSupported(context, args, member, side)) return false,
         };
-        return @popCount(rests) <= 1 or side == .premise or combiner.law.isIdempotent();
+        return @popCount(rests) <= 1 or side == .premise or combiner.law.isCommutative();
     }
     for (app.args) |arg| {
         if (!templateSupported(context, args, arg, side)) return false;

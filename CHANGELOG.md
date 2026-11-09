@@ -310,6 +310,12 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- `auto?` did not apply a rule that splits a context without an idempotent
+  law between its premises, such as `two: nd g a > ndr h a > nd2 (g , h) a`
+  under `@acui ctx_assoc ctx_comm emp _`. It now does, and a premise whose
+  rule names only some of the context's members, such as
+  `la: nd (g , A) bot`, takes those and leaves the rest to its sibling:
+  `nd2 (B , A , B) bot` is `two [la (g := $ hyp B $) [], lb []]`.
 - `auto?` could recurse until its stack guard stopped it on an `@auto eager`
   rule that splits an idempotent context (`mix`'s `g , h` in
   `|- (a & b) , g , h`): a part may take the whole context, the `&` with it,

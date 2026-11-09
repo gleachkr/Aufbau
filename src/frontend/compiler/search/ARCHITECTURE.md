@@ -369,9 +369,14 @@ sequence (associative with a unit, nothing more) keeps its order. Matching
 gives each template member a distinct goal member (each choice an
 alternative); a rest binder takes the minimal complement (a set law's
 non-minimal complements are not tried); a sequence matches in order, a rest
-binder taking a run. A conclusion bag with more than one rest binder needs an
-idempotent law: the binders are shares that split the context between the
-premises (`Prover.Split`, `catalog.zig`).
+binder taking a run. A conclusion bag with more than one rest binder needs a
+commutative law: the binders are shares that split the context between the
+premises (`Prover.Split`, `catalog.zig`). Without a set law, a rule's node
+facing a share another premise has yet to bind takes the members it names from
+what the share may hold, and its own rest binder becomes a fresh wvar in the
+share's value: a part of the split, settled to what the others leave like a
+share (`Matcher.growShare`, `Prover.openParts`); members are counted, so no two
+shares hold one copy.
 
 ### ACUI subset soundness
 

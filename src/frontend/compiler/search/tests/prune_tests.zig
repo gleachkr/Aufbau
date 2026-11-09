@@ -768,6 +768,49 @@ const loop_theory =
     \\  $ g , (∀ x p) , [x/t] p ⊢ c $ > $ g , (∀ x p) ⊢ c $;
 ;
 
+test "auto splits a context without a set law between a weakening leaf and a fixed one" {
+    // `two`'s conclusion splits `B , A , B` between its premises. Bound to
+    // all its context can take, `la`'s share leaves `lb` nothing; its rest
+    // binder must become a share of its own, which keeps one `B` while the
+    // other goes to `lb`.
+    const mm0_src = comm_ctx_theory ++
+        \\--| @congr
+        \\axiom join_congr (g1 g2 h1 h2: ctx):
+        \\  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (join g1 h1) (join g2 h2) $;
+        \\--| @congr
+        \\axiom hyp_congr (a b: wff): $ a <-> b $ > $ ctx_eq (hyp a) (hyp b) $;
+        \\--| @congr
+        \\axiom nd_congr (g h: ctx) (a b: wff):
+        \\  $ ctx_eq g h $ > $ a <-> b $ > $ nd g a <-> nd h b $;
+        \\term A: wff;
+        \\term B: wff;
+        \\term nd2 (g: ctx) (a: wff): wff;
+        \\term ndr (g: ctx) (a: wff): wff;
+        \\--| @congr
+        \\axiom nd2_congr (g h: ctx) (a b: wff):
+        \\  $ ctx_eq g h $ > $ a <-> b $ > $ nd2 g a <-> nd2 h b $;
+        \\--| @congr
+        \\axiom ndr_congr (g h: ctx) (a b: wff):
+        \\  $ ctx_eq g h $ > $ a <-> b $ > $ ndr g a <-> ndr h b $;
+        \\axiom two (g h: ctx) (a: wff): $ nd g a $ > $ ndr h a $ > $ nd2 (join g h) a $;
+        \\axiom la (g: ctx): $ nd (join g (hyp A)) bot $;
+        \\axiom lb: $ ndr (hyp B) bot $;
+        \\theorem u: $ nd2 (join (hyp B) (join (hyp A) (hyp B))) bot $;
+    ;
+    const proof_src =
+        \\u
+        \\------
+        \\l1: $ nd2 (join (hyp B) (join (hyp A) (hyp B))) bot $ by auto?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
+        .generate = .{ .enabled = true },
+    });
+    defer suggestions.deinit();
+    try expectOffered(suggestions.items, &.{"two [la (g := $ hyp B $) [], lb []]"});
+}
+
 test "auto proves a goal whose search repeats an open goal with a duplicate member" {
     // `raa` re-adds `¬ P C` to an open context that already holds it, and the
     // copy is the same goal.
