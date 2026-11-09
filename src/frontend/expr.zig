@@ -169,8 +169,8 @@ const ExprIdIndex = std.HashMapUnmanaged(
 /// have different unit costs, so the budget combines them weighted (see
 /// `GlobalBudget`).
 /// `work_ticks_walk` counts per-node visits of the non-interning tree walks:
-/// the shape builder (`search/shape.zig`), the open-generation meta walks
-/// (`match.registerMetasInExpr`, `MetaStore.deref`/`hasUnsolvedMeta`),
+/// the shape builder (`search/shape.zig`), the meta walks
+/// (`MetaStore.deref`/`hasUnsolvedMeta`),
 /// suggestion rendering (`pretty_print.renderNode`), and the inference
 /// solver's branch clones and structural item collection
 /// (`inference_solver/branch_state.zig`, `items.zig`).

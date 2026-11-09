@@ -19,8 +19,4 @@ comptime {
     // The two normalizer engines, on the bags inference and the checker
     // both read.
     _ = @import("./normal_form_tests.zig");
-    // Inline unit tests of the phase-5 premise ordering and the ladder
-    // schedule.
-    _ = @import("../backward/plan.zig");
-    _ = @import("../generate.zig");
 }

@@ -73,8 +73,8 @@ pub const TemplateExpr = union(enum) {
 };
 
 /// Bitset of binder indices a template references, plus an overflow flag for
-/// any index >= 64. Shared by the search slot-ordering (`backward/plan.zig`) and
-/// the `@auto eager` annotation validation (`rewrite_registry.zig`).
+/// any index >= 64. Used by the `@auto eager` annotation validation
+/// (`rewrite_registry.zig`).
 pub const TemplateBinderMask = struct { mask: u64 = 0, overflow: bool = false };
 
 pub fn templateBinderMask(template: TemplateExpr) TemplateBinderMask {
@@ -133,18 +133,12 @@ pub fn templateHasUnboundBinder(
 }
 
 /// True when some hypothesis references a binder the conclusion does not.
-/// This is a purely SYNTACTIC fact about the rule; whether the search may
-/// existentially defer such a binder is a separate policy question
-/// (`@auto backward` enrollment / `OpenMode.witness`). The name is neutral
-/// on purpose: `ex_intro`'s witness is a premise-only binder, but so are
-/// `ax_mp`'s cut formula and `or_elim`'s eliminated disjunction — calling
-/// them all "witnesses" invites treating cut formulas as inventable, which
-/// is exactly the search explosion the enrollment policy exists to prevent.
-/// Shared by `@auto eager` validation (`rewrite_registry.zig`, rejects such
-/// rules), the witness-class scheduler (`search/backward/backtrack.zig`,
-/// demotes them to class 2), and the witness-pool gate, so they can never
-/// drift. Overflowed masks (>= 64 binders) conservatively report false (the
-/// conclusion-determined / class-1 side).
+/// This is a purely SYNTACTIC fact about the rule. The name is neutral on
+/// purpose: `ex_intro`'s witness is a premise-only binder, but so are
+/// `ax_mp`'s cut formula and `or_elim`'s eliminated disjunction. Used by
+/// `@auto eager` validation (`rewrite_registry.zig`, rejects such rules).
+/// Overflowed masks (>= 64 binders) conservatively report false (the
+/// conclusion-determined side).
 ///
 /// A premise-only eigenvariable (`isEigenvariable`) does not count: the
 /// application opens it as a variable meta rather than committing to a value,

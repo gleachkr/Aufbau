@@ -475,32 +475,12 @@ pub fn exprIdLessThan(theorem: *const TheoremContext, lhs: ExprId, rhs: ExprId) 
     return compareExprIds(theorem, lhs, rhs) == .lt;
 }
 
+/// Structural order: variables, then placeholders by id, then applications
+/// by term id, arity and arguments.
 pub fn compareExprIds(
     theorem: *const TheoremContext,
     lhs: ExprId,
     rhs: ExprId,
-) std.math.Order {
-    return compareExprIdsBy(theorem, lhs, rhs, .by_id);
-}
-
-/// How `compareExprIdsBy` orders two placeholders.
-pub const PlaceholderOrder = enum {
-    /// By placeholder id.
-    by_id,
-    /// All placeholders equal, so the order does not depend on the ids a
-    /// scope happened to give its fresh metas.
-    blind,
-};
-
-/// Structural order: variables, then placeholders, then applications by
-/// term id, arity and arguments. With `.blind` it is independent of
-/// interning order, so two interners holding the same content order it the
-/// same way; `.by_id` orders placeholders by allocation.
-pub fn compareExprIdsBy(
-    theorem: *const TheoremContext,
-    lhs: ExprId,
-    rhs: ExprId,
-    comptime placeholders: PlaceholderOrder,
 ) std.math.Order {
     if (lhs == rhs) return .eq;
     const lhs_node = theorem.interner.node(lhs);
@@ -513,10 +493,7 @@ pub fn compareExprIdsBy(
         },
         .placeholder => |lhs_id| switch (rhs_node.*) {
             .variable => .gt,
-            .placeholder => |rhs_id| switch (placeholders) {
-                .by_id => std.math.order(lhs_id, rhs_id),
-                .blind => .eq,
-            },
+            .placeholder => |rhs_id| std.math.order(lhs_id, rhs_id),
             .app => .lt,
         },
         .app => |lhs_app| switch (rhs_node.*) {
@@ -528,7 +505,7 @@ pub fn compareExprIdsBy(
                 const len_cmp = std.math.order(lhs_app.args.len, rhs_app.args.len);
                 if (len_cmp != .eq) break :blk len_cmp;
                 for (lhs_app.args, rhs_app.args) |l_arg, r_arg| {
-                    const cmp = compareExprIdsBy(theorem, l_arg, r_arg, placeholders);
+                    const cmp = compareExprIds(theorem, l_arg, r_arg);
                     if (cmp != .eq) break :blk cmp;
                 }
                 break :blk .eq;

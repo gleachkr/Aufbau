@@ -666,7 +666,7 @@ pub fn build(b: *std.Build) void {
         "                   found put in place; the report goes to standard error\n" ++
         "  --json           Report each search marker as one line of JSON\n" ++
         "  -v, -vv          Report what each search cost; -vv adds why it\n" ++
-        "                   missed and the rules it tried most\n" ++
+        "                   missed\n" ++
         "  --only THEOREM[:LABEL]\n" ++
         "                   Search only the markers of THEOREM, or of its line\n" ++
         "                   LABEL\n" ++
@@ -814,8 +814,8 @@ pub fn build(b: *std.Build) void {
         "\"line\":3,\"theorem\":\"found\",\"label\":\"l1\",\"kind\":\"auto?\"," ++
         "\"status\":\"found\",\"suggestions\":[\"use [p []]\"],\"holes\":[]," ++
         "\"retry\":null,\"blocked_by\":null,\"failure\":null,\"detail\":null," });
-    abc_search_json.addCheck(.{ .expect_stdout_match = "\"depth\":1,\"phase\":6," ++
-        "\"phase_name\":\"the search core\",\"rules\":[],\"rounds\":[]}\n" ++
+    abc_search_json.addCheck(.{ .expect_stdout_match = "\"depth\":1," ++
+        "\"rounds\":[]}\n" ++
         "{\"file\":\"search.auf\",\"line\":7," });
     cli_smoke_step.dependOn(&abc_search_json.step);
 
@@ -826,8 +826,7 @@ pub fn build(b: *std.Build) void {
     abc_search_verbose.addArgs(&.{ "search", "-vv", "search.mm0", "search.auf" });
     abc_search_verbose.expectExitCode(4);
     abc_search_verbose.addCheck(.{ .expect_stdout_match = "  use [p []]\n  cost: " });
-    abc_search_verbose.addCheck(.{ .expect_stdout_match = " ms wall, depth 1 in " ++
-        "the search core\n" ++
+    abc_search_verbose.addCheck(.{ .expect_stdout_match = " ms wall, depth 1\n" ++
         "search.auf:7  missed l1  exact?  missed\n" ++
         "  cost: 0 candidates, " });
     abc_search_verbose.addCheck(.{ .expect_stdout_match = " ms wall\n" ++

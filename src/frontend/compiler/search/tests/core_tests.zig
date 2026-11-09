@@ -1,14 +1,12 @@
-//! The search core (`core/`, `GenerateOptions.core`, on by default): it proves
-//! sequents over an ACUI context, closing quantifier witnesses by
-//! unification under the eigenvariable condition; every proof it returns
-//! has passed the checker, and on a miss the generation ladder still runs.
+//! The search core (`core/`): it proves sequents over an ACUI context,
+//! closing quantifier witnesses by unification under the eigenvariable
+//! condition; every proof it returns has passed the checker.
 
 const helpers = @import("./helpers.zig");
 const std = helpers.std;
 const types = helpers.types;
 const suggestionsAtNeedle = helpers.suggestionsAtNeedle;
 const expectOffered = helpers.expectOffered;
-const generate = @import("../generate.zig");
 
 // Classical propositional natural deduction in the shape of `nd_fol`:
 // eager introductions, an unsafe left rule for `→`, `raa`, and the two
@@ -80,12 +78,10 @@ fn search(
     comptime theorem: []const u8,
     comptime proof: []const u8,
     counters: *types.SearchCounters,
-    core: bool,
 ) !types.SourceSuggestions {
     return suggestionsAtNeedle(arena, nd_rules ++ theorem, proof, "auto?", .{
         .counters = counters,
-        // Without the core, the ladder alone.
-        .generate = .{ .enabled = true, .core = core, .ladder = !core },
+        .generate = .{ .enabled = true },
     });
 }
 
@@ -102,13 +98,12 @@ test "the search core proves a propositional sequent the checker accepts" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try search(&arena, contrapose, contrapose_proof, &counters, true);
+    var suggestions = try search(&arena, contrapose, contrapose_proof, &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{
         "imp_intro [imp_intro [not_intro [imp_left [ax [], contra_left []]]]]",
     });
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 1), counters.gen_last_depth);
     try std.testing.expect(counters.core_nodes > 0);
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
@@ -124,29 +119,10 @@ test "the search core closes a goal with a hypothesis that states it" {
         \\pair
         \\----
         \\l1: $ g ⊢ a ∧ a $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"and_intro [#1, #1]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
-}
-
-test "with the ladder on, a goal the search core cannot prove runs the ladder" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var counters = types.SearchCounters{};
-    var suggestions = try suggestionsAtNeedle(&arena, nd_rules ++
-        \\theorem unprovable (a b: wff): $ ∅ ⊢ a → b $;
-    ,
-        \\unprovable
-        \\----------
-        \\l1: $ ∅ ⊢ a → b $ by auto?
-    , "auto?", .{ .counters = &counters, .generate = .{ .enabled = true, .ladder = true } });
-    defer suggestions.deinit();
-
-    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
-    try std.testing.expect(counters.core_nodes > 0);
-    try std.testing.expect(!std.mem.eql(u8, "the search core", generate.phaseName(counters.gen_last_phase)));
 }
 
 test "the search core is on by default" {
@@ -160,19 +136,6 @@ test "the search core is on by default" {
     defer suggestions.deinit();
 
     try std.testing.expect(suggestions.items.len > 0);
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
-}
-
-test "with the search core off, the ladder alone finds the proof" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var counters = types.SearchCounters{};
-    var suggestions = try search(&arena, contrapose, contrapose_proof, &counters, false);
-    defer suggestions.deinit();
-
-    try std.testing.expect(suggestions.items.len > 0);
-    try std.testing.expectEqual(@as(usize, 0), counters.core_nodes);
-    try std.testing.expect(!std.mem.eql(u8, "the search core", generate.phaseName(counters.gen_last_phase)));
 }
 
 /// `name: statement` searched with the core on the nd_fol bench fixture, or
@@ -183,7 +146,7 @@ fn ndFolSearch(
     comptime name: []const u8,
     comptime statement: []const u8,
     counters: *types.SearchCounters,
-    options: struct { max_depth: ?usize = 6, ladder: bool = true, fixture: []const u8 = "nd_fol", dir: []const u8 = "search_bench_cases" },
+    options: struct { max_depth: ?usize = 6, fixture: []const u8 = "nd_fol", dir: []const u8 = "search_bench_cases" },
 ) !types.SourceSuggestions {
     const allocator = arena.allocator();
     const path = try std.fmt.allocPrint(allocator, "tests/{s}/{s}.mm0", .{ options.dir, options.fixture });
@@ -193,7 +156,7 @@ fn ndFolSearch(
     const proof_src = name ++ "\n" ++ underline ++ "\nl1: $ " ++ statement ++ " $ by auto?\n";
     return suggestionsAtNeedle(arena, mm0_src, proof_src, "auto?", .{
         .counters = counters,
-        .generate = .{ .enabled = true, .core = true, .max_depth = options.max_depth, .ladder = options.ladder },
+        .generate = .{ .enabled = true, .max_depth = options.max_depth },
     });
 }
 
@@ -232,7 +195,7 @@ fn deepeningSearch(
 ) !types.SourceSuggestions {
     return suggestionsAtNeedle(arena, deepening_mm0, proof_src, "auto?", .{
         .counters = counters,
-        .generate = .{ .enabled = true, .core = true, .max_depth = max_depth, .ladder = false },
+        .generate = .{ .enabled = true, .max_depth = max_depth },
     });
 }
 
@@ -314,7 +277,7 @@ test "a goal its shares make again is a repeat" {
         \\l1: $ a , _ctx ⊢ F $ by auto?
     , "auto?", .{
         .counters = &counters,
-        .generate = .{ .enabled = true, .ladder = false },
+        .generate = .{ .enabled = true },
     });
     defer suggestions.deinit();
 
@@ -383,7 +346,7 @@ test "a bag's unit with no unit law is a member" {
         \\l1: $ ∅ ⊢ p → q → p $ by auto?
     , "auto?", .{
         .counters = &counters,
-        .generate = .{ .enabled = true, .ladder = false },
+        .generate = .{ .enabled = true },
     });
     defer suggestions.deinit();
 
@@ -399,7 +362,6 @@ test "the search core closes a quantifier witness by unification" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"imp_intro [all_elim [ax []]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -413,7 +375,6 @@ test "the search core introduces eigenvariables and closes later witnesses with 
     try expectOffered(suggestions.items, &.{
         "imp_intro [ex_left [ex_left (x := $ y $, p := $ R u y $) [ex_intro [ex_intro (x := $ w $, p := $ R w v $) [ax (g := $ ∅ $, a := $ R u v $) []]]]]]",
     });
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -427,7 +388,6 @@ test "the search core names a witness the proof leaves open" {
     // Any object closes `[x/?t] P x` from `∀ x P x`; the first `@vars`
     // name stands in.
     try expectOffered(suggestions.items, &.{"imp_intro [ex_intro [all_elim (t := $ u $) [ax []]]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
 }
 
 test "an eigenvariable is read off the fact that closes a schematic instance" {
@@ -442,12 +402,11 @@ test "an eigenvariable is read off the fact that closes a schematic instance" {
         "sch_all",
         "g ⊢ ∀ x p",
         &counters,
-        .{ .ladder = false },
+        .{},
     );
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"all_intro [#1]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -463,12 +422,11 @@ test "a witness is read off a fact whose substitution the theory pushed inward" 
         "sch_ex_not",
         "g ⊢ ∃ x (¬ p)",
         &counters,
-        .{ .ladder = false },
+        .{},
     );
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"ex_intro [#1]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -488,12 +446,11 @@ test "a witness is read back through a pattern a premise fixes" {
         "sub_elim",
         "g , h ⊢ ∃ p (prime p ∧ p ∣ m)",
         &counters,
-        .{ .ladder = false, .fixture = "euclid", .dir = "proof_cases" },
+        .{ .fixture = "euclid", .dir = "proof_cases" },
     );
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"ex_elim_sub [#1, #2]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -536,7 +493,6 @@ test "an eigenvariable becomes the variable a hypothesis names" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"all_intro [and_intro [#1, #1]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -544,7 +500,6 @@ test "an eigenvariable becomes the variable a hypothesis names" {
 // rule on the facts, cannot find the step and the core chooses the witness.
 fn expectCoreWitness(suggestions: types.SourceSuggestions, counters: *const types.SearchCounters) !void {
     try expectOffered(suggestions.items, &.{"imp_intro [ex_intro [#1]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -559,7 +514,7 @@ test "a witness may hold a variable bound outside its scope" {
         "elsewhere",
         "∅ ⊢ P C → ∃ x (P x → ∀ y P y)",
         &counters,
-        .{ .ladder = false },
+        .{},
     );
     defer suggestions.deinit();
 
@@ -586,7 +541,7 @@ test "a witness may hold a binder of a term whose argument is out of its scope" 
         "unscoped",
         "∅ ⊢ P C → ∃ x (scoped z x (P z))",
         &counters,
-        .{ .ladder = false },
+        .{},
     );
     defer suggestions.deinit();
 
@@ -612,7 +567,7 @@ test "a witness may hold a binder a term's result sort depends on" {
         "kept",
         "∅ ⊢ P C → ∃ x (keep y x)",
         &counters,
-        .{ .ladder = false },
+        .{},
     );
     defer suggestions.deinit();
 
@@ -630,7 +585,7 @@ test "a witness may not hold a binder around it" {
         "around",
         "∅ ⊢ P C → ∃ x (∀ y R x y)",
         &counters,
-        .{ .max_depth = 2, .ladder = false },
+        .{ .max_depth = 2 },
     );
     defer suggestions.deinit();
 
@@ -656,7 +611,6 @@ test "a witness in a context member is closed by a hypothesis's context" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"ex_intro [imp_intro [#1]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 1), counters.gen_last_depth);
 }
 
@@ -676,11 +630,10 @@ test "the search core matches a definition as an ordinary term" {
         \\dn_self
         \\-------
         \\l1: $ ∅ ⊢ dn a → b → dn a $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"imp_intro [imp_intro [ax []]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
 }
 
 test "the search core unfolds a definition to match a rule" {
@@ -695,11 +648,10 @@ test "the search core unfolds a definition to match a rule" {
         \\dn_unfold
         \\---------
         \\l1: $ ∅ ⊢ dn a → ¬ ¬ a $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"imp_intro [ax []]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -723,7 +675,6 @@ test "a definition's dummy is a variable the proof names" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"ex_intro [ax (g := $ ∅ $) []]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -744,7 +695,6 @@ test "a hypothesis stated with a definition closes the unfolded goal" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"and_intro [#1, #1]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
 }
 
 test "a definition's dummy never becomes a variable its arguments hold" {
@@ -766,7 +716,7 @@ test "a definition's dummy never becomes a variable its arguments hold" {
 
     try std.testing.expect(counters.core_nodes > 0);
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
-    try std.testing.expect(!std.mem.eql(u8, "the search core", generate.phaseName(counters.gen_last_phase)));
+    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
 }
 
 test "a definition's dummy never becomes an ordinary variable" {
@@ -791,7 +741,7 @@ test "a definition's dummy never becomes an ordinary variable" {
 
     try std.testing.expect(counters.core_nodes > 0);
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
-    try std.testing.expect(!std.mem.eql(u8, "the search core", generate.phaseName(counters.gen_last_phase)));
+    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
 }
 
 test "the search core proves a premise in its rewrite normal form" {
@@ -811,11 +761,10 @@ test "the search core proves a premise in its rewrite normal form" {
         \\twice_a
         \\-------
         \\l1: $ a ⊢ twice a $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"twice_intro [and_intro [ax [], ax []]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -832,11 +781,10 @@ test "the search core unfolds a rule's definition to match a goal" {
         \\dn_t
         \\----
         \\l1: $ ∅ ⊢ ¬ ¬ T ∧ ¬ ¬ T $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"and_intro [t_dn [], t_dn []]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -853,11 +801,10 @@ test "a goal that needs a rule's definition with a dummy unfolded is proved thro
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try ndFolSearch(&arena, all_p_axiom, "all_p_x", "∅ ⊢ ∀ x P x ∧ ∀ x P x", &counters, .{ .ladder = false });
+    var suggestions = try ndFolSearch(&arena, all_p_axiom, "all_p_x", "∅ ⊢ ∀ x P x ∧ ∀ x P x", &counters, .{});
     defer suggestions.deinit();
 
     try std.testing.expect(suggestions.items.len > 0);
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -877,11 +824,10 @@ test "the search core closes a cut by unification with a hypothesis" {
         \\mp_hyps
         \\-------
         \\l1: $ g ⊢ b $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"imp_elim [#1, #2]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -906,11 +852,10 @@ test "the search core introduces an eigenvariable a premise states without a vie
         \\valid_refl
         \\----------
         \\l1: $ valid (a → a) $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"valid_intro [sat_refl (w := $ v $) []]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -933,11 +878,10 @@ test "the search core fixes a cut from a hypothesis before the premise only a cl
         \\and_elim_l
         \\----------
         \\l1: $ a $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"mp [and_elim_l_imp [], #1]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -957,11 +901,10 @@ test "two bare premises wait for the sibling that fixes them" {
         \\pair
         \\----
         \\l1: $ p ∧ q $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"mp2 [#5, #6, and_i []]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expect(counters.core_nodes <= 8);
 }
 
@@ -984,11 +927,10 @@ test "the search core closes a goal with a fact forward saturation derived" {
         \\join_mp
         \\-------
         \\l1: $ g , h ⊢ b $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"imp_elim_m [#1, #2]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1003,11 +945,10 @@ test "the search core closes premises with a fact forward saturation derived" {
         \\join_mp_pair
         \\------------
         \\l1: $ g , h ⊢ b ∧ b $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"and_intro [imp_elim_m [#1, #2], imp_elim_m [#1, #2]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1034,11 +975,10 @@ test "the search core splits a context between the hypotheses that close a rule'
         \\split_mp
         \\--------
         \\l1: $ g , h ⊢ b $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"imp_elim_s [#1, #2]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1054,11 +994,10 @@ test "a hypothesis fixes a share that sits beside other members" {
         \\cut_hyps
         \\--------
         \\l1: $ g , h , k ⊢ b ∧ b $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"and_intro [cut_s [#1, #2], cut_s [#1, #2]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1074,11 +1013,10 @@ test "a share a hypothesis leaves open takes the rest of the context" {
         \\rest_mp
         \\-------
         \\l1: $ g , h ⊢ b $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"imp_elim_s [#1, and_intro [#2, #2]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1093,11 +1031,10 @@ test "a share takes the whole context when the rest is not enough" {
         \\whole_mp
         \\--------
         \\l1: $ g , a ⊢ b $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"imp_elim_s [#1, ax (g := $ g $, a := $ a $) []]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1111,11 +1048,10 @@ test "a share no premise holds takes the rest of the context" {
         \\weak
         \\----
         \\l1: $ g , h ⊢ a ∧ a $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"and_intro [weaken_s [#1], weaken_s [#1]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1132,7 +1068,7 @@ test "shares never hold what the goal's context does not" {
         \\l1: $ g ⊢ b $ by auto?
     , "auto?", .{
         .counters = &counters,
-        .generate = .{ .enabled = true, .ladder = false },
+        .generate = .{ .enabled = true },
     });
     defer suggestions.deinit();
 
@@ -1162,11 +1098,10 @@ test "a share's member names the eigenvariable a context member holds" {
         \\name_mp
         \\-------
         \\l1: $ g , h ⊢ Q $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"name_elim [#1, imp_elim_s [#2, #3]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1193,7 +1128,7 @@ test "a share is not fixed to a context with a member outside the goal's" {
         \\name_far
         \\--------
         \\l1: $ g , h ⊢ Q $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"name_elim [#1, imp_elim_s [#7, imp_elim_s [#8, #9]]]"});
@@ -1226,11 +1161,10 @@ test "a bound binder the contexts may depend on is an eigenvariable" {
         \\ex_q
         \\----
         \\l1: $ g , h ⊢ Q ∧ Q $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"and_intro [ex_elim2 [#1, #2], ex_elim2 [#1, #2]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1256,11 +1190,10 @@ test "a step whose first premise fixes a cut wrongly retries with another first"
         \\le_chain
         \\--------
         \\l1: $ g , h ⊢ suc a ≤ c $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"le_trans [le_suc_suc [#3], #2]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1287,11 +1220,10 @@ test "an eigenvariable becomes a variable only dependent arguments mention" {
         \\ex_q3
         \\-----
         \\l1: $ ex x (P x) , h ⊢ Q ∧ Q $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"and_intro [ex_elim3 [#1, #2], ex_elim3 [#1, #2]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1318,11 +1250,10 @@ test "a goal holding a definition's dummy is tried in its normal form" {
         \\has_p_both
         \\----------
         \\l1: $ g ⊢ has_P a ∧ has_P a $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"and_intro [holds_intro [#1], holds_intro [#1]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1349,11 +1280,10 @@ test "the premise holding the most shared cuts goes first" {
         \\cases
         \\-----
         \\l1: $ g , h ⊢ C $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try std.testing.expect(suggestions.items.len > 0);
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1381,11 +1311,10 @@ test "an eigenvariable is named by a bound variable" {
         \\has_c_both
         \\----------
         \\l1: $ g , P a ⊢ has_c ∧ has_c $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"and_intro [holds_intro [#1], holds_intro [#1]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1453,7 +1382,7 @@ fn seqSearch(
 ) !types.SourceSuggestions {
     return suggestionsAtNeedle(arena, seq_rules ++ theorem, proof, "auto?", .{
         .counters = counters,
-        .generate = .{ .enabled = true, .ladder = false },
+        .generate = .{ .enabled = true },
     });
 }
 
@@ -1472,7 +1401,6 @@ test "the search core takes a context entry only at its place in a sequence" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"imp_intro [imp_intro [wk [ax []]]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1512,7 +1440,6 @@ test "an open context in a sequence takes the run of entries around which the re
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"strengthen [#1]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1541,7 +1468,7 @@ fn sbSearch(
 ) !types.SourceSuggestions {
     return suggestionsAtNeedle(arena, nd_rules ++ sb_rules ++ theorem, proof, "auto?", .{
         .counters = counters,
-        .generate = .{ .enabled = true, .ladder = false },
+        .generate = .{ .enabled = true },
     });
 }
 
@@ -1564,7 +1491,6 @@ test "a rule's conclusion holds a substitution the rest of it fixes" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"and_intro [pick_both [#1], pick_both [#1]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1585,7 +1511,6 @@ test "a binder a rule's conclusion holds only in a substitution is fixed by a pr
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"and_intro [pick_out [#1], pick_out [#1]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1622,7 +1547,6 @@ test "the search core replaces equals by an abstraction its premises fix" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"and_intro [eq_replace [#1, #2], eq_replace [#1, #2]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1640,7 +1564,6 @@ test "an abstraction with no premises reads its target off the goal" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"eq_replace_imp"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1652,7 +1575,7 @@ fn bridgeSearch(
 ) !types.SourceSuggestions {
     return suggestionsAtNeedle(arena, nd_rules ++ theorem, proof, "auto?", .{
         .counters = counters,
-        .generate = .{ .enabled = true, .ladder = false },
+        .generate = .{ .enabled = true },
     });
 }
 
@@ -1672,7 +1595,6 @@ test "a bridge carries a fact into a larger context" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"and_intro [weak [#1], weak [#2]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1719,7 +1641,6 @@ test "two eigenvariables unify as one fresh variable" {
     defer suggestions.deinit();
 
     try std.testing.expect(suggestions.items.len > 0);
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1742,7 +1663,6 @@ test "an eigenvariable a rule's bound binder stands for is named clear of its ot
     defer suggestions.deinit();
 
     try std.testing.expect(suggestions.items.len > 0);
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1782,12 +1702,11 @@ test "an open witness takes the structure a rule's conclusion fixes around it" {
         "ex_f",
         "∅ ⊢ ∃ y R C y",
         &counters,
-        .{ .ladder = false },
+        .{},
     );
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"ex_intro [R_f (a := $ C $) []]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1804,7 +1723,7 @@ test "an open witness never takes structure with a binder nothing fixes" {
         "ex_f",
         "∅ ⊢ ∃ y R C y",
         &counters,
-        .{ .ladder = false },
+        .{},
     );
     defer suggestions.deinit();
 
@@ -1868,7 +1787,7 @@ test "an eigenvariable a rule's bound binder holds never merges with one in the 
         \\l1: $ ∅ ⊢ F $ by auto?
     , "auto?", .{
         .counters = &counters,
-        .generate = .{ .enabled = true, .ladder = false },
+        .generate = .{ .enabled = true },
     });
     defer suggestions.deinit();
 
@@ -1895,11 +1814,10 @@ test "a rule passes a goal's open cut to a premise a fact closes" {
         \\s_chain
         \\-------
         \\l1: $ R x z $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"trans [s_r [#1], s_r [#2]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -1920,7 +1838,7 @@ test "a rule never passes an open cut to a premise that is the bare cut" {
         \\no_p
         \\----
         \\l1: $ T p $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try std.testing.expect(counters.core_nodes <= 12);
@@ -1951,7 +1869,7 @@ test "a premise holding a passed cut takes rules once the search relaxes" {
         \\l1: $ C $ by auto?
     , "auto?", .{
         .counters = &counters,
-        .generate = .{ .enabled = true, .ladder = false },
+        .generate = .{ .enabled = true },
     });
     defer suggestions.deinit();
 
@@ -1984,7 +1902,7 @@ test "a cut rule passes a cut on once the search relaxes" {
         \\l1: $ C $ by auto?
     , "auto?", .{
         .counters = &counters,
-        .generate = .{ .enabled = true, .ladder = false },
+        .generate = .{ .enabled = true },
     });
     defer suggestions.deinit();
 
@@ -2008,11 +1926,10 @@ test "a narrowing gives a binder nothing fixes a cut a premise's fact fixes" {
         \\com12
         \\-----
         \\l1: $ b → a → c $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"syl [a2i [#1], ax_1 []]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -2038,11 +1955,10 @@ test "a narrowing gives a bound binder nothing fixes a fresh name" {
         \\d_p
         \\---
         \\l1: $ D p $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"eqmpr [tdef (x := $ x $) [], gen [qax []]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -2066,11 +1982,10 @@ test "each use of a definition picks its own dummies" {
         \\k_ab
         \\----
         \\l1: $ K a b $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"both [#1, #1]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -2093,11 +2008,10 @@ test "a premise no fact closes goes first when the fact guess for its sibling fa
         \\sym
         \\---
         \\l1: $ eq b a $ by auto?
-    , &counters, true);
+    , &counters);
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"eqmp [cong [#1], refl []]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -2113,12 +2027,11 @@ test "a bound binder's variable an argument holds bound is renamed by its @fresh
         "all_dup",
         "∀ x P x ⊢ ∀ x (P x ∧ P x)",
         &counters,
-        .{ .ladder = false, .fixture = "additive_fol" },
+        .{ .fixture = "additive_fol" },
     );
     defer suggestions.deinit();
 
     try std.testing.expect(suggestions.items.len != 0);
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -2136,12 +2049,11 @@ test "the search core fills a hole a rule's premise fixes" {
         "infer_const",
         "g ⊢ (λ x : a. λ y : b. x) : _ty",
         &counters,
-        .{ .ladder = false, .fixture = "pass_holey_type_inference", .dir = "proof_cases" },
+        .{ .fixture = "pass_holey_type_inference", .dir = "proof_cases" },
     );
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"t_lam [t_lam [t_var []]]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -2157,12 +2069,11 @@ test "the search core fills a context hole with what the proof needs" {
         "iff_dup",
         "_ctx ⊢ a ↔ (a ∧ a)",
         &counters,
-        .{ .ladder = false, .fixture = "pass_prawitz_holes", .dir = "proof_cases" },
+        .{ .fixture = "pass_prawitz_holes", .dir = "proof_cases" },
     );
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"ax (g := $ _ $)"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -2208,12 +2119,11 @@ test "the search core splits a context hole and empties the parts nothing fills"
         \\l1: $ _ctx ⊢ ⊤ ∧ ⊤ $ by auto?
     , "auto?", .{
         .counters = &counters,
-        .generate = .{ .enabled = true, .ladder = false },
+        .generate = .{ .enabled = true },
     });
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"pair [top_intro (g := $ ∅ $) [], top_intro (g := $ ∅ $) []]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 
@@ -2226,7 +2136,7 @@ fn benchSearch(
     const mm0 = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/" ++ mm0_name, arena.allocator(), .unlimited);
     return suggestionsAtNeedle(arena, mm0, proof, "auto?", .{
         .counters = counters,
-        .generate = .{ .enabled = true, .ladder = false },
+        .generate = .{ .enabled = true },
     });
 }
 
@@ -2244,7 +2154,6 @@ test "a rule whose conclusion is a substitution meets a goal of another head" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"mp [all_elim [#1], #2]"});
-    try std.testing.expectEqualStrings("the search core", generate.phaseName(counters.gen_last_phase));
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 

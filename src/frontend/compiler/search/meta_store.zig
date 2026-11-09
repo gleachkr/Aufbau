@@ -1,16 +1,16 @@
-//! Search metavariables: the substitution (`Sigma`) and the branch-local
-//! views over it (`MetaStore`).
+//! Search metavariables: the substitution (`Sigma`) and the store over it
+//! (`MetaStore`), used for forward saturation's universal metas and
+//! ephemeral matches.
 //!
 //! A search meta is represented in the interner as an ordinary placeholder
-//! leaf; a view maps its `PlaceholderId` to a key in the substitution, and
+//! leaf; the store maps its `PlaceholderId` to a key in the substitution, and
 //! the assignment state lives there, never in the interner node. That keeps interning, hashing, and the
 //! COW theorem clone working unchanged, and lets the existing emission
 //! leakage guard cover unsolved metas (kind-aware via
 //! `PlaceholderClass.meta`).
 //!
 //! Lifetime/rollback discipline:
-//! - a view is branch-local: one per search branch, marked before a
-//!   hypothesis match and rolled back beside `rollbackOneHypMatch`;
+//! - a use marks the store and rolls its assignments back afterwards;
 //! - metas are fully solved before every `tryCandidate` call, so validation
 //!   never sees a live meta;
 //! - a meta leaf is always dereferenced through the store before any
@@ -23,7 +23,6 @@ const ExprId = ExprModule.ExprId;
 const PlaceholderId = ExprModule.PlaceholderId;
 const TheoremContext = ExprModule.TheoremContext;
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
-const BindingValidation = @import("../../binding_validation.zig");
 
 /// The search leaf kinds; defined with the placeholder factory that mints
 /// them.
@@ -33,16 +32,9 @@ pub const MetaInfo = struct {
     sort_name: []const u8,
     /// Allowed-dependency constraint set: the theorem dep bits an assignment
     /// is permitted to mention. NOT an allocated dep bit — meta leaves are
-    /// minted dep-free (`addMetaPlaceholderResolved`), except a
-    /// `.bound_choice` meta's (`mintBoundVar`).
+    /// minted dep-free (`addMetaPlaceholderResolved`).
     allowed_deps: u55,
     kind: MetaKind,
-    /// True for a meta minted by an *enclosing* open slot and registered here
-    /// across an interner clone boundary (`registerAncestorMeta`). When such a
-    /// meta is solved at this leaf, the binder that mentions it is rendered as
-    /// an explicit binding so its now-concrete value rides the conclusion back
-    /// up to the slot that minted it (carry-to-leaf).
-    ancestor: bool = false,
 };
 
 /// Counters mirrored into `SearchCounters` by the search driver once stages
@@ -55,60 +47,6 @@ pub const MetaStats = struct {
     bound_choice_created: usize = 0,
     assignments: usize = 0,
     rollbacks: usize = 0,
-};
-
-/// Dependency bans on carried witness metas, keyed by stable `meta_id`: the
-/// theorem dep bits a meta's eventual value must not mention. A rule whose
-/// non-bound binder holds the meta while omitting one of its bound args from
-/// that binder's dependencies (the eigenvariable condition, e.g. `all_intro`'s
-/// context not depending on `x`) bans whatever that bound arg is bound to.
-/// Lexically scoped: the generation driver narrows it on entry to an open slot
-/// and rolls it back on exit, so a ban lives exactly as long as the binding
-/// that caused it.
-pub const MetaDepBans = struct {
-    allocator: std.mem.Allocator,
-    banned: std.AutoHashMapUnmanaged(u64, u55) = .empty,
-    undo: std.ArrayListUnmanaged(Undo) = .empty,
-
-    const Undo = struct { meta_id: u64, prev: ?u55 };
-
-    pub fn init(allocator: std.mem.Allocator) MetaDepBans {
-        return .{ .allocator = allocator };
-    }
-
-    pub fn deinit(self: *MetaDepBans) void {
-        self.banned.deinit(self.allocator);
-        self.undo.deinit(self.allocator);
-    }
-
-    pub fn get(self: *const MetaDepBans, meta_id: u64) u55 {
-        return self.banned.get(meta_id) orelse 0;
-    }
-
-    pub fn mark(self: *const MetaDepBans) usize {
-        return self.undo.items.len;
-    }
-
-    pub fn ban(self: *MetaDepBans, meta_id: u64, deps: u55) !void {
-        const allocator = self.allocator;
-        const prev = self.banned.get(meta_id);
-        const next = (prev orelse 0) | deps;
-        if (prev != null and prev.? == next) return;
-        try self.undo.append(allocator, .{ .meta_id = meta_id, .prev = prev });
-        errdefer _ = self.undo.pop();
-        try self.banned.put(allocator, meta_id, next);
-    }
-
-    pub fn rollback(self: *MetaDepBans, to: usize) void {
-        while (self.undo.items.len > to) {
-            const entry = self.undo.pop().?;
-            if (entry.prev) |prev| {
-                self.banned.getPtr(entry.meta_id).?.* = prev;
-            } else {
-                _ = self.banned.remove(entry.meta_id);
-            }
-        }
-    }
 };
 
 /// A key into `Sigma`: a meta's stable `meta_id` (`PlaceholderInfo.meta_id`)
@@ -134,21 +72,13 @@ pub const Step = struct {
     kind: enum { entered, bound },
 };
 
-/// The search's substitution: every meta's constraints and assignment, keyed
-/// by `MetaKey`, with one trail. The generation driver owns one for a whole
-/// `auto?` call and every open slot's `MetaStore` is a view over it; any
-/// other store owns a private one. Views use the trail strictly LIFO: a view
-/// marks, rolls back and finally undoes only its own steps (checked in safe
-/// builds), which holds because a view nested inside another lives and dies
-/// within one call of the outer view's search.
+/// A store's substitution: every meta's constraints and assignment, keyed
+/// by `MetaKey`, with one trail, used strictly LIFO.
 pub const Sigma = struct {
     allocator: std.mem.Allocator,
     entries: std.AutoHashMapUnmanaged(MetaKey, MetaEntry) = .empty,
     trail: std.ArrayListUnmanaged(Step) = .empty,
-    /// The next stable `meta_id` a shared view stamps on a leaf it mints.
-    next_meta_id: u64 = 0,
     next_alias: MetaKey = alias_base,
-    next_view: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator) Sigma {
         return .{ .allocator = allocator };
@@ -160,12 +90,6 @@ pub const Sigma = struct {
         self.* = undefined;
     }
 
-    fn takeMetaId(self: *Sigma) u64 {
-        const id = self.next_meta_id;
-        self.next_meta_id += 1;
-        return id;
-    }
-
     fn takeAlias(self: *Sigma) MetaKey {
         const key = self.next_alias;
         self.next_alias += 1;
@@ -173,63 +97,26 @@ pub const Sigma = struct {
     }
 };
 
-/// A branch-local view over a `Sigma`: the interner-local map from a meta
-/// leaf's `PlaceholderId` to its key, plus the view's own phase flag and
-/// counters.
-///
-/// A meta this view mints is keyed by the `meta_id` it stamps on the leaf
-/// (shared views) or by an alias (private ones). A meta it registers from
-/// elsewhere (`registerAncestorMeta`, `registerLocalMeta`) gets an alias, so
-/// what this view assigns stays invisible to the view that minted it.
+/// A view over its own `Sigma`: the interner-local map from a meta leaf's
+/// `PlaceholderId` to its key, plus counters. Each meta it mints is keyed by
+/// an alias.
 pub const MetaStore = struct {
     allocator: std.mem.Allocator,
     env: *const GlobalEnv,
-    /// The driver's substitution, or null for a store over `own`.
-    shared: ?*Sigma = null,
     own: Sigma,
     /// This view's id in its `Sigma`, stamped on every step it makes.
     id: u32 = 0,
     /// Trail length when the view was made; `deinit` undoes back to it.
     base: usize = 0,
     keys: std.AutoHashMapUnmanaged(PlaceholderId, MetaKey) = .empty,
-    /// Universal metas are deferred choices: they may only be assigned during
-    /// a derived-ref use-time match, opened explicitly by the
-    /// driver. Everywhere else an attempted assignment is a phase error.
-    universal_use_open: bool = false,
     stats: MetaStats = .{},
-    /// The driver's carried-meta dependency bans (see `MetaDepBans`). An
-    /// ancestor meta registers with its banned bits excluded from
-    /// `allowed_deps`, so `assign` rejects an eigenvariable witness. Null on
-    /// the legacy per-slot path.
-    dep_bans: ?*const MetaDepBans = null,
 
-    /// A store over its own private substitution. Its metas carry no stable
-    /// `meta_id` (`exact?`, the forward derived pool, ephemeral matches).
+    /// A store over its own private substitution.
     pub fn init(
         allocator: std.mem.Allocator,
         env: *const GlobalEnv,
     ) MetaStore {
         return .{ .allocator = allocator, .env = env, .own = Sigma.init(allocator) };
-    }
-
-    /// A view over the driver's substitution. Metas it mints carry a stable
-    /// `meta_id` from `sigma`, so a witness keeps one identity through the
-    /// open-target recursion's interner clones (carry-to-leaf).
-    pub fn initShared(
-        allocator: std.mem.Allocator,
-        env: *const GlobalEnv,
-        sigma: *Sigma,
-    ) MetaStore {
-        const id = sigma.next_view;
-        sigma.next_view += 1;
-        return .{
-            .allocator = allocator,
-            .env = env,
-            .shared = sigma,
-            .own = Sigma.init(allocator),
-            .id = id,
-            .base = sigma.trail.items.len,
-        };
     }
 
     /// Undo this view's steps and free it.
@@ -241,11 +128,11 @@ pub const MetaStore = struct {
     }
 
     fn substitution(self: *MetaStore) *Sigma {
-        return self.shared orelse &self.own;
+        return &self.own;
     }
 
     fn substitutionConst(self: *const MetaStore) *const Sigma {
-        return self.shared orelse &self.own;
+        return &self.own;
     }
 
     fn entry(self: *const MetaStore, pid: PlaceholderId) ?MetaEntry {
@@ -266,19 +153,13 @@ pub const MetaStore = struct {
         allowed_deps: u55,
         kind: MetaKind,
     ) !ExprId {
-        if (kind == .bound_choice) {
-            return self.mintBoundVar(theorem, sort_name, try theorem.takePlaceholderDep(), allowed_deps);
-        }
-        const meta_id: ?u64 = if (self.shared) |s| s.takeMetaId() else null;
-        const expr_id = if (meta_id) |id|
-            try theorem.addMetaPlaceholderWithMetaId(sort_name, id)
-        else
-            try theorem.addMetaPlaceholderResolved(sort_name);
+        std.debug.assert(kind != .bound_choice);
+        const expr_id = try theorem.addMetaPlaceholderResolved(sort_name);
         const placeholder_id = switch (theorem.interner.node(expr_id).*) {
             .placeholder => |id| id,
             else => unreachable,
         };
-        try self.enter(placeholder_id, meta_id orelse self.substitution().takeAlias(), .{
+        try self.enter(placeholder_id, self.own.takeAlias(), .{
             .sort_name = sort_name,
             .allowed_deps = allowed_deps,
             .kind = kind,
@@ -292,65 +173,6 @@ pub const MetaStore = struct {
         return expr_id;
     }
 
-    /// Mint a `.bound_choice` meta: a bound variable not yet named. Its leaf
-    /// reads as bound with dependency bit(s) `deps` (a fresh placeholder bit,
-    /// or the bit of the hidden variable it replaces), so dependency checks
-    /// and substitution reduction treat it as the variable it will become.
-    pub fn mintBoundVar(
-        self: *MetaStore,
-        theorem: *TheoremContext,
-        sort_name: []const u8,
-        deps: u55,
-        allowed_deps: u55,
-    ) !ExprId {
-        const meta_id: ?u64 = if (self.shared) |s| s.takeMetaId() else null;
-        const expr_id = try theorem.addBoundVarMetaPlaceholder(sort_name, deps, meta_id);
-        const placeholder_id = theorem.interner.node(expr_id).placeholder;
-        try self.enter(placeholder_id, meta_id orelse self.substitution().takeAlias(), .{
-            .sort_name = sort_name,
-            .allowed_deps = allowed_deps,
-            .kind = .bound_choice,
-        });
-        self.stats.bound_choice_created += 1;
-        return expr_id;
-    }
-
-    /// Register an *ancestor* meta — a `.meta`-class leaf carrying a stable
-    /// `meta_id` that was minted in an enclosing open slot and threaded into
-    /// this interner across a clone boundary (so it has a different local
-    /// `PlaceholderId` here, but the same logical identity). Registering it by
-    /// local pid makes the leaf bindable in this slot's store, so the leaf
-    /// unification that forces it (e.g. `ax` unifying two members) can solve
-    /// it; the value then flows up via the materialized conclusion. It is
-    /// keyed by an alias, not its `meta_id`, so the minting view never sees
-    /// this view's assignment. No-op if already registered or if the leaf
-    /// carries no `meta_id`. Trailed, so it rolls back with the branch.
-    pub fn registerAncestorMeta(
-        self: *MetaStore,
-        theorem: *const TheoremContext,
-        expr_id: ExprId,
-    ) !void {
-        const pid = switch (theorem.interner.node(expr_id).*) {
-            .placeholder => |id| id,
-            else => return,
-        };
-        if (self.keys.contains(pid)) return;
-        const ph_info = theorem.placeholderInfo(pid) orelse return;
-        const meta_id = ph_info.meta_id orelse return;
-        const banned = if (self.dep_bans) |bans| bans.get(meta_id) else 0;
-        try self.enter(pid, self.substitution().takeAlias(), .{
-            .sort_name = ph_info.sort_name,
-            .allowed_deps = ~banned,
-            .kind = kindOf(ph_info),
-            .ancestor = true,
-        });
-    }
-
-    /// The kind a re-registered meta leaf keeps across an interner boundary.
-    fn kindOf(leaf: ExprModule.PlaceholderInfo) MetaKind {
-        return if (leaf.bound_var) .bound_choice else .existential;
-    }
-
     /// Enter a new meta under `key` with the view's handle `pid`, trailed.
     fn enter(self: *MetaStore, pid: PlaceholderId, key: MetaKey, meta: MetaInfo) !void {
         const s = self.substitution();
@@ -361,80 +183,8 @@ pub const MetaStore = struct {
         try self.keys.put(self.allocator, pid, key);
     }
 
-    /// Register an existing `.meta`-class leaf by its local `PlaceholderId` so
-    /// this store will unify it. `solveCorrespondence` keys on `info(pid) != null`
-    /// to decide whether a placeholder is a bindable meta, so a seed meta minted
-    /// at candidate-creation time (before any store exists) is inert until a
-    /// store registers it here. Used by the eliminator reconciliation seed: an
-    /// ephemeral store registers the bindings' seed metas, solves them against a
-    /// matched ref, then derefs the result back into the bindings. Unlike
-    /// `registerAncestorMeta` no `meta_id` is required (the leaf is local to this
-    /// interner). No-op on a non-placeholder or a standard (non-meta) leaf, or
-    /// when already registered. Trailed, so it rolls back with the branch.
-    pub fn registerLocalMeta(
-        self: *MetaStore,
-        theorem: *const TheoremContext,
-        expr_id: ExprId,
-    ) !void {
-        const pid = switch (theorem.interner.node(expr_id).*) {
-            .placeholder => |id| id,
-            else => return,
-        };
-        if (self.keys.contains(pid)) return;
-        const ph_info = theorem.placeholderInfo(pid) orelse return;
-        if (ph_info.class != .meta) return;
-        try self.enter(pid, self.substitution().takeAlias(), .{
-            .sort_name = ph_info.sort_name,
-            .allowed_deps = std.math.maxInt(u55),
-            .kind = kindOf(ph_info),
-        });
-    }
-
-    /// True if `expr` mentions an ancestor meta (solved or not). Used to find
-    /// the binders whose explicit rendering carries a leaf-solved ancestor
-    /// witness back to the slot that minted it.
-    pub fn exprMentionsAncestor(
-        self: *const MetaStore,
-        theorem: *const TheoremContext,
-        expr: ExprId,
-    ) bool {
-        return switch (theorem.interner.node(expr).*) {
-            .variable => false,
-            .placeholder => |pid| if (self.entry(pid)) |e| e.info.ancestor else false,
-            .app => |app| blk: {
-                for (app.args) |arg| {
-                    if (self.exprMentionsAncestor(theorem, arg)) break :blk true;
-                }
-                break :blk false;
-            },
-        };
-    }
-
-    /// The store's meta id for `expr_id`, or null when the expression is not
-    /// a registered meta leaf (including ordinary standard placeholders).
-    pub fn metaIdOf(
-        self: *const MetaStore,
-        theorem: *const TheoremContext,
-        expr_id: ExprId,
-    ) ?PlaceholderId {
-        return switch (theorem.interner.node(expr_id).*) {
-            .placeholder => |id| if (self.keys.contains(id)) id else null,
-            .variable, .app => null,
-        };
-    }
-
     pub fn info(self: *const MetaStore, meta_id: PlaceholderId) ?MetaInfo {
         return if (self.entry(meta_id)) |e| e.info else null;
-    }
-
-    /// Whether `assign` can bind `meta` at all: a wildcard never binds, and
-    /// a universal only in the open phase.
-    pub fn canBind(self: *const MetaStore, meta: MetaInfo) bool {
-        return switch (meta.kind) {
-            .wildcard => false,
-            .universal => self.universal_use_open,
-            .existential, .bound_choice => true,
-        };
     }
 
     pub fn lookup(self: *const MetaStore, meta_id: PlaceholderId) ?ExprId {
@@ -481,52 +231,6 @@ pub const MetaStore = struct {
         }
     }
 
-    /// Assign `value` to a meta. Validates kind/phase, single assignment,
-    /// occurs check, sort, and the allowed-dependency constraint. Sort and
-    /// dep checks are skipped when the value's leaf info is unavailable —
-    /// search stays a proposer; `tryCandidate` revalidates every accepted
-    /// proof.
-    pub fn assign(
-        self: *MetaStore,
-        theorem: *TheoremContext,
-        meta_id: PlaceholderId,
-        value: ExprId,
-    ) !void {
-        const key = self.keys.get(meta_id) orelse return error.UnknownMeta;
-        const current = self.substitution().entries.get(key).?;
-        const meta = current.info;
-        if (!self.canBind(meta)) {
-            return if (meta.kind == .wildcard) error.WildcardNeverBinds else error.UniversalWrongPhase;
-        }
-        if (current.value != null) {
-            return error.MetaAlreadyAssigned;
-        }
-        const resolved = try self.deref(theorem, value);
-        if (self.occursIn(theorem, meta_id, resolved)) {
-            return error.OccursCheckFailed;
-        }
-        if (BindingValidation.exprInfo(
-            self.env,
-            theorem,
-            resolved,
-        )) |value_info| {
-            if (!std.mem.eql(u8, value_info.sort_name, meta.sort_name)) {
-                return error.SortMismatch;
-            }
-            if ((value_info.deps & ~meta.allowed_deps) != 0) {
-                return error.DependencyViolation;
-            }
-            // A bound-variable meta can only become a bound variable.
-            if (meta.kind == .bound_choice and !value_info.bound) return error.NotBoundVariable;
-        } else |_| {
-            if (meta.kind == .bound_choice) return error.NotBoundVariable;
-        }
-        const s = self.substitution();
-        try s.trail.append(s.allocator, .{ .view = self.id, .key = key, .pid = meta_id, .kind = .bound });
-        s.entries.getPtr(key).?.value = resolved;
-        self.stats.assignments += 1;
-    }
-
     /// Whether `meta_id` occurs in `expr_id`. The expression must already be
     /// dereferenced through current assignments.
     pub fn occursIn(
@@ -547,15 +251,9 @@ pub const MetaStore = struct {
         };
     }
 
-    /// Trail mark for branch-local rollback. Pair with `rollbackTo` at the
-    /// same site as the assembly backtrack (`rollbackOneHypMatch`).
+    /// Trail mark for rollback. Pair with `rollbackTo`.
     pub fn mark(self: *const MetaStore) usize {
         return self.substitutionConst().trail.items.len;
-    }
-
-    /// The steps made since `trail_mark`, all this view's own.
-    pub fn stepsSince(self: *const MetaStore, trail_mark: usize) []const Step {
-        return self.substitutionConst().trail.items[trail_mark..];
     }
 
     /// Undo every mint and assignment recorded after `trail_mark`. A rolled-
@@ -581,16 +279,6 @@ pub const MetaStore = struct {
                 .bound => s.entries.getPtr(step.key).?.value = null,
             }
         }
-    }
-
-    /// Open/close the derived-ref use-time window in which universal metas
-    /// may be assigned (forward instantiation's transient assignments).
-    pub fn openUniversalUse(self: *MetaStore) void {
-        self.universal_use_open = true;
-    }
-
-    pub fn closeUniversalUse(self: *MetaStore) void {
-        self.universal_use_open = false;
     }
 
     /// True when no unsolved meta is reachable from `expr_id` (through
@@ -626,20 +314,6 @@ pub const MetaStore = struct {
                 break :blk false;
             },
         };
-    }
-
-    /// Fully dereference `expr_id`; error if any unsolved meta remains
-    /// (wildcards included — they may never reach a rendered expression).
-    pub fn materialize(
-        self: *const MetaStore,
-        theorem: *TheoremContext,
-        expr_id: ExprId,
-    ) !ExprId {
-        const resolved = try self.deref(theorem, expr_id);
-        if (self.hasUnsolvedMeta(theorem, resolved)) {
-            return error.UnsolvedMeta;
-        }
-        return resolved;
     }
 
     /// Collect the unsolved metas reachable from `expr_id`, each reported
@@ -687,409 +361,4 @@ pub const MetaStore = struct {
     }
 };
 
-/// Store-free debug guard for chokepoints that have no store in scope: no
-/// meta-class leaf at all may appear here, solved or not (post-
-/// materialization surfaces).
-pub fn assertNoMetaLeaf(
-    theorem: *const TheoremContext,
-    expr_id: ExprId,
-) void {
-    if (!std.debug.runtime_safety) return;
-    switch (theorem.interner.node(expr_id).*) {
-        .variable => {},
-        .placeholder => |id| switch (theorem.placeholderClass(id)) {
-            .standard => {},
-            .meta => @panic("meta leaf reached a meta-free chokepoint"),
-        },
-        .app => |app| {
-            for (app.args) |arg| {
-                assertNoMetaLeaf(theorem, arg);
-            }
-        },
-    }
-}
-
 // --- tests ---------------------------------------------------------------
-
-const TermDecl = @import("../../env.zig").TermDecl;
-
-fn appendTerm(env: *GlobalEnv, name: []const u8, ret_sort: []const u8) !u32 {
-    const id: u32 = @intCast(env.terms.items.len);
-    try env.terms.append(env.allocator, TermDecl{
-        .name = name,
-        .args = &.{},
-        .arg_names = &.{},
-        .dummy_args = &.{},
-        .dummy_names = &.{},
-        .ret_sort_name = ret_sort,
-        .is_def = false,
-        .body = null,
-    });
-    try env.term_names.put(name, id);
-    return id;
-}
-
-const TestSetup = struct {
-    arena: ArenaAllocator,
-    env: GlobalEnv,
-    theorem: TheoremContext,
-    store: MetaStore,
-
-    fn init() !*TestSetup {
-        const self = try std.testing.allocator.create(TestSetup);
-        self.arena = ArenaAllocator.init(std.testing.allocator);
-        self.env = GlobalEnv.init(self.arena.allocator());
-        self.theorem = TheoremContext.init(std.testing.allocator);
-        self.store = MetaStore.init(std.testing.allocator, &self.env);
-        return self;
-    }
-
-    fn deinit(self: *TestSetup) void {
-        self.store.deinit();
-        self.theorem.deinit();
-        self.arena.deinit();
-        std.testing.allocator.destroy(self);
-    }
-};
-
-test "create existential meta consumes no dep bit" {
-    var setup = try TestSetup.init();
-    defer setup.deinit();
-    const theorem = &setup.theorem;
-
-    const dep_watermark = theorem.next_placeholder_dep;
-    const meta = try setup.store.mint(theorem, "obj", 0, .existential);
-
-    const meta_id = setup.store.metaIdOf(theorem, meta) orelse
-        return error.ExpectedMeta;
-    const meta_info = setup.store.info(meta_id) orelse
-        return error.ExpectedMetaInfo;
-    try std.testing.expectEqual(MetaKind.existential, meta_info.kind);
-    try std.testing.expectEqualStrings("obj", meta_info.sort_name);
-    // Dep-free minting: the shared u55 dep space is untouched, and the
-    // interner-side info is marked as a meta-class placeholder.
-    try std.testing.expectEqual(dep_watermark, theorem.next_placeholder_dep);
-    try std.testing.expectEqual(
-        ExprModule.PlaceholderClass.meta,
-        theorem.theorem_placeholders.items[meta_id].class,
-    );
-    try std.testing.expectEqual(
-        @as(usize, 1),
-        setup.store.stats.existential_created,
-    );
-}
-
-test "standard placeholders are not metas" {
-    var setup = try TestSetup.init();
-    defer setup.deinit();
-
-    const standard = try setup.theorem.addPlaceholderResolved("obj");
-    try std.testing.expect(
-        setup.store.metaIdOf(&setup.theorem, standard) == null,
-    );
-    // And the two minting paths share one id space without colliding.
-    const meta = try setup.store.mint(&setup.theorem, "obj", 0, .existential);
-    try std.testing.expect(standard != meta);
-}
-
-test "assign and dereference" {
-    var setup = try TestSetup.init();
-    defer setup.deinit();
-    const theorem = &setup.theorem;
-
-    const f = try appendTerm(&setup.env, "f", "obj");
-    const c = try appendTerm(&setup.env, "c", "obj");
-    const value = try theorem.interner.internApp(c, &.{});
-
-    const meta = try setup.store.mint(theorem, "obj", 0, .existential);
-    const meta_id = setup.store.metaIdOf(theorem, meta).?;
-    const wrapped = try theorem.interner.internApp(f, &.{meta});
-
-    try std.testing.expect(!setup.store.isFullySolved(theorem, wrapped));
-    try setup.store.assign(theorem, meta_id, value);
-
-    const expected = try theorem.interner.internApp(f, &.{value});
-    try std.testing.expectEqual(
-        expected,
-        try setup.store.deref(theorem, wrapped),
-    );
-    try std.testing.expect(setup.store.isFullySolved(theorem, wrapped));
-    try std.testing.expectEqual(
-        expected,
-        try setup.store.materialize(theorem, wrapped),
-    );
-    try std.testing.expectEqual(@as(usize, 1), setup.store.stats.assignments);
-}
-
-test "rollback to a mark" {
-    var setup = try TestSetup.init();
-    defer setup.deinit();
-    const theorem = &setup.theorem;
-
-    const c = try appendTerm(&setup.env, "c", "obj");
-    const value = try theorem.interner.internApp(c, &.{});
-
-    const first = try setup.store.mint(theorem, "obj", 0, .existential);
-    const first_id = setup.store.metaIdOf(theorem, first).?;
-    try setup.store.assign(theorem, first_id, value);
-
-    const trail_mark = setup.store.mark();
-    const second = try setup.store.mint(theorem, "obj", 0, .existential);
-    const second_id = setup.store.metaIdOf(theorem, second).?;
-    try setup.store.assign(theorem, second_id, value);
-
-    setup.store.rollbackTo(trail_mark);
-
-    // The second meta's mint and assignment are gone; the first survives.
-    try std.testing.expect(setup.store.metaIdOf(theorem, second) == null);
-    try std.testing.expect(setup.store.lookup(second_id) == null);
-    try std.testing.expectEqual(value, setup.store.lookup(first_id).?);
-    try std.testing.expectEqual(@as(usize, 1), setup.store.stats.rollbacks);
-}
-
-test "repeated meta occurrences share the same assignment" {
-    var setup = try TestSetup.init();
-    defer setup.deinit();
-    const theorem = &setup.theorem;
-
-    const pair = try appendTerm(&setup.env, "pair", "obj");
-    const c = try appendTerm(&setup.env, "c", "obj");
-    const value = try theorem.interner.internApp(c, &.{});
-
-    const meta = try setup.store.mint(theorem, "obj", 0, .existential);
-    const meta_id = setup.store.metaIdOf(theorem, meta).?;
-    // Hash-consing makes both occurrences the same leaf, so one assignment
-    // covers both positions.
-    const doubled = try theorem.interner.internApp(pair, &.{ meta, meta });
-
-    try setup.store.assign(theorem, meta_id, value);
-    const resolved = try setup.store.deref(theorem, doubled);
-    const resolved_app = theorem.interner.node(resolved).*.app;
-    try std.testing.expectEqual(value, resolved_app.args[0]);
-    try std.testing.expectEqual(resolved_app.args[0], resolved_app.args[1]);
-
-    // A second direct assignment is rejected; callers deref instead.
-    try std.testing.expectError(
-        error.MetaAlreadyAssigned,
-        setup.store.assign(theorem, meta_id, value),
-    );
-}
-
-test "occurs check rejects cyclic assignment" {
-    var setup = try TestSetup.init();
-    defer setup.deinit();
-    const theorem = &setup.theorem;
-
-    const f = try appendTerm(&setup.env, "f", "obj");
-    const g = try appendTerm(&setup.env, "g", "obj");
-
-    const meta = try setup.store.mint(theorem, "obj", 0, .existential);
-    const meta_id = setup.store.metaIdOf(theorem, meta).?;
-    const cyclic = try theorem.interner.internApp(f, &.{meta});
-    try std.testing.expectError(
-        error.OccursCheckFailed,
-        setup.store.assign(theorem, meta_id, cyclic),
-    );
-
-    // Indirect cycle through a second meta.
-    const other = try setup.store.mint(theorem, "obj", 0, .existential);
-    const other_id = setup.store.metaIdOf(theorem, other).?;
-    try setup.store.assign(theorem, meta_id, try theorem.interner.internApp(
-        f,
-        &.{other},
-    ));
-    try std.testing.expectError(
-        error.OccursCheckFailed,
-        setup.store.assign(theorem, other_id, try theorem.interner.internApp(
-            g,
-            &.{meta},
-        )),
-    );
-}
-
-test "sort mismatch rejects assignment" {
-    var setup = try TestSetup.init();
-    defer setup.deinit();
-    const theorem = &setup.theorem;
-
-    const w = try appendTerm(&setup.env, "w", "wff");
-    const wff_value = try theorem.interner.internApp(w, &.{});
-
-    const meta = try setup.store.mint(theorem, "obj", 0, .existential);
-    const meta_id = setup.store.metaIdOf(theorem, meta).?;
-    try std.testing.expectError(
-        error.SortMismatch,
-        setup.store.assign(theorem, meta_id, wff_value),
-    );
-}
-
-test "dependency violation rejects assignment" {
-    var setup = try TestSetup.init();
-    defer setup.deinit();
-    const theorem = &setup.theorem;
-
-    // A theorem-local dummy carries dep bit 1<<0.
-    const dummy = try theorem.addDummyVarResolved("obj", 0);
-
-    const closed = try setup.store.mint(theorem, "obj", 0, .existential);
-    const closed_id = setup.store.metaIdOf(theorem, closed).?;
-    try std.testing.expectError(
-        error.DependencyViolation,
-        setup.store.assign(theorem, closed_id, dummy),
-    );
-
-    // The same value is accepted when the constraint set permits the dep.
-    const open = try setup.store.mint(theorem, "obj", 1, .existential);
-    const open_id = setup.store.metaIdOf(theorem, open).?;
-    try setup.store.assign(theorem, open_id, dummy);
-}
-
-test "a bound_choice meta reads as a bound variable with its own dep bit" {
-    var setup = try TestSetup.init();
-    defer setup.deinit();
-    const theorem = &setup.theorem;
-
-    const dep_watermark = theorem.next_placeholder_dep;
-    const meta = try setup.store.mint(theorem, "obj", std.math.maxInt(u55), .bound_choice);
-    try std.testing.expectEqual(dep_watermark + 1, theorem.next_placeholder_dep);
-    const leaf = (try theorem.currentLeafInfo(meta)).?;
-    try std.testing.expect(leaf.bound);
-    try std.testing.expectEqual(@as(u32, 1), @popCount(leaf.deps));
-}
-
-test "a bound_choice meta takes only a bound variable" {
-    var setup = try TestSetup.init();
-    defer setup.deinit();
-    const theorem = &setup.theorem;
-
-    const c = try appendTerm(&setup.env, "c", "obj");
-    const term = try theorem.interner.internApp(c, &.{});
-    const dummy = try theorem.addDummyVarResolved("obj", 0);
-
-    const meta = try setup.store.mint(theorem, "obj", std.math.maxInt(u55), .bound_choice);
-    const meta_id = setup.store.metaIdOf(theorem, meta).?;
-    try std.testing.expectError(
-        error.NotBoundVariable,
-        setup.store.assign(theorem, meta_id, term),
-    );
-    try setup.store.assign(theorem, meta_id, dummy);
-}
-
-test "a bound_choice meta keeps its kind when another store registers it" {
-    var setup = try TestSetup.init();
-    defer setup.deinit();
-    const theorem = &setup.theorem;
-
-    var sigma = Sigma.init(std.testing.allocator);
-    defer sigma.deinit();
-    var parent = MetaStore.initShared(std.testing.allocator, &setup.env, &sigma);
-    defer parent.deinit();
-    const meta = try parent.mint(theorem, "obj", std.math.maxInt(u55), .bound_choice);
-
-    var child = MetaStore.initShared(std.testing.allocator, &setup.env, &sigma);
-    defer child.deinit();
-    try child.registerAncestorMeta(theorem, meta);
-    const info = child.info(child.metaIdOf(theorem, meta).?).?;
-    try std.testing.expectEqual(MetaKind.bound_choice, info.kind);
-}
-
-test "views over one substitution key minted metas by meta_id and keep registrations apart" {
-    var setup = try TestSetup.init();
-    defer setup.deinit();
-    const theorem = &setup.theorem;
-
-    const c = try appendTerm(&setup.env, "c", "obj");
-    const value = try theorem.interner.internApp(c, &.{});
-
-    var sigma = Sigma.init(std.testing.allocator);
-    defer sigma.deinit();
-    sigma.next_meta_id = 7;
-    var parent = MetaStore.initShared(std.testing.allocator, &setup.env, &sigma);
-    defer parent.deinit();
-    const meta = try parent.mint(theorem, "obj", std.math.maxInt(u55), .existential);
-    const pid = parent.metaIdOf(theorem, meta).?;
-    try std.testing.expectEqual(@as(?u64, 7), theorem.placeholderInfo(pid).?.meta_id);
-    try std.testing.expect(sigma.entries.contains(7));
-
-    // A nested view registers the same leaf and assigns it; the minting view
-    // does not see that assignment, and the nested view's exit removes it.
-    {
-        var child = MetaStore.initShared(std.testing.allocator, &setup.env, &sigma);
-        defer child.deinit();
-        try child.registerAncestorMeta(theorem, meta);
-        try child.assign(theorem, child.metaIdOf(theorem, meta).?, value);
-        try std.testing.expectEqual(value, child.lookup(pid).?);
-        try std.testing.expect(parent.lookup(pid) == null);
-    }
-    try std.testing.expectEqual(parent.mark(), sigma.trail.items.len);
-    try std.testing.expectEqual(@as(usize, 1), sigma.entries.count());
-
-    try parent.assign(theorem, pid, value);
-    try std.testing.expectEqual(value, parent.lookup(pid).?);
-}
-
-test "wildcard metas never bind" {
-    var setup = try TestSetup.init();
-    defer setup.deinit();
-    const theorem = &setup.theorem;
-
-    const c = try appendTerm(&setup.env, "c", "obj");
-    const value = try theorem.interner.internApp(c, &.{});
-
-    const meta = try setup.store.mint(theorem, "obj", 0, .wildcard);
-    const meta_id = setup.store.metaIdOf(theorem, meta).?;
-    try std.testing.expectError(
-        error.WildcardNeverBinds,
-        setup.store.assign(theorem, meta_id, value),
-    );
-}
-
-test "universal metas cannot be assigned in the wrong phase" {
-    var setup = try TestSetup.init();
-    defer setup.deinit();
-    const theorem = &setup.theorem;
-
-    const c = try appendTerm(&setup.env, "c", "obj");
-    const value = try theorem.interner.internApp(c, &.{});
-
-    const meta = try setup.store.mint(theorem, "obj", 0, .universal);
-    const meta_id = setup.store.metaIdOf(theorem, meta).?;
-    try std.testing.expectError(
-        error.UniversalWrongPhase,
-        setup.store.assign(theorem, meta_id, value),
-    );
-
-    // Inside a derived-ref use window the assignment is permitted, and the
-    // use-time discipline rolls it back afterwards.
-    setup.store.openUniversalUse();
-    const trail_mark = setup.store.mark();
-    try setup.store.assign(theorem, meta_id, value);
-    try std.testing.expectEqual(value, setup.store.lookup(meta_id).?);
-    setup.store.rollbackTo(trail_mark);
-    setup.store.closeUniversalUse();
-    try std.testing.expect(setup.store.lookup(meta_id) == null);
-}
-
-test "unsolved existential leakage is rejected" {
-    var setup = try TestSetup.init();
-    defer setup.deinit();
-    const theorem = &setup.theorem;
-
-    const f = try appendTerm(&setup.env, "f", "obj");
-    const meta = try setup.store.mint(theorem, "obj", 0, .existential);
-    const wrapped = try theorem.interner.internApp(f, &.{meta});
-
-    try std.testing.expectError(
-        error.UnsolvedMeta,
-        setup.store.materialize(theorem, wrapped),
-    );
-
-    var unsolved: std.ArrayListUnmanaged(PlaceholderId) = .empty;
-    defer unsolved.deinit(std.testing.allocator);
-    try setup.store.collectUnsolved(theorem, wrapped, &unsolved);
-    try std.testing.expectEqual(@as(usize, 1), unsolved.items.len);
-    try std.testing.expectEqual(
-        setup.store.metaIdOf(theorem, meta).?,
-        unsolved.items[0],
-    );
-}

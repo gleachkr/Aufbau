@@ -12,9 +12,7 @@
 //! by unification, a δ one (or a definition's dummy) an eigenvariable whose
 //! name waits until the proof needs one (`wvars.zig`). Each hole of a
 //! holey goal is a witness variable too, one the proof fills, and so is
-//! each unknown of an inline slot's goal. It runs before the generation
-//! ladder (`GenerateOptions.core`, on by default), which still runs when
-//! the core abstains or misses.
+//! each unknown of an inline slot's goal.
 //!
 //! A run tries the proofs of one step first (`Prover.one_step`), then
 //! deepens. `exact?` stops after that pass, and takes every proof it finds
@@ -361,7 +359,7 @@ const CloseOut = struct {
             // clones what it is given, here free of the run's placeholders.
             request.theorem,
             request.theorem_vars,
-            .{ .counters = request.counters, .final_attempt = true },
+            .{ .counters = request.counters },
         ) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return false,

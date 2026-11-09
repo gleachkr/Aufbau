@@ -7,7 +7,6 @@ const types = @import("../types.zig");
 const tunables = @import("../tunables.zig");
 const miss = @import("../miss.zig");
 const ConversionSearch = @import("../conversion.zig");
-const generate_mod = @import("../generate.zig");
 const ProofScript = @import("../../../proof_script.zig");
 const RuleApplication = ProofScript.RuleApplication;
 const text_util = @import("../../../text_util.zig");
@@ -228,7 +227,7 @@ pub fn searchStatus(
 }
 
 /// Elaborate a failed search into the user-facing detail string: which
-/// limits cut it short, how far the generation ladder got, how many
+/// limits cut it short, how far the search core got, how many
 /// candidates were validated vs. accepted, and the per-call parameters to
 /// raise together (`miss.retryFor`). Built on the caller's allocator (the
 /// per-call work allocator; `copyOutSuggestions` deep-copies it out). Purely
@@ -260,17 +259,16 @@ fn writeStatusDetail(
 ) !void {
     const validated = counters.full_try_candidate_calls;
     const accepted = counters.accepted_candidates;
-    const rejected = counters.rejected_candidates_after_validation;
     const report = miss.MissReport.of(counters);
-    // Only `auto?` generates (an `exact?`, an open inline slot, or a
-    // disabled generation permit leaves the ladder unrun).
-    const generation_ran = is_auto and report.generation_ran;
+    // Only `auto?` runs the search core past one step (an `exact?`, or a
+    // goal the core abstains on, leaves it unrun).
+    const core_ran = is_auto and report.core_ran;
     const retry: ?miss.Retry = if (is_auto) miss.retryFor(report, gen) else null;
 
     switch (status) {
         .found => unreachable,
         .miss => {
-            if (generation_ran and report.core) {
+            if (core_ran) {
                 if (report.exhausted) {
                     try w.print(
                         "no proof found. The search core ran out of " ++
@@ -285,19 +283,9 @@ fn writeStatusDetail(
                             "expanded), so a proof, if one exists, is deeper " ++
                             "or needs a rule the search cannot use backward " ++
                             "here.",
-                        .{ gen.ladderDepth(), counters.core_nodes },
+                        .{ gen.defaultDepth(), counters.core_nodes },
                     );
                 }
-                if (retry) |r| try writeRetryAdvice(w, keyword, r, false);
-            } else if (generation_ran) {
-                try w.print(
-                    "no proof found within depth {d}. The search space was " ++
-                        "exhausted ({d} applications validated: {d} " ++
-                        "accepted, {d} rejected), so a proof, if one " ++
-                        "exists, is deeper or needs a rule the search " ++
-                        "cannot use backward here.",
-                    .{ gen.ladderDepth(), validated, accepted, rejected },
-                );
                 if (retry) |r| try writeRetryAdvice(w, keyword, r, false);
             } else if (std.mem.eql(u8, keyword, "exact?")) {
                 try w.print(
@@ -325,10 +313,10 @@ fn writeStatusDetail(
                 // the process stack itself), so the actionable advice is to
                 // shrink the search, not to grow a budget.
                 try w.print(
-                    "stopped by the call-stack guard during {s} at depth {d}",
-                    .{ generate_mod.phaseName(counters.gen_last_phase), counters.gen_last_depth },
+                    "stopped by the call-stack guard at depth {d}",
+                    .{counters.gen_last_depth},
                 );
-                if (hasDepthLimit(report, gen)) try w.print(" of {d}", .{gen.ladderDepth()});
+                if (gen.coreDepth()) |limit| try w.print(" of {d}", .{limit});
                 try w.writeAll(
                     ": one search branch recursed deep enough to risk " ++
                         "exhausting the process stack and was abandoned. A " ++
@@ -348,19 +336,15 @@ fn writeStatusDetail(
                         gen.global_budget orelse 0,
                         tunables.ticks_per_budget_unit,
                     ) catch unreachable;
-                    // The call ends where the budget runs out, so the last
-                    // cell started is the one that tripped it.
-                    if (generation_ran) {
+                    // The call ends where the budget runs out, so the depth
+                    // the core was searching is the one that tripped it.
+                    if (core_ran) {
                         try w.print(
                             "the per-call work budget (~{d}s of work) ran out " ++
-                                "during {s} at depth {d}",
-                            .{
-                                seconds,
-                                generate_mod.phaseName(counters.gen_last_phase),
-                                counters.gen_last_depth,
-                            },
+                                "at depth {d}",
+                            .{ seconds, counters.gen_last_depth },
                         );
-                        if (hasDepthLimit(report, gen)) try w.print(" of {d}", .{gen.ladderDepth()});
+                        if (gen.coreDepth()) |limit| try w.print(" of {d}", .{limit});
                     } else {
                         try w.print(
                             "the per-call work budget (~{d}s of work) ran out " ++
@@ -396,7 +380,7 @@ fn writeStatusDetail(
                             "fixpoint, so the derived-fact pool is incomplete",
                     );
                 }
-                if (report.core) {
+                if (core_ran) {
                     try w.print(". {d} goals expanded.", .{counters.core_nodes});
                 } else {
                     try w.print(
@@ -404,13 +388,13 @@ fn writeStatusDetail(
                         .{ validated, accepted },
                     );
                 }
-                if (generation_ran and gen.max_depth != null and
-                    report.searchedBelowDepthLimit(gen.ladderDepth()))
+                if (core_ran and gen.max_depth != null and
+                    report.searchedBelowDepthLimit(gen.defaultDepth()))
                 {
                     try w.print(
                         " Every depth below {d} was searched, so the " ++
                             "proof may also be deeper.",
-                        .{gen.ladderDepth()},
+                        .{gen.defaultDepth()},
                     );
                 }
                 if (retry) |r| {
@@ -433,17 +417,6 @@ fn writeStatusDetail(
             .{ pool.sort_name.slice(), pool.pool_size },
         );
     }
-
-    // Where the work went: the most-tried rules with their accept counts
-    // (attempts ≠ accepts — a rule tried 500 times with 0 accepted is a
-    // reject-flood, the usual budget sink). Only recorded under `collect`.
-    try appendTopRuleAttempts(w, counters);
-}
-
-/// Whether the search that ran last had a depth limit: by default only the
-/// ladder has one (`GenerateOptions.coreDepth`).
-fn hasDepthLimit(report: miss.MissReport, gen: types.GenerateOptions) bool {
-    return !report.core or gen.coreDepth() != null;
 }
 
 /// " Try 'auto? (nodes: 512, budget: 6)'." — on a cut-short miss, with
@@ -512,59 +485,4 @@ fn writeRetryReplacement(
         try w.print("{s}, ", .{proof_src[param.span.start..param.span.end]});
     }
     try w.print("{f})", .{retry});
-}
-
-const top_rules_lead = " Most-tried rules: ";
-
-/// `detail` without the "Most-tried rules: ..." sentence that ends it, for
-/// a caller that reports the rule tallies itself.
-pub fn statusDetailWithoutRules(detail: []const u8) []const u8 {
-    const end = std.mem.lastIndexOf(u8, detail, top_rules_lead) orelse
-        detail.len;
-    return detail[0..end];
-}
-
-/// Append a "Most-tried rules: ..." sentence listing the top 3 rules by
-/// validation attempts. Silent when the per-rule tallies were not collected
-/// or nothing was attempted.
-fn appendTopRuleAttempts(
-    w: anytype,
-    counters: *const types.SearchCounters,
-) !void {
-    const len = counters.rule_attempt_diagnostics_len;
-    if (len == 0) return;
-    const tallies = counters.rule_attempt_diagnostics[0..len];
-
-    // Insertion-select the top 3 indices by attempts.
-    var top: [3]usize = undefined;
-    var top_len: usize = 0;
-    for (0..len) |idx| {
-        var insert = idx;
-        for (top[0..top_len]) |*held| {
-            if (tallies[insert].attempts > tallies[held.*].attempts) {
-                std.mem.swap(usize, &insert, held);
-            }
-        }
-        if (top_len < top.len) {
-            top[top_len] = insert;
-            top_len += 1;
-        }
-    }
-
-    var wrote_header = false;
-    for (top[0..top_len]) |idx| {
-        const tally = tallies[idx];
-        if (tally.attempts == 0) continue;
-        if (!wrote_header) {
-            try w.writeAll(top_rules_lead);
-            wrote_header = true;
-        } else {
-            try w.writeAll(", ");
-        }
-        try w.print(
-            "{s} ({d} tried, {d} accepted)",
-            .{ tally.rule_name.slice(), tally.attempts, tally.accepted },
-        );
-    }
-    if (wrote_header) try w.writeAll(".");
 }

@@ -29,16 +29,16 @@ Flags (after `--`):
 | `--exclude=TEXT[,TEXT...]` | Frontier mode: skip theorems whose name contains any listed TEXT (a fixture's supporting lemmas). |
 | `--marker=TEXT`   | Frontier search marker (`auto?` default; `exact?`/`apply?` disable generation). |
 | `--max-depth=N`   | Frontier `auto?` generation depth (default 6). |
-| `--gen-nodes=N`, `--gen-fuel=N`, `--phase5-fuel=N` | Override `max_nodes`, per-phase `fuel`, and phase-5 fuel (0 = the `GenerateOptions` default). |
+| `--gen-nodes=N`, `--gen-fuel=N` | Override `max_nodes` and `fuel` (0 = the `GenerateOptions` default). |
 | `--global-budget=TICKS` | Override the per-call work budget in weighted ticks; `0` disables it. |
 | `--fwd-facts=N`, `--fwd-layers=N`, `--fwd-attempts=N`, `--fwd-tuples=N` | Override the forward-saturation bounds (0 = the `ForwardOptions` default). |
 | `--slow-ms=N`     | Breadth lines slower than this (warm search) are flagged SLOW (default 2). |
 | `--verbose`, `-v` | Print every frontier line/theorem, not just misses, SLOW lines, and nonzero frontiers. Depth rows also give `trim=`, the part of the search time spent trimming the suggestion's bindings (checker runs, no ticks), marked `UNTRIMMED` when the binding oracle could not trim the suggestion. Any untrimmed suggestion, in any mode, fails the run. |
-| `--counters`      | Under each breadth MISS/SLOW row, print key counters (tryCandidate calls/rejects, pool sizes, top rules by validation attempts). |
+| `--counters`      | Under each breadth MISS/SLOW row, print key counters (tryCandidate calls/rejects, pool sizes, core nodes, shape-cache and lookup times). |
 | `--require-no-miss` | Exit nonzero on any breadth MISS/ERR or non-`FULL` depth theorem (the regression guards below). |
 | `--retry-misses`  | Depth mode: re-run each theorem's first miss with the retry its failure report suggests, and append `[retry PARAMS FOUND\|miss\|err t=…M]` (or `[retry none]`) to its row. |
 | `--max-k=N`       | Depth mode: cut at most N lines; a theorem whose frontier reaches N counts as FULL. Lets a guard pin a shallow frontier. |
-| `--no-search-memo`, `--no-shape-cache`, `--no-deep-member-prune`, `--no-persist-negative` | A/B switches: turn off one search optimization that is on in production. |
+| `--no-shape-cache` | A/B switch: turn off the query-shape cache, which is on in production. |
 | `--track-sites`   | Attribute live bytes to allocation call sites (leak hunting; inflates wall time). |
 | `--alloc-trap=MIB` | Panic with a stack trace once live bytes exceed MIB, to attribute a memory peak. |
 | `--sweep=FAMILY[:N1,N2,...]` | Discrimination/scaling sweep (below). Synthesize a distractor theory parametrized by N and plot search time vs N. |
@@ -71,20 +71,20 @@ and takes minutes.
   frontier.
 
   A theorem row that is not `FULL` ends with the failed search at
-  frontier+1: `fail(miss k=N CAUSE pP dD/M)`, its wall time and ticks. `pP
-  dD/M` is the ladder cell the search was in when it stopped (phase `P`,
-  depth `D` of `M`). `CAUSE` is the first of these that applies:
+  frontier+1: `fail(miss k=N CAUSE dD/M)`, its wall time and ticks. `dD/M`
+  is the depth the search was at when it stopped (`D` of the limit `M`).
+  `CAUSE` is the first of these that applies:
 
   | Cause | Meaning |
   |-------|---------|
   | `stack` | The call-stack guard tripped. |
-  | `budget-deep` | The per-call budget ran out after the core phases had searched every depth below the limit, so the proof may need more depth. |
+  | `budget-deep` | The per-call budget ran out after the search core had searched every depth below the limit, so the proof may need more depth. |
   | `budget-shallow` | The per-call budget ran out before that. |
   | `fuel` | A phase ran out of its own fuel. |
   | `forward` | Forward saturation stopped before a fixpoint. |
   | `node-cap` | Some pass hit the per-pass node cap (`max_nodes`). |
   | `no-gen` | Generation never ran. |
-  | `exhausted` | None of the above: every cell ran in full. |
+  | `exhausted` | None of the above: every depth ran in full. |
 
   Each fixture's summary adds a `miss causes:` line counting these over its
   theorems' failed searches.

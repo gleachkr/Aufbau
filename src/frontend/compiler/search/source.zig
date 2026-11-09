@@ -7,7 +7,7 @@ const ConversionSearch = @import("./conversion.zig");
 const timer = @import("./timer.zig");
 const apply_mod = @import("./apply.zig");
 const candidate_mod = @import("./candidate.zig");
-const generate_mod = @import("./generate.zig");
+const entry = @import("./entry.zig");
 const session_mod = @import("./session.zig");
 const ExprId = @import("../../expr.zig").ExprId;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
@@ -47,7 +47,6 @@ const withNeededBindings = trim_mod.withNeededBindings;
 const trimBindings = trim_mod.trimBindings;
 const withBindingsDropped = trim_mod.withBindingsDropped;
 const withBindingsDroppedFrom = trim_mod.withBindingsDroppedFrom;
-pub const statusDetailWithoutRules = report_mod.statusDetailWithoutRules;
 pub const SearchPlaceholder = placeholders_mod.SearchPlaceholder;
 pub const searchPlaceholders = placeholders_mod.searchPlaceholders;
 pub const PlaceholderNotice = placeholders_mod.PlaceholderNotice;
@@ -487,7 +486,7 @@ fn topLevelExactSuggestions(
     keyword: []const u8,
     options: SourceSuggestionOptions,
 ) !SourceSuggestions {
-    var found = try generate_mod.exactTopLevel(
+    var found = try entry.exactTopLevel(
         site.compiler,
         session,
         site.line_goal,
@@ -509,15 +508,13 @@ fn generatedSuggestions(
     replace_span: Span,
     options: SourceSuggestionOptions,
 ) !SourceSuggestions {
-    var gen_options = options.generate;
-    gen_options.max_results = options.max_results;
-    var generated = try generate_mod.generateTopLevel(
+    var generated = try entry.generateTopLevel(
         site.compiler,
         session,
         site.line_goal,
         site.theorem,
         site.theorem_vars,
-        gen_options,
+        options.generate,
         site.budgets.searchBudget(),
     );
     defer generated.deinit();
@@ -618,7 +615,7 @@ fn inlineExactSuggestions(
     const generates = is_auto and options.generate.enabled and
         inline_expectation != null and !inline_expectation.?.has_placeholder;
     if (items.items.len < max_results and !generates) {
-        var found = try generate_mod.exactTopLevel(
+        var found = try entry.exactTopLevel(
             compiler,
             session,
             search_goal,
@@ -642,7 +639,8 @@ fn inlineExactSuggestions(
     // slot goal is fully concrete. An open slot goal (an undetermined rule
     // argument) would reach `generateTopLevel` as a meta-bearing expected ref;
     // only a top-level holey line is searched that way today (its holes become
-    // metas in `generateTopLevel`), so an open inline slot stays exact-only. See
+    // witness variables of the search core), so an open inline slot stays
+    // exact-only. See
     // docs/design_notes/inline_auto_open_slot_existential_gap.md.
     if (is_auto and options.generate.enabled and items.items.len < max_results) {
         if (inline_expectation) |expected| {
@@ -803,15 +801,13 @@ fn appendInlineGeneratedApplications(
     // Only concrete slot goals reach here (the caller gates on
     // `!expected.has_placeholder`); `generateTopLevel` accepts `.concrete` goals
     // exactly as it does for a top-level line.
-    var gen_options = options.generate;
-    gen_options.max_results = max_results - items.items.len;
-    var generated = try generate_mod.generateTopLevel(
+    var generated = try entry.generateTopLevel(
         site.compiler,
         session,
         Goal{ .concrete = expected.query },
         site.theorem,
         site.theorem_vars,
-        gen_options,
+        options.generate,
         site.budgets.searchBudget(),
     );
     defer generated.deinit();

@@ -13,7 +13,6 @@ const ProofParser = helpers.ProofParser;
 const Goal = helpers.Goal;
 const apply = helpers.apply;
 const applyWithSession = helpers.applyWithSession;
-const exact = helpers.exact;
 const probe = helpers.probe;
 const fixtureFor = helpers.fixtureFor;
 const parseGoal = helpers.parseGoal;
@@ -28,10 +27,8 @@ const expectApplyContains = helpers.expectApplyContains;
 const expectApplyNotContains = helpers.expectApplyNotContains;
 const expectRuleIsUnavailableAtSearchPoint = helpers.expectRuleIsUnavailableAtSearchPoint;
 const expectApplyRuleOrder = helpers.expectApplyRuleOrder;
-const expectExactRuleOrderWithPrefix = helpers.expectExactRuleOrderWithPrefix;
-const expectExactRuleOrder = helpers.expectExactRuleOrder;
-const expectFirstExactRefs = helpers.expectFirstExactRefs;
 const suggestionsAtNeedle = helpers.suggestionsAtNeedle;
+const expectOffers = helpers.expectOffers;
 
 test "apply rule index filters nonmatching rules before validation" {
     const mm0_src =
@@ -404,82 +401,187 @@ test "exact search finds zero-hypothesis proof" {
         \\axiom p: $ P $;
         \\theorem t: $ P $;
     ;
-    try expectExactRuleOrder(mm0_src, "t", "P", &[_][]const u8{"p"});
-}
-
-test "exact ref index filters multi-hyp reference tuples" {
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\term P: wff;
-        \\term Q: wff;
-        \\term R: wff;
-        \\term S: wff;
-        \\term T: wff;
-        \\axiom use: $ P $ > $ Q $ > $ T $;
-        \\theorem t: $ R $ > $ S $ > $ P $ > $ Q $ > $ T $;
-    ;
-    const proof_src =
+    try expectOffers(mm0_src,
         \\t
         \\------
-        \\l1: $ T $ by exact?
-    ;
-    // The legacy direct search's ref index, which the generation ladder
-    // still uses.
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var counters = types.SearchCounters{ .timing = true };
-    const rules = try helpers.legacyExactRules(&arena, mm0_src, proof_src, &counters);
-
-    try std.testing.expectEqual(@as(usize, 1), rules.len);
-    try std.testing.expectEqual(@as(usize, 4), counters.ref_pool_size);
-    try std.testing.expectEqual(
-        @as(usize, 2),
-        counters.per_hyp_filtered_ref_list_total,
-    );
-    try std.testing.expectEqual(
-        @as(usize, 1),
-        counters.ref_tuple_count_after_filtering,
-    );
-    try std.testing.expectEqual(@as(usize, 1), counters.full_try_candidate_calls);
-    try expectTimingCounter(counters.ref_index_build_ns);
-    try expectTimingCounter(counters.ref_lookup_ns);
+        \\l1: $ P $ by exact?
+    , "exact?", .{}, &.{"p"});
 }
 
-test "exact search propagates sibling hyp bindings while filtering refs" {
+// The citation of the checked line `l1` ranks before the closer `p []`.
+test "exact search uses one previous line" {
     const mm0_src =
         \\delimiter $ ( ) $;
         \\provable sort wff;
         \\term P: wff;
         \\term Q: wff;
-        \\term R: wff;
-        \\term S: wff;
-        \\term Goal: wff;
+        \\term imp (p q: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\axiom p: $ P $;
+        \\axiom mp (p q: wff): $ p $ > $ p -> q $ > $ q $;
+        \\theorem t: $ P -> Q $ > $ Q $;
+    ;
+    try expectOffers(mm0_src,
+        \\t
+        \\------
+        \\l1: $ P $ by p
+        \\l2: $ Q $ by exact?
+    , "exact?", .{}, &.{ "mp [l1, #1]", "mp [p [], #1]" });
+}
+
+test "exact search uses multiple theorem hypotheses" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\term Q: wff;
         \\term imp (p q: wff): wff;
         \\infixr imp: $->$ prec 25;
         \\axiom mp (p q: wff): $ p $ > $ p -> q $ > $ q $;
-        \\theorem t:
-        \\  $ P $ > $ Q $ > $ R $ > $ S $ > $ P -> Goal $ > $ Goal $;
+        \\theorem t: $ P $ > $ P -> Q $ > $ Q $;
     ;
-    const proof_src =
+    try expectOffers(mm0_src,
         \\t
         \\------
-        \\l1: $ Goal $ by exact?
+        \\l1: $ Q $ by exact?
+    , "exact?", .{}, &.{"mp [#1, #2]"});
+}
+
+// `l1` states `a -> a`, the unfolding of `use_id`'s premise `id a`.
+test "exact search matches refs through transparent defs" {
+    const mm0_src = try readProofCase(
+        std.testing.allocator,
+        "pass_def_transport",
+        "mm0",
+    );
+    defer std.testing.allocator.free(mm0_src);
+    try expectOffers(mm0_src,
+        \\hyp_transport
+        \\-------------
+        \\l1: $ a -> a $ by ax_expanded (a := $ a $) []
+        \\l2: $ a $ by exact?
+    , "exact?", .{}, &.{
+        "use_id [l1]",
+        "use_id [ax_id []]",
+        "use_id [ax_expanded []]",
+    });
+}
+
+test "exact search handles successful fallback applications" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\term Q: wff;
+        \\term R: wff;
+        \\axiom have_p: $ P $;
+        \\axiom fallback_use: $ P $ > $ Q $;
+        \\--| @fallback fallback_use
+        \\axiom bad_use: $ R $ > $ Q $;
+        \\theorem t: $ Q $;
     ;
-    // The legacy direct search's ref index, which the generation ladder
-    // still uses.
+    try expectOffers(mm0_src,
+        \\t
+        \\------
+        \\l1: $ P $ by have_p
+        \\l2: $ Q $ by exact?
+    , "exact?", .{}, &.{ "fallback_use [l1]", "fallback_use [have_p []]" });
+}
+
+test "exact search returns no result when a hypothesis is unavailable" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\axiom id (p: wff): $ p $ > $ p $;
+        \\theorem t: $ P $;
+    ;
+    try expectOffers(mm0_src,
+        \\t
+        \\------
+        \\l1: $ P $ by exact?
+    , "exact?", .{}, &.{});
+}
+
+// `l2` comes after the search line, so only the closer `p []` proves `P`.
+test "exact search does not use later proof lines" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\term Q: wff;
+        \\term imp (p q: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\axiom p: $ P $;
+        \\axiom mp (p q: wff): $ p $ > $ p -> q $ > $ q $;
+        \\theorem t: $ P -> Q $ > $ Q $;
+    ;
+    try expectOffers(mm0_src,
+        \\t
+        \\------
+        \\l1: $ Q $ by exact?
+        \\l2: $ P $ by p
+    , "exact?", .{}, &.{"mp [p [], #1]"});
+}
+
+test "exact search orders successful rules deterministically" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\axiom p1: $ P $;
+        \\axiom p2: $ P $;
+        \\axiom p3: $ P $;
+        \\theorem t: $ P $;
+    ;
+    try expectOffers(mm0_src,
+        \\t
+        \\------
+        \\l1: $ P $ by exact?
+    , "exact?", .{}, &.{ "p1", "p2", "p3" });
+}
+
+test "exact search max_results preserves ranked declaration order" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\axiom p1: $ P $;
+        \\axiom p2: $ P $;
+        \\axiom p3: $ P $;
+        \\theorem t: $ P $;
+    ;
+    try expectOffers(mm0_src,
+        \\t
+        \\------
+        \\l1: $ P $ by exact?
+    , "exact?", .{ .max_results = 2 }, &.{ "p1", "p2" });
+}
+
+test "exact search misses past a checked prefix without blocking on it" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\term Q: wff;
+        \\axiom p: $ P $;
+        \\axiom id (a: wff): $ a $ > $ a $;
+        \\theorem t: $ P $ > $ Q $;
+    ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var counters = types.SearchCounters{};
-    const rules = try helpers.legacyExactRules(&arena, mm0_src, proof_src, &counters);
-
-    try std.testing.expectEqual(@as(usize, 1), rules.len);
-    try std.testing.expectEqual(@as(usize, 5), counters.ref_pool_size);
-    try std.testing.expectEqual(
-        @as(usize, 1),
-        counters.ref_tuple_count_after_filtering,
-    );
-    try std.testing.expectEqual(@as(usize, 1), counters.full_try_candidate_calls);
+    var suggestions = try suggestionsAtNeedle(&arena, mm0_src,
+        \\t
+        \\------
+        \\l1: $ P $ by p
+        \\l2: $ Q $ by exact?
+    , "exact?", .{});
+    defer suggestions.deinit();
+    // `l1` checks, so the search runs and ends in a miss.
+    try std.testing.expect(suggestions.blocked_by == null);
+    try std.testing.expect(suggestions.target_span != null);
+    try std.testing.expectEqual(types.SearchStatus.miss, suggestions.status);
+    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
 }
 
 // n identical hypotheses against n premises of one shape used to enumerate
@@ -579,365 +681,6 @@ test "apply search stops at the call's work budget" {
     try std.testing.expect(counters.work_budget_exhausted);
     try std.testing.expect(counters.conclusion_probes < 3);
     try std.testing.expect(suggestions.items.len >= 1);
-}
-
-test "exact search uses one theorem hypothesis" {
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\term P: wff;
-        \\axiom id (p: wff): $ p $ > $ p $;
-        \\theorem t: $ P $ > $ P $;
-    ;
-    try expectFirstExactRefs(
-        mm0_src,
-        "",
-        "t",
-        "P",
-        0,
-        "id",
-        &[_]ProofScript.Ref{.{ .hyp = .{
-            .index = 1,
-            .span = .{ .start = 0, .end = 0 },
-        } }},
-    );
-}
-
-test "exact search uses one previous line" {
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\term P: wff;
-        \\term Q: wff;
-        \\term imp (p q: wff): wff;
-        \\infixr imp: $->$ prec 25;
-        \\axiom p: $ P $;
-        \\axiom mp (p q: wff): $ p $ > $ p -> q $ > $ q $;
-        \\theorem t: $ P -> Q $ > $ Q $;
-    ;
-    const proof_src =
-        \\t
-        \\------
-        \\l1: $ P $ by p
-    ;
-    try expectFirstExactRefs(
-        mm0_src,
-        proof_src,
-        "t",
-        "Q",
-        1,
-        "mp",
-        &[_]ProofScript.Ref{
-            .{ .line = .{
-                .label = "l1",
-                .span = .{ .start = 0, .end = 0 },
-            } },
-            .{ .hyp = .{
-                .index = 1,
-                .span = .{ .start = 0, .end = 0 },
-            } },
-        },
-    );
-}
-
-test "exact search uses multiple theorem hypotheses" {
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\term P: wff;
-        \\term Q: wff;
-        \\term imp (p q: wff): wff;
-        \\infixr imp: $->$ prec 25;
-        \\axiom mp (p q: wff): $ p $ > $ p -> q $ > $ q $;
-        \\theorem t: $ P $ > $ P -> Q $ > $ Q $;
-    ;
-    try expectFirstExactRefs(
-        mm0_src,
-        "",
-        "t",
-        "Q",
-        0,
-        "mp",
-        &[_]ProofScript.Ref{
-            .{ .hyp = .{
-                .index = 1,
-                .span = .{ .start = 0, .end = 0 },
-            } },
-            .{ .hyp = .{
-                .index = 2,
-                .span = .{ .start = 0, .end = 0 },
-            } },
-        },
-    );
-}
-
-test "exact search matches refs through transparent defs" {
-    const mm0_src = try readProofCase(
-        std.testing.allocator,
-        "pass_def_transport",
-        "mm0",
-    );
-    defer std.testing.allocator.free(mm0_src);
-    const proof_src =
-        \\hyp_transport
-        \\-------------
-        \\l1: $ a -> a $ by ax_expanded (a := $ a $) []
-    ;
-    try expectFirstExactRefs(
-        mm0_src,
-        proof_src,
-        "hyp_transport",
-        "a",
-        1,
-        "use_id",
-        &[_]ProofScript.Ref{.{ .line = .{
-            .label = "l1",
-            .span = .{ .start = 0, .end = 0 },
-        } }},
-    );
-}
-
-test "exact ref index reaches a reducible-headed hypothesis through normalization" {
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\sort mor;
-        \\term iff (a b: wff): wff;
-        \\infixr iff: $<->$ prec 20;
-        \\term mor_eq (f g: mor): wff;
-        \\infixl mor_eq: $~$ prec 15;
-        \\term comp (f g: mor): mor;
-        \\infixl comp: $o$ prec 35;
-        \\term F: mor;
-        \\term G: mor;
-        \\term H: mor;
-        \\term P: wff;
-        \\--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
-        \\axiom iff_refl (a: wff): $ a <-> a $;
-        \\axiom iff_trans (a b c: wff):
-        \\  $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
-        \\axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
-        \\axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
-        \\--| @relation mor mor_eq mor_refl mor_trans mor_sym _
-        \\axiom mor_refl (f: mor): $ f ~ f $;
-        \\axiom mor_trans (f g h: mor):
-        \\  $ f ~ g $ > $ g ~ h $ > $ f ~ h $;
-        \\axiom mor_sym (f g: mor): $ f ~ g $ > $ g ~ f $;
-        \\--| @congr
-        \\axiom mor_eq_congr (f1 f2 g1 g2: mor):
-        \\  $ f1 ~ f2 $ > $ g1 ~ g2 $ > $ (f1 ~ g1) <-> (f2 ~ g2) $;
-        \\--| @congr
-        \\axiom comp_congr (f1 f2 g1 g2: mor):
-        \\  $ f1 ~ f2 $ > $ g1 ~ g2 $ > $ f1 o g1 ~ f2 o g2 $;
-        \\--| @rewrite
-        \\axiom comp_assoc (f g h: mor): $ (f o g) o h ~ f o (g o h) $;
-        \\axiom assoc_refl: $ ((F o G) o H) ~ ((F o G) o H) $;
-        \\axiom use_norm:
-        \\  $ F o (G o H) ~ F o (G o H) $ > $ P $;
-        \\theorem t: $ P $;
-    ;
-    const proof_src =
-        \\t
-        \\------
-        \\l1: $ ((F o G) o H) ~ ((F o G) o H) $ by assoc_refl
-    ;
-    // `use_norm`'s hypothesis `F o (G o H) ~ F o (G o H)` carries a
-    // `@rewrite`-reducible head (`comp`, via `comp_assoc`), so its shape cannot
-    // be a reliable index key: the pool ref l1 `((F o G) o H) ~ ((F o G) o H)`
-    // is `comp_assoc`-equal but written in a different association. A reducible
-    // head shapes to a covering wildcard (shape.zig) and the hyp matcher
-    // classifies the pair `.unknown` (semantic.zig / def_match.zig)
-    // rather than `.mismatch`, so the candidate reaches `tryCandidate`, which
-    // normalizes and validates it. This is the substitution-head path that
-    // view-less eliminators (`J_elim`, `nat_ind_*`) rely on; the validated
-    // `use_norm` candidate below confirms the recovered proof is genuine.
-    try expectExactRuleOrderWithPrefix(
-        mm0_src,
-        proof_src,
-        "t",
-        "P",
-        1,
-        null,
-        &[_][]const u8{"use_norm"},
-    );
-}
-
-test "exact search handles successful fallback applications" {
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\term P: wff;
-        \\term Q: wff;
-        \\term R: wff;
-        \\axiom have_p: $ P $;
-        \\axiom fallback_use: $ P $ > $ Q $;
-        \\--| @fallback fallback_use
-        \\axiom bad_use: $ R $ > $ Q $;
-        \\theorem t: $ Q $;
-    ;
-    const proof_src =
-        \\t
-        \\------
-        \\l1: $ P $ by have_p
-    ;
-    try expectExactRuleOrderWithPrefix(
-        mm0_src,
-        proof_src,
-        "t",
-        "Q",
-        1,
-        null,
-        &[_][]const u8{"fallback_use"},
-    );
-}
-
-test "exact search returns no result when a hypothesis is unavailable" {
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\term P: wff;
-        \\axiom id (p: wff): $ p $ > $ p $;
-        \\theorem t: $ P $;
-    ;
-    try expectExactRuleOrder(mm0_src, "t", "P", &[_][]const u8{});
-}
-
-test "exact search does not use later proof lines" {
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\term P: wff;
-        \\term Q: wff;
-        \\term imp (p q: wff): wff;
-        \\infixr imp: $->$ prec 25;
-        \\axiom p: $ P $;
-        \\axiom mp (p q: wff): $ p $ > $ p -> q $ > $ q $;
-        \\theorem t: $ P -> Q $ > $ Q $;
-    ;
-    const proof_src =
-        \\t
-        \\------
-        \\l1: $ P $ by p
-    ;
-    try expectExactRuleOrderWithPrefix(
-        mm0_src,
-        proof_src,
-        "t",
-        "Q",
-        0,
-        null,
-        &[_][]const u8{},
-    );
-}
-
-test "exact search orders refs deterministically" {
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\term P: wff;
-        \\axiom id (p: wff): $ p $ > $ p $;
-        \\theorem t: $ P $ > $ P $ > $ P $;
-    ;
-    try expectFirstExactRefs(
-        mm0_src,
-        "",
-        "t",
-        "P",
-        0,
-        "id",
-        &[_]ProofScript.Ref{.{ .hyp = .{
-            .index = 1,
-            .span = .{ .start = 0, .end = 0 },
-        } }},
-    );
-}
-
-test "exact search orders successful rules deterministically" {
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\term P: wff;
-        \\axiom p1: $ P $;
-        \\axiom p2: $ P $;
-        \\axiom p3: $ P $;
-        \\theorem t: $ P $;
-    ;
-    try expectExactRuleOrder(
-        mm0_src,
-        "t",
-        "P",
-        &[_][]const u8{ "p1", "p2", "p3" },
-    );
-}
-
-test "exact search max_results preserves ranked declaration order" {
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\term P: wff;
-        \\axiom p1: $ P $;
-        \\axiom p2: $ P $;
-        \\axiom p3: $ P $;
-        \\theorem t: $ P $;
-    ;
-    try expectExactRuleOrderWithPrefix(
-        mm0_src,
-        "",
-        "t",
-        "P",
-        0,
-        2,
-        &[_][]const u8{ "p1", "p2" },
-    );
-}
-
-test "exact search leaves checked prefix unchanged on failure" {
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\term P: wff;
-        \\term Q: wff;
-        \\axiom p: $ P $;
-        \\axiom id (a: wff): $ a $ > $ a $;
-        \\theorem t: $ P $ > $ Q $;
-    ;
-    const proof_src =
-        \\t
-        \\------
-        \\l1: $ P $ by p
-    ;
-    try expectExactRuleOrderWithPrefix(
-        mm0_src,
-        proof_src,
-        "t",
-        "Q",
-        1,
-        null,
-        &[_][]const u8{},
-    );
-}
-
-test "exact search orders transparent refs by pool order" {
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\term P: wff;
-        \\def id (p: wff): wff = $ p $;
-        \\axiom use_p: $ P $ > $ P $;
-        \\theorem t: $ id P $ > $ P $ > $ P $;
-    ;
-    try expectFirstExactRefs(
-        mm0_src,
-        "",
-        "t",
-        "P",
-        0,
-        "use_p",
-        &[_]ProofScript.Ref{.{ .hyp = .{
-            .index = 1,
-            .span = .{ .start = 0, .end = 0 },
-        } }},
-    );
 }
 
 test "apply candidate can compile after user supplies refs" {
@@ -1209,24 +952,11 @@ test "exact search accepts visible holey goals" {
         \\  $ a $ > $ b $ > $ a -> b -> a $;
         \\theorem t (a b: wff): $ a $ > $ b $ > $ a -> b -> a $;
     ;
-    try expectFirstExactRefs(
-        mm0_src,
-        "",
-        "t",
-        "a -> _wff -> a",
-        0,
-        "ax_keep",
-        &[_]ProofScript.Ref{
-            .{ .hyp = .{
-                .index = 1,
-                .span = .{ .start = 0, .end = 0 },
-            } },
-            .{ .hyp = .{
-                .index = 1,
-                .span = .{ .start = 0, .end = 0 },
-            } },
-        },
-    );
+    try expectOffers(mm0_src,
+        \\t
+        \\------
+        \\l1: $ a -> _wff -> a $ by exact?
+    , "exact?", .{}, &.{ "ax_keep [#1, #1]", "ax_keep [#1, #2]" });
 }
 
 test "apply search supports ACUI context holes" {
@@ -1253,18 +983,11 @@ test "exact search supports ACUI context holes" {
         "mm0",
     );
     defer std.testing.allocator.free(mm0_src);
-    try expectFirstExactRefs(
-        mm0_src,
-        "",
-        "hole_acui_min_ctx",
-        "nd _ctx (imp p _wff)",
-        0,
-        "imp_intro",
-        &[_]ProofScript.Ref{.{ .hyp = .{
-            .index = 1,
-            .span = .{ .start = 0, .end = 0 },
-        } }},
-    );
+    try expectOffers(mm0_src,
+        \\hole_acui_min_ctx
+        \\-----------------
+        \\l1: $ nd _ctx (imp p _wff) $ by exact?
+    , "exact?", .{}, &.{"imp_intro [#1]"});
 }
 
 const fallback_mm0_src =

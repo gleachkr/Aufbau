@@ -72,9 +72,8 @@ pub const SearchSession = struct {
 
     /// Lazily built from the FIRST theorem passed in and reused for the whole
     /// session, so the first caller must be a top-level search: pool entries
-    /// capture that theorem's ExprIds, and a `hookSolveOpen` scope clone's ids
-    /// die with the scope (generate.zig asserts the ordering at the scope
-    /// site). Later callers' theorems all extend the same base id-space.
+    /// capture that theorem's ExprIds. Later callers' theorems all extend the
+    /// same base id-space.
     pub fn getReferencePool(
         self: *SearchSession,
         theorem: *const TheoremContext,

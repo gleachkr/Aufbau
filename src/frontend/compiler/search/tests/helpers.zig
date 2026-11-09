@@ -14,29 +14,13 @@ pub const fixture_mod = @import("../fixture.zig");
 
 pub const apply_mod = @import("../apply.zig");
 
-pub const backtrack = @import("../backward/backtrack.zig");
+pub const semantic = @import("../semantic.zig");
 
-pub const semantic = @import("../backward/semantic.zig");
-
-pub const plausible = @import("../backward/plausible.zig");
-
-pub const abstract_prune = @import("../abstract_prune.zig");
-
-pub const context_prune = @import("../context_prune.zig");
-
-pub const seed = @import("../backward/seed.zig");
-
-pub const def_match = @import("../backward/def_match.zig");
+pub const def_match = @import("../def_match.zig");
 pub const head_class = @import("../../../head_class.zig");
 pub const AcuiBag = @import("../../../acui_bag.zig");
 
-pub const acui = @import("../backward/acui.zig");
-
-pub const split = @import("../backward/split.zig");
-
-pub const Witness = @import("../backward/witness.zig");
-
-pub const forward = @import("../forward.zig");
+pub const acui = @import("../acui.zig");
 
 pub const MetaStore = @import("../meta_store.zig").MetaStore;
 
@@ -85,8 +69,6 @@ pub const LabelIndexMap = types.LabelIndexMap;
 pub const apply = apply_mod.apply;
 
 pub const applyWithSession = apply_mod.applyWithSession;
-
-pub const exact = backtrack.exact;
 
 pub const probe = candidate_mod.probe;
 
@@ -541,166 +523,6 @@ pub fn expectApplyRuleOrder(
     try std.testing.expectEqual(@as(usize, 0), harness.checked.items.len);
 }
 
-/// What the legacy backtracker's direct search (`backtrack.exactWithSession`,
-/// which the generation ladder still runs) finds for the goal of
-/// `proof_src`'s one `exact?` line: the rule each result applies, in order.
-/// For the tests of that search's prunes, which `exact?` itself no longer
-/// reaches.
-pub fn legacyExactRules(
-    arena: *std.heap.ArenaAllocator,
-    mm0_src: []const u8,
-    proof_src: []const u8,
-    counters: *types.SearchCounters,
-) ![]const []const u8 {
-    const allocator = arena.allocator();
-    var proof_parser = ProofParser.init(allocator, proof_src);
-    const block = (try proof_parser.nextBlock()) orelse return error.MissingBlock;
-    var fixture = try fixtureFor(allocator, mm0_src, block.name);
-    var sink = DiagnosticSink.init(mm0_src, proof_src);
-    var compiler = CompilerContext.init(mm0_src, proof_src, .none, &sink);
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    try theorem.seedAssertion(fixture.assertion);
-    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
-    defer theorem_vars.deinit();
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const target = for (block.lines, 0..) |line, idx| {
-        if (std.mem.eql(u8, line.application.rule_name, "exact?")) break idx;
-    } else return error.MissingNeedle;
-    for (block.lines[0..target]) |line| {
-        const line_idx = try commitSearchLine(
-            allocator,
-            &compiler,
-            &fixture,
-            &harness.labels,
-            &harness.checked,
-            &theorem,
-            &theorem_vars,
-            &harness.diag_scratch,
-            &harness.cache,
-            line,
-        );
-        try harness.labels.put(line.label, line_idx);
-    }
-    const context = harness.context(&fixture);
-    const goal = try parseGoal(&fixture, &theorem, &theorem_vars, block.lines[target].assertion.text);
-    var results = try exact(&compiler, &context, goal, &theorem, &theorem_vars, .{ .counters = counters });
-    defer results.deinit();
-    const rules = try allocator.alloc([]const u8, results.candidates.len);
-    for (rules, results.candidates) |*rule, candidate| rule.* = try allocator.dupe(u8, candidate.rule_name);
-    return rules;
-}
-
-pub fn expectExactRuleOrderWithPrefix(
-    mm0_src: []const u8,
-    proof_src: []const u8,
-    theorem_name: []const u8,
-    goal_text: []const u8,
-    prefix_count: usize,
-    max_results: ?usize,
-    expected_names: []const []const u8,
-) !void {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-    var fixture = try fixtureFor(allocator, mm0_src, theorem_name);
-    var sink = DiagnosticSink.init(mm0_src, proof_src);
-    var compiler = CompilerContext.init(mm0_src, proof_src, .none, &sink);
-    var proof_parser = ProofParser.init(allocator, proof_src);
-    const block = if (proof_src.len == 0)
-        null
-    else
-        try proof_parser.nextBlock();
-
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    try theorem.seedAssertion(fixture.assertion);
-    var theorem_vars = try Check.buildTheoremVarMap(
-        allocator,
-        fixture.assertion,
-    );
-    defer theorem_vars.deinit();
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-
-    if (prefix_count > 0) {
-        const actual_block = block orelse return error.MissingBlock;
-        for (actual_block.lines[0..prefix_count]) |line| {
-            const line_idx = try commitSearchLine(
-                allocator,
-                &compiler,
-                &fixture,
-                &harness.labels,
-                &harness.checked,
-                &theorem,
-                &theorem_vars,
-                &harness.diag_scratch,
-                &harness.cache,
-                line,
-            );
-            try harness.labels.put(line.label, line_idx);
-        }
-    }
-
-    const checked_before = harness.checked.items.len;
-
-    const context = harness.context(&fixture);
-    const goal = try parseGoal(&fixture, &theorem, &theorem_vars, goal_text);
-    var results = try exact(
-        &compiler,
-        &context,
-        goal,
-        &theorem,
-        &theorem_vars,
-        .{ .max_results = max_results },
-    );
-    defer results.deinit();
-    try std.testing.expectEqual(checked_before, harness.checked.items.len);
-
-    try std.testing.expectEqual(
-        expected_names.len,
-        results.candidates.len,
-    );
-    for (expected_names, 0..) |expected, idx| {
-        try std.testing.expectEqualStrings(
-            expected,
-            results.candidates[idx].rule_name,
-        );
-        var attempt = try probe(
-            &compiler,
-            &context,
-            results.candidates[idx].application,
-            goal,
-            &theorem,
-            &theorem_vars,
-            .{},
-        );
-        defer attempt.deinit();
-        try CheckedIr.validateLinesCached(
-            &attempt.theorem,
-            attempt.checked_lines,
-        );
-    }
-}
-
-pub fn expectExactRuleOrder(
-    mm0_src: []const u8,
-    theorem_name: []const u8,
-    goal_text: []const u8,
-    expected_names: []const []const u8,
-) !void {
-    try expectExactRuleOrderWithPrefix(
-        mm0_src,
-        "",
-        theorem_name,
-        goal_text,
-        0,
-        null,
-        expected_names,
-    );
-}
-
 pub fn expectInlineSearch(
     mm0_src: []const u8,
     proof_src: []const u8,
@@ -781,128 +603,9 @@ pub const auto_inline_mm0 =
     \\theorem tPX: $ P $ > $ X $;
 ;
 
-pub const GeneratedConclusionHookCtx = struct {
-    wrong_conclusion: bool,
-    wrong_expr: ExprId,
-    calls: usize = 0,
-
-    pub fn solve(
-        ctx: *anyopaque,
-        target: ExprId,
-        target_theorem: *TheoremContext,
-        step: types.ChildStep,
-    ) anyerror!?types.GeneratedProof {
-        _ = target_theorem;
-        _ = step;
-        const self: *@This() = @ptrCast(@alignCast(ctx));
-        self.calls += 1;
-        const zero = ProofScript.Span{ .start = 0, .end = 0 };
-        return .{
-            .application = .{
-                .rule_name = "p",
-                .rule_span = zero,
-                .refs_span = null,
-                .refs = &.{},
-                .span = zero,
-            },
-            .conclusion = if (self.wrong_conclusion) self.wrong_expr else target,
-        };
-    }
-};
-
-pub fn expectFirstExactRefs(
-    mm0_src: []const u8,
-    proof_src: []const u8,
-    theorem_name: []const u8,
-    goal_text: []const u8,
-    prefix_count: usize,
-    expected_rule: []const u8,
-    expected_refs: []const ProofScript.Ref,
-) !void {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-    var fixture = try fixtureFor(allocator, mm0_src, theorem_name);
-    var sink = DiagnosticSink.init(mm0_src, proof_src);
-    var compiler = CompilerContext.init(mm0_src, proof_src, .none, &sink);
-    var proof_parser = ProofParser.init(allocator, proof_src);
-    const block = if (proof_src.len == 0)
-        null
-    else
-        try proof_parser.nextBlock();
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    try theorem.seedAssertion(fixture.assertion);
-    var theorem_vars = try Check.buildTheoremVarMap(
-        allocator,
-        fixture.assertion,
-    );
-    defer theorem_vars.deinit();
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-
-    if (prefix_count > 0) {
-        const actual_block = block orelse return error.MissingBlock;
-        for (actual_block.lines[0..prefix_count]) |line| {
-            const line_idx = try commitSearchLine(
-                allocator,
-                &compiler,
-                &fixture,
-                &harness.labels,
-                &harness.checked,
-                &theorem,
-                &theorem_vars,
-                &harness.diag_scratch,
-                &harness.cache,
-                line,
-            );
-            try harness.labels.put(line.label, line_idx);
-        }
-    }
-
-    const checked_before = harness.checked.items.len;
-
-    const context = harness.context(&fixture);
-    const goal = try parseGoal(&fixture, &theorem, &theorem_vars, goal_text);
-    var results = try exact(
-        &compiler,
-        &context,
-        goal,
-        &theorem,
-        &theorem_vars,
-        .{},
-    );
-    defer results.deinit();
-    try std.testing.expectEqual(checked_before, harness.checked.items.len);
-    try std.testing.expect(results.candidates.len > 0);
-    const candidate = results.candidates[0];
-    try std.testing.expectEqualStrings(expected_rule, candidate.rule_name);
-    try std.testing.expectEqual(expected_refs.len, candidate.refs.len);
-    for (expected_refs, candidate.refs) |expected, actual| {
-        switch (expected) {
-            .hyp => |expected_hyp| switch (actual) {
-                .hyp => |actual_hyp| try std.testing.expectEqual(
-                    expected_hyp.index,
-                    actual_hyp.index,
-                ),
-                else => return error.ExpectedHypRef,
-            },
-            .line => |expected_line| switch (actual) {
-                .line => |actual_line| try std.testing.expectEqualStrings(
-                    expected_line.label,
-                    actual_line.label,
-                ),
-                else => return error.ExpectedLineRef,
-            },
-            .application => return error.UnexpectedInlineRef,
-        }
-    }
-}
-
 pub const tunables = @import("../tunables.zig");
 
 pub const miss = @import("../miss.zig");
-pub const generate = @import("../generate.zig");
 
 // End-to-end fixture: `R` needs a two-level generated chain
 // (`qr [pq [p []]]`), `S` is unprovable.
@@ -993,6 +696,28 @@ pub fn expectOffered(
     if (!missing) return;
     for (items) |item| std.debug.print("  offered: {s}\n", .{item.replacement});
     return error.MissingSuggestion;
+}
+
+/// Fails unless the search at `needle` offers exactly `expected`, in order,
+/// printing what was offered instead.
+pub fn expectOffers(
+    mm0_src: []const u8,
+    proof_src: []const u8,
+    needle: []const u8,
+    options: types.SourceSuggestionOptions,
+    expected: []const []const u8,
+) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, needle, options);
+    defer suggestions.deinit();
+    const same = expected.len == suggestions.items.len and for (expected, suggestions.items) |wanted, item| {
+        if (!std.mem.eql(u8, wanted, item.replacement)) break false;
+    } else true;
+    if (same) return;
+    for (expected) |wanted| std.debug.print("  expected: {s}\n", .{wanted});
+    for (suggestions.items) |item| std.debug.print("  offered: {s}\n", .{item.replacement});
+    return error.UnexpectedSuggestions;
 }
 
 /// An annotation the registry rejects at enrollment surfaces through the

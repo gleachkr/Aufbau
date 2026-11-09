@@ -1,11 +1,11 @@
 //! The search's handle on `acui_bag.zig`: the same bag reading, with the
 //! combiner looked up from the search context by its head.
 
-const types = @import("../types.zig");
-const AcuiBag = @import("../../../acui_bag.zig");
-const ExprId = @import("../../../expr.zig").ExprId;
-const TheoremContext = @import("../../../expr.zig").TheoremContext;
-const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
+const types = @import("./types.zig");
+const AcuiBag = @import("../../acui_bag.zig");
+const ExprId = @import("../../expr.zig").ExprId;
+const TheoremContext = @import("../../expr.zig").TheoremContext;
+const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 const Context = types.Context;
 
 pub const capacity = AcuiBag.capacity;
@@ -36,17 +36,6 @@ pub fn isCommutative(context: *const Context, head_id: u32) bool {
 pub fn unitOf(context: *const Context, head_id: u32) ?u32 {
     const combiner = combinerOf(context, head_id) orelse return null;
     return combiner.unit;
-}
-
-/// Whether `expr` is the unit of combiner `head_id`.
-pub fn isUnitOf(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    head_id: u32,
-    expr: ExprId,
-) bool {
-    const combiner = combinerOf(context, head_id) orelse return false;
-    return combiner.isUnit(theorem, expr);
 }
 
 /// `Combiner.flatten` for head `head_id`. A head that is not an `@acui`

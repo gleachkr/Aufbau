@@ -1,90 +1,69 @@
-const types = @import("../types.zig");
-const ExprId = @import("../../../expr.zig").ExprId;
-const TheoremContext = @import("../../../expr.zig").TheoremContext;
-const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
-const ArgInfo = @import("../../../parse_recovery.zig").ArgInfo;
+const types = @import("./types.zig");
+const ExprId = @import("../../expr.zig").ExprId;
+const TheoremContext = @import("../../expr.zig").TheoremContext;
+const TemplateExpr = @import("../../rules.zig").TemplateExpr;
+const ArgInfo = @import("../../parse_recovery.zig").ArgInfo;
 const Context = types.Context;
 
 const acui = @import("./acui.zig");
 const semantic = @import("./semantic.zig");
-const lockstep = @import("./lockstep.zig");
 const bag = @import("./bag.zig");
-const Canonicalizer = @import("../../../normalizer.zig").Canonicalizer;
-const head_class = @import("../../../head_class.zig");
+const Canonicalizer = @import("../../normalizer.zig").Canonicalizer;
 
 const isRigidHead = semantic.isRigidHead;
 
-/// Whether `source` provably cannot be `pattern` with the `@recover` `hole`
-/// replaced by a single witness term. The validator's recover unfolds
-/// transparent defs and canonicalizes ACUI terms before comparing, and neither
-/// changes a rigid head, so this is `rigidExprMismatch` with every position at
-/// the hole, or at a coercion chain around it, left open: the validator
-/// re-sorts that subtree through the coercion graph (cross-sort `@recover`,
-/// #215), so `F (v2t x)` against `F (n2t b)` recovers `b`. The hole as a bag
-/// member may stand for no member, so `h , c` may still be `c`.
-pub fn recoverDefiniteMismatch(
+const TemplatePair = struct { template: TemplateExpr, expr: ExprId };
+
+/// The argument pairs a structural walk of `app` against `expr` may pin or
+/// descend into, or null when `expr` is not an application of the same head
+/// at the same arity. Only the arguments the head determines are paired
+/// (`semantic.argDetermined`): any other pair need not be equal even when the
+/// applications are (an erasing def, a `@rewrite` head, an ACUI combiner), so
+/// reading a binding off it would be a guess.
+fn templateArgs(
     context: *const Context,
     theorem: *const TheoremContext,
-    source: ExprId,
-    pattern: ExprId,
-    hole: ExprId,
-) bool {
-    var screen = screenFor(context, theorem);
-    defer screen.deinit();
-    screen.hole = hole;
-    return screen.neverMeet(source, pattern);
-}
-
-/// The search's `head_class.Screen` over `theorem`, for one query.
-pub fn screenFor(context: *const Context, theorem: *const TheoremContext) head_class.Screen {
-    return .init(context.env, context.registry, theorem, context.allocator);
-}
-
-/// Whether `expr` is a `@rewrite`-headed term in normal form that no
-/// instantiation can change: it holds no placeholder, every head in it is
-/// rigid or a plain `@rewrite` head (no def to unfold, no ACUI combiner to
-/// rearrange), and no rewrite fires anywhere in it. The checker compares by
-/// normal form, so such a term converts only to terms whose normal form it is,
-/// and its head is as stable as a rigid one: a template with a rigid root
-/// never matches it.
-pub fn stuckRedex(
-    context: *const Context,
-    theorem: *const TheoremContext,
+    app: TemplateExpr.App,
     expr: ExprId,
-) bool {
-    switch (theorem.interner.node(expr).*) {
-        .app => |app| if (semantic.headClass(context, app.term_id) != .rewrite) return false,
-        else => return false,
-    }
-    if (theorem.exprAny(expr, context, notStableNode)) return false;
-    var scratch = theorem.clone() catch return false;
-    defer scratch.deinit();
-    var canon = Canonicalizer.init(scratch.allocator, &scratch, context.registry, context.env, {});
-    defer canon.deinit();
-    const normal = canon.canonicalize(expr) catch return false;
-    return normal == expr and canon.step_count == 0;
-}
-
-fn notStableNode(context: *const Context, theorem: *const TheoremContext, expr: ExprId) bool {
-    return switch (theorem.interner.node(expr).*) {
-        .placeholder => true,
-        .variable => false,
-        .app => |app| switch (semantic.headClass(context, app.term_id)) {
-            .rigid => false,
-            .rewrite => !plainRewriteHead(context, app.term_id),
-            .def, .acui, .unavailable => true,
-        },
+) ?TemplateArgs {
+    const concrete = switch (theorem.interner.node(expr).*) {
+        .app => |concrete| concrete,
+        else => return null,
+    };
+    if (concrete.term_id != app.term_id or concrete.args.len != app.args.len) return null;
+    const class = semantic.headClass(context, app.term_id);
+    return .{
+        .context = context,
+        .head = app.term_id,
+        // An ACUI, `@rewrite`, or unavailable head determines no arg.
+        .left = if (class == .rigid or class == .def) app.args else &.{},
+        .right = concrete.args,
+        .per_arg = class == .def,
     };
 }
 
-// A `@rewrite` head that is also an ACUI combiner or a transparent def classes
-// as `.rewrite`, yet it can change with no rewrite firing: an ACUI head
-// rearranges its members, and the checker unfolds the def.
-fn plainRewriteHead(context: *const Context, term_id: u32) bool {
-    if (context.registry.acui_by_head.contains(term_id)) return false;
-    const term = &context.env.terms.items[term_id];
-    return !(term.is_def and term.body != null);
-}
+/// Iterator over the determined argument pairs. The expression argument
+/// slices are separate heap allocations of the interner, so interning during
+/// the walk does not invalidate them.
+const TemplateArgs = struct {
+    context: *const Context,
+    head: u32,
+    left: []const TemplateExpr,
+    right: []const ExprId,
+    index: usize = 0,
+    /// A rigid head determines every arg; only a def asks per arg.
+    per_arg: bool,
+
+    fn next(self: *TemplateArgs) ?TemplatePair {
+        while (self.index < self.left.len) {
+            const i = self.index;
+            self.index += 1;
+            if (self.per_arg and !semantic.argDetermined(self.context, self.head, i)) continue;
+            return .{ .template = self.left[i], .expr = self.right[i] };
+        }
+        return null;
+    }
+};
 
 // True when `term_id` heads a structural combiner declared with neither
 // commutativity nor idempotence, so its members form a sequence: two spines
@@ -185,106 +164,6 @@ fn extractOrderedSpineBindings(
     bindings[idx] = (bag.build(context, theorem, head_id, middle) catch return) orelse return;
 }
 
-// Decide whether `template` (under `bindings`) provably cannot match `ref`,
-// looking only at *rigid* structure the validator can never bridge.
-//
-// `matchTemplate` is all-or-nothing: when it fails it tells us nothing about
-// *why*. The coarse classification around the call site then gives up
-// (`.unknown`) the moment any ACUI/def/unavailable term appears anywhere in the
-// template, ref, or current bindings — even when the actual disagreement is in a
-// fully rigid region. That is the church-`inst` blowup: hypothesis `G ⊩ t : A`
-// has `t`, `A` already pinned, so the rigid `… : …` payload determines the
-// match, yet every ref survives the filter merely because its *context* is an
-// ACUI `join`. Here we walk template against ref and report a mismatch only when
-// they diverge at a point both sides hold rigid — exactly the divergences def
-// unfolding and ACUI rearrangement cannot reconcile. ACUI/def regions (and
-// unbound binders, placeholders, opaque atoms paired with non-rigid terms) are
-// treated as "no opinion" so we never prune a ref the validator would accept.
-pub fn templateDefiniteMismatch(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    template: TemplateExpr,
-    ref: ExprId,
-    bindings: []const ?ExprId,
-) bool {
-    switch (template) {
-        .binder => |idx| {
-            const value = if (idx < bindings.len) bindings[idx] else null;
-            // Unbound binder: matches anything. Bound binder: its value must
-            // equal the ref subterm, judged by rigid divergence.
-            if (value) |bound| return rigidExprMismatch(context, theorem, bound, ref);
-            return false;
-        },
-        .app => |app| {
-            // A `@rewrite` head can reduce to a *different* head, so no clash
-            // with it is definite (`[y/x][q/refl A x] C` vs `Id A x x`: the
-            // `sb_ty` head rewrites away).
-            if (semantic.headClass(context, app.term_id) == .rewrite) return false;
-            switch (theorem.interner.node(ref).*) {
-                // A placeholder may still stand for anything.
-                .placeholder => return false,
-                // A compound with a rigid root can't equal a bare atom.
-                .variable => return semantic.rigidHead(context, app.term_id) != null,
-                .app => |concrete| {
-                    // Same head: compare the args it forces. No def is assumed
-                    // injective: an arg its body drops (the `const` trap) or
-                    // places only under an ACUI or `@rewrite` head is skipped.
-                    if (lockstep.templateArgs(context, theorem, app, ref)) |aligned| {
-                        var args = aligned;
-                        while (args.next()) |pair| {
-                            if (templateDefiniteMismatch(
-                                context,
-                                theorem,
-                                pair.template,
-                                pair.expr,
-                                bindings,
-                            )) return true;
-                        }
-                        return false;
-                    }
-                    // Different heads are definite only when def unfolding
-                    // exposes distinct rigid roots on both sides, or when the
-                    // ref is a stuck redex and the template has a rigid root.
-                    const root = semantic.rigidHead(context, app.term_id) orelse return false;
-                    if (semantic.rigidHead(context, concrete.term_id)) |ref_root| return root != ref_root;
-                    return stuckRedex(context, theorem, ref);
-                },
-            }
-        },
-    }
-}
-
-// Rigid-divergence comparison of two committed expressions (the bound-binder
-// counterpart of `templateDefiniteMismatch`): `head_class.Screen.neverMeet`.
-pub fn rigidExprMismatch(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    a: ExprId,
-    b: ExprId,
-) bool {
-    var screen = screenFor(context, theorem);
-    defer screen.deinit();
-    return screen.neverMeet(a, b);
-}
-
-/// Whether `expr` stays exactly one member of a `head_id` bag under every
-/// conversion (`head_class.Screen.exactlyOneMember`).
-pub fn fixedMemberOf(context: *const Context, theorem: *const TheoremContext, head_id: u32, expr: ExprId) bool {
-    const combiner = bag.combinerOf(context, head_id) orelse return false;
-    var screen = screenFor(context, theorem);
-    defer screen.deinit();
-    return screen.exactlyOneMember(combiner, expr);
-}
-
-/// The fewest members of a `head_id` bag that `expr` stands for under every
-/// conversion (`head_class.Screen.minMembers`).
-pub fn minMembersOf(context: *const Context, theorem: *const TheoremContext, head_id: u32, expr: ExprId) u64 {
-    const combiner = bag.combinerOf(context, head_id) orelse return 0;
-    var screen = screenFor(context, theorem);
-    defer screen.deinit();
-    return screen.minMembers(combiner, expr);
-}
-
 pub const UnfoldDefInfo = struct {
     body: TemplateExpr,
     nargs: usize,
@@ -359,19 +238,6 @@ pub fn unfoldAppOnce(
 // terms, so the chain is acyclic; this caps pathologically deep stacks.
 pub const max_def_unfold_depth = 64;
 
-pub fn projectViewBindingsIntoRule(
-    view: types.ViewDecl,
-    view_bindings: []const ?ExprId,
-    rule_bindings: []?ExprId,
-) void {
-    for (view.binder_map, 0..) |maybe_rule_idx, vi| {
-        const rule_idx = maybe_rule_idx orelse continue;
-        if (rule_idx >= rule_bindings.len) continue;
-        if (rule_bindings[rule_idx] != null) continue;
-        if (view_bindings[vi]) |expr| rule_bindings[rule_idx] = expr;
-    }
-}
-
 // Walk template against ref filling in any binder slots that the ref's
 // structure pins down, without ever overriding a binding that was already
 // set. Called on the `.unknown` path so that even when `matchTemplate`
@@ -433,9 +299,9 @@ fn extractPartial(
                 return;
             }
             const node = theorem.interner.node(expr_id);
-            if (lockstep.templateArgs(context, theorem, app, expr_id)) |aligned| {
+            if (templateArgs(context, theorem, app, expr_id)) |aligned| {
                 // Positional walk over the args the head forces (see
-                // `lockstep`). That skips an ACUI spine, where pinning a bare
+                // `templateArgs`). That skips an ACUI spine, where pinning a bare
                 // binder leaf (e.g. `ex_elim`'s context `H` in `H , p`) to the
                 // ref's first arg would guess at the split and swallow members
                 // of a sibling leaf; the member pass below handles commutative
@@ -582,7 +448,7 @@ pub fn walkDefBody(
         .app => |app| {
             if (context.registry.hasStructuralCombiner(app.term_id)) return;
             if (theorem.interner.node(expr_id).* != .app) return;
-            if (lockstep.templateArgs(context, theorem, app, expr_id)) |aligned| {
+            if (templateArgs(context, theorem, app, expr_id)) |aligned| {
                 var args = aligned;
                 while (args.next()) |pair| {
                     try walkDefBody(walker, context, theorem, pair.template, scope, pair.expr, allow_ref_binder_defs, depth + 1);

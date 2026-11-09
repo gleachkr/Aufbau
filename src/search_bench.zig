@@ -39,8 +39,6 @@ const BenchOptions = struct {
     /// `GenerateOptions` defaults).
     gen_nodes: usize = 0,
     gen_fuel: usize = 0,
-    /// Override for the constrained-backward-MP phase-5 fuel (0 = reuse gen_fuel).
-    phase5_fuel: usize = 0,
     /// Cost-weighted per-call cap in weighted work ticks. Null = keep the
     /// `GenerateOptions` default; 0 = disable the cap (uncapped calibration
     /// runs); N = override.
@@ -60,8 +58,8 @@ const BenchOptions = struct {
     retry_misses: bool = false,
     /// Breadth lines whose warm search exceeds this are flagged SLOW.
     slow_ms: u64 = 2,
-    /// Print a key-counter line (tryCandidate calls, rejects, top rules by
-    /// validation attempts) under each MISS/SLOW breadth row.
+    /// Print a key-counter line (tryCandidate calls, rejects, pool sizes,
+    /// core nodes) under each MISS/SLOW breadth row.
     counters: bool = false,
     /// Enable per-call-site live-byte attribution in the bench allocator
     /// (`addr2line`-able leak hunting). Heavy: distorts timing numbers.
@@ -78,31 +76,15 @@ const BenchOptions = struct {
     /// A theorem counts as FULL when it reaches the cap, so a guard can pin
     /// a shallow frontier without the deeper misses failing it.
     max_k: ?usize = null,
-    /// A/B switch for the Driver-owned search-reuse memos (reject-verdict memo +
-    /// re-pin prune), default on (matches production). `--no-search-memo` turns
-    /// them off to measure their effect.
-    search_memo: bool = true,
-    /// Lever E: deep-unfold ACUI member prune (default on, matches production).
-    /// `--no-deep-member-prune` turns it off to measure its effect.
-    deep_member_prune: bool = true,
-    /// `--no-persist-negative` turns off cross-cell persisted failure memos
-    /// to measure their effect.
-    persist_negative: bool = true,
     /// Content-keyed query-shape cache (Lever M-content); `--no-shape-cache`
     /// turns it off to measure its effect.
     shape_cache: bool = true,
-    /// The search core (`GenerateOptions.core`); `--no-core` with
-    /// `--ladder` leaves it out to measure the ladder alone.
-    core: bool = true,
-    /// `--ladder` runs the generation ladder after the core
-    /// (`GenerateOptions.ladder`).
-    ladder: bool = false,
     /// Discrimination/scaling sweep. When set, the
     /// scenario/frontier benches are skipped and the sweep runs instead.
     sweep: ?SweepSpec = null,
 
-    fn ladderDepth(self: BenchOptions) usize {
-        return self.max_depth orelse Search.GenerateOptions.ladder_depth;
+    fn defaultDepth(self: BenchOptions) usize {
+        return self.max_depth orelse Search.GenerateOptions.default_depth;
     }
 };
 
@@ -373,10 +355,6 @@ fn parseOptions(
             options.global_budget = try std.fmt.parseInt(u64, arg["--global-budget=".len..], 10);
             continue;
         }
-        if (std.mem.startsWith(u8, arg, "--phase5-fuel=")) {
-            options.phase5_fuel = try std.fmt.parseInt(usize, arg["--phase5-fuel=".len..], 10);
-            continue;
-        }
         if (std.mem.startsWith(u8, arg, "--fwd-facts=")) {
             options.fwd_facts = try std.fmt.parseInt(usize, arg["--fwd-facts=".len..], 10);
             continue;
@@ -417,28 +395,8 @@ fn parseOptions(
             options.require_no_miss = true;
             continue;
         }
-        if (std.mem.eql(u8, arg, "--no-search-memo")) {
-            options.search_memo = false;
-            continue;
-        }
         if (std.mem.eql(u8, arg, "--no-shape-cache")) {
             options.shape_cache = false;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--no-deep-member-prune")) {
-            options.deep_member_prune = false;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--no-persist-negative")) {
-            options.persist_negative = false;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--no-core")) {
-            options.core = false;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--ladder")) {
-            options.ladder = true;
             continue;
         }
         if (std.mem.eql(u8, arg, "--counters")) {
@@ -474,10 +432,7 @@ fn printUsage() !void {
             "       [--marker=auto?|exact?|apply?] [--max-depth=N]\n" ++
             "       [--slow-ms=N] [--verbose|-v] [--counters] [--track-sites]\n" ++
             "       [--require-no-miss] [--retry-misses] [--max-k=N]\n" ++
-            "       [--no-search-memo] [--no-deep-member-prune]\n" ++
-            "       [--no-persist-negative]\n" ++
-            "       [--no-shape-cache] [--no-core] [--ladder]\n" ++
-            "       [--gen-nodes=N] [--gen-fuel=N] [--phase5-fuel=N]\n" ++
+            "       [--no-shape-cache] [--gen-nodes=N] [--gen-fuel=N]\n" ++
             "       [--global-budget=TICKS] [--alloc-trap=MIB]\n" ++
             "       [--fwd-facts=N] [--fwd-layers=N] [--fwd-attempts=N]\n" ++
             "       [--fwd-tuples=N]\n" ++
@@ -545,34 +500,10 @@ fn runScenario(
         .{counters.candidate_rules_before_conclusion_validation},
     );
     try writer.print(
-        "  conclusion member prunes: {}\n",
-        .{counters.conclusion_member_prunes},
-    );
-    try writer.print(
-        "  dep violation prunes: {}\n",
-        .{counters.dep_violation_prunes},
-    );
-    try writer.print(
-        "  final conclusion prunes: {}\n",
-        .{counters.final_conclusion_prunes},
-    );
-    try writer.print(
-        "  redex conclusion prunes: {}\n",
-        .{counters.redex_conclusion_prunes},
-    );
-    try writer.print(
         "  conclusion probes: {}\n",
         .{counters.conclusion_probes},
     );
     try writer.print("  ref pool size: {}\n", .{counters.ref_pool_size});
-    try writer.print(
-        "  per-hyp filtered ref list total: {}\n",
-        .{counters.per_hyp_filtered_ref_list_total},
-    );
-    try writer.print(
-        "  ref tuple count after filtering: {}\n",
-        .{counters.ref_tuple_count_after_filtering},
-    );
     try writer.print(
         "  full tryCandidate calls: {}\n",
         .{counters.full_try_candidate_calls},
@@ -582,48 +513,12 @@ fn runScenario(
         .{counters.accepted_candidates},
     );
     try writer.print(
-        "  generated chain attempts: {}\n",
-        .{counters.generated_chain_attempts},
-    );
-    try writer.print(
         "  rejected candidates after validation: {}\n",
         .{counters.rejected_candidates_after_validation},
     );
     try writer.print(
-        "  hyp syntactic matches: {}\n",
-        .{counters.hyp_match_syntactic},
-    );
-    try writer.print(
-        "  hyp definite mismatches: {}\n",
-        .{counters.hyp_match_definite_mismatch},
-    );
-    try writer.print(
-        "  hyp unknown matches: {}\n",
-        .{counters.hyp_match_unknown},
-    );
-    try writer.print(
-        "  recover member injections: {}\n",
-        .{counters.recover_member_injections},
-    );
-    try writer.print(
-        "  split context guard rejects: {}\n",
-        .{counters.split_context_guard_rejects},
-    );
-    try writer.print(
-        "  acui witness attempts: {}\n",
-        .{counters.acui_witness_attempts},
-    );
-    try writer.print(
-        "  recover guard rejects (match/extract): {}/{}\n",
-        .{ counters.recover_guard_match_rejects, counters.recover_guard_extract_rejects },
-    );
-    try writer.print(
-        "  metas created (exist/univ/bound): {}/{}/{}\n",
-        .{
-            counters.existential_metas_created,
-            counters.universal_metas_created,
-            counters.bound_choice_metas_created,
-        },
+        "  universal metas created: {}\n",
+        .{counters.universal_metas_created},
     );
     try writer.print(
         "  meta assignments: {}\n",
@@ -653,67 +548,6 @@ fn runScenario(
         "  forward saturation exhausted: {}\n",
         .{counters.forward_saturation_exhausted},
     );
-    try printHypLookupDiagnostics(writer, &counters);
-    try printRuleAttemptDiagnostics(writer, &counters);
-}
-
-fn printHypLookupDiagnostics(
-    writer: anytype,
-    counters: *const Search.SearchCounters,
-) !void {
-    if (counters.hyp_lookup_diagnostics_len == 0) return;
-    try writer.writeAll("  hyp lookup diagnostics:\n");
-    for (
-        counters.hyp_lookup_diagnostics[0..counters.hyp_lookup_diagnostics_len],
-    ) |diagnostic| {
-        try writer.print(
-            "    {s} hyp={} phase={s} depth={} refs={} fallback={s}\n",
-            .{
-                diagnostic.rule_name.slice(),
-                diagnostic.hyp_index,
-                hypLookupPhaseName(diagnostic.phase),
-                diagnostic.depth,
-                diagnostic.filtered_len,
-                hypLookupFallbackName(diagnostic.fallback),
-            },
-        );
-    }
-}
-
-fn printRuleAttemptDiagnostics(
-    writer: anytype,
-    counters: *const Search.SearchCounters,
-) !void {
-    if (counters.rule_attempt_diagnostics_len == 0) return;
-    try writer.writeAll("  full validation attempts by rule:\n");
-    for (
-        counters.rule_attempt_diagnostics[0..counters.rule_attempt_diagnostics_len],
-    ) |diagnostic| {
-        try writer.print(
-            "    {s}: attempts={} accepted={} rejected={}\n",
-            .{
-                diagnostic.rule_name.slice(),
-                diagnostic.attempts,
-                diagnostic.accepted,
-                diagnostic.rejected,
-            },
-        );
-    }
-}
-
-fn hypLookupPhaseName(phase: Search.HypLookupPhase) []const u8 {
-    return switch (phase) {
-        .initial => "initial",
-        .dynamic => "dynamic",
-    };
-}
-
-fn hypLookupFallbackName(fallback: Search.HypLookupFallback) []const u8 {
-    return switch (fallback) {
-        .none => "none",
-        .template_error => "template_error",
-        .broad_shape => "broad_shape",
-    };
 }
 
 fn printDuration(writer: anytype, label: []const u8, ns: u64) !void {
@@ -840,15 +674,9 @@ fn truncateForRow(text: []const u8, max: usize) []const u8 {
 fn frontierGenerateOptions(options: BenchOptions) Search.GenerateOptions {
     if (std.mem.eql(u8, options.marker, "auto?")) {
         var gen = Search.GenerateOptions{ .enabled = true, .max_depth = options.max_depth };
-        gen.search_memo = options.search_memo;
-        gen.deep_member_prune = options.deep_member_prune;
         gen.shape_cache = options.shape_cache;
-        gen.persist_negative = options.persist_negative;
-        gen.core = options.core;
-        gen.ladder = options.ladder;
         if (options.gen_nodes != 0) gen.max_nodes = options.gen_nodes;
         if (options.gen_fuel != 0) gen.fuel = options.gen_fuel;
-        if (options.phase5_fuel != 0) gen.phase5_fuel = options.phase5_fuel;
         if (options.global_budget) |budget| {
             gen.global_budget = if (budget == 0) null else budget;
         }
@@ -1228,27 +1056,18 @@ fn runFrontierSearch(
     };
 }
 
-/// One-line key-counter summary for a MISS/SLOW breadth row, plus the top
-/// rules by full-validation attempts — the data the major/minor premise
-/// policy question needs.
+/// One-line key-counter summary for a MISS/SLOW breadth row.
 fn printRunCounters(writer: anytype, counters: *const Search.SearchCounters) !void {
     try writer.print(
-        "       tc={} acc={} rej={} chain={} pool={} derived={} " ++
-            "fwd_attempts={} abstract_prune={} context_prune={} hyp_ref_prune={} acui_rb={}/{} unfold_rb={} tc_apply=",
+        "       tc={} acc={} rej={} pool={} derived={} fwd_attempts={} core={} tc_apply=",
         .{
             counters.full_try_candidate_calls,
             counters.accepted_candidates,
             counters.rejected_candidates_after_validation,
-            counters.generated_chain_attempts,
             counters.ref_pool_size,
             counters.derived_ref_count,
             counters.forward_rule_attempts,
-            counters.abstract_prunes,
-            counters.context_prunes,
-            counters.hyp_ref_prunes,
-            counters.readback_acui_recovered,
-            counters.readback_acui_misalign,
-            counters.readback_unfold_recovered,
+            counters.core_nodes,
         },
     );
     try printDurationCompact(writer, counters.tc_apply_ns);
@@ -1263,58 +1082,6 @@ fn printRunCounters(writer: anytype, counters: *const Search.SearchCounters) !vo
     try printDurationCompact(writer, counters.ref_lookup_ns);
     try writer.writeAll(" idx_build ");
     try printDurationCompact(writer, counters.ref_index_build_ns);
-    try writer.writeAll("  top rules: ");
-    const diags =
-        counters.rule_attempt_diagnostics[0..counters.rule_attempt_diagnostics_len];
-    var shown: usize = 0;
-    var threshold: usize = std.math.maxInt(usize);
-    while (shown < 3) {
-        var best: ?usize = null;
-        var best_attempts: usize = 0;
-        for (diags, 0..) |diag, i| {
-            if (diag.attempts >= threshold) continue;
-            if (best == null or diag.attempts > best_attempts) {
-                best = i;
-                best_attempts = diag.attempts;
-            }
-        }
-        const idx = best orelse break;
-        try writer.print("{s}={}/{} ", .{
-            diags[idx].rule_name.slice(),
-            diags[idx].attempts,
-            diags[idx].rejected,
-        });
-        threshold = diags[idx].attempts;
-        shown += 1;
-    }
-    const vt = counters.verdict_reject_total;
-    const vd = counters.verdict_reject_distinct;
-    const repeat_pct: u64 = if (vt == 0) 0 else (vt - vd) * 100 / vt;
-    try writer.print(
-        "\n       verdict: rej_total={} distinct={} repeat={}% skips={}",
-        .{ vt, vd, repeat_pct, counters.verdict_skips },
-    );
-    try writer.print(
-        "  repin: would_prune={} prunes={}",
-        .{ counters.repin_would_prune, counters.repin_prunes },
-    );
-    try writer.print(
-        "  deep_member: calls={} would_prune={} prunes={} cache(hit={} miss={})",
-        .{
-            counters.deep_member_calls,
-            counters.deep_member_would_prune,
-            counters.deep_member_prunes,
-            counters.deep_cache_hits,
-            counters.deep_cache_misses,
-        },
-    );
-    try writer.print(
-        "  persist_skips: conc={} open={}",
-        .{
-            counters.persist_concrete_skips,
-            counters.persist_open_skips,
-        },
-    );
     try writer.writeAll("\n");
 }
 
@@ -1352,7 +1119,7 @@ const DepthRunStatus = enum { found, miss, err };
 
 /// Which bound ended a MISS: the first limit `Search.miss.MissReport` shows,
 /// in the precedence stack guard, budget, fuel, forward saturation, node cap.
-/// A budget truncation is split by how far the ladder got: `budget_deep`
+/// A budget truncation is split by how far the core got: `budget_deep`
 /// when the core got through every depth below `max_depth` (the proof may
 /// need more depth, not only more budget), `budget_shallow` otherwise.
 const MissCause = enum {
@@ -1378,7 +1145,7 @@ const MissCause = enum {
         if (report.fuel) return .fuel;
         if (report.forward) return .forward;
         if (report.nodes) return .node_cap;
-        if (!report.generation_ran) return .no_generation;
+        if (!report.core_ran) return .no_generation;
         return .exhausted;
     }
 
@@ -1649,8 +1416,8 @@ fn runSweep(
         .{ @tagName(spec.family), options.marker, spec.points.len },
     );
     try writer.print(
-        "{s:>7} {s:>11} {s:>8} {s:>5} {s:>10} {s:>8} {s:>9} {s:>6} {s:>6}\n",
-        .{ "N", "search", "growth", "found", "candRules", "refRefs", "genChain", "tc", "rej" },
+        "{s:>7} {s:>11} {s:>8} {s:>5} {s:>10} {s:>6} {s:>6}\n",
+        .{ "N", "search", "growth", "found", "candRules", "tc", "rej" },
     );
     try writer.flush();
 
@@ -1706,13 +1473,11 @@ fn runSweep(
         try writer.print("{d:>7} ", .{n});
         try printDurationCompact(writer, best_ns);
         try writer.print(
-            " {s:>8} {s:>5} {d:>10} {d:>8} {d:>9} {d:>6} {d:>6}\n",
+            " {s:>8} {s:>5} {d:>10} {d:>6} {d:>6}\n",
             .{
                 growth,
                 if (last.found) "yes" else "no",
                 c.candidate_rules_before_conclusion_validation,
-                c.per_hyp_filtered_ref_list_total,
-                c.generated_chain_attempts,
                 c.full_try_candidate_calls,
                 c.rejected_candidates_after_validation,
             },
@@ -2036,7 +1801,6 @@ fn runDepthFixture(
         var fail_ns: u64 = 0;
         var fail_status: DepthRunStatus = .found;
         var fail_cause: MissCause = .exhausted;
-        var fail_last_phase: usize = 0;
         var fail_last_depth: usize = 0;
         var retry_note: []const u8 = "";
         var frontier_ticks: RunTicks = .{};
@@ -2093,19 +1857,15 @@ fn runDepthFixture(
                 try printDurationCompact(writer, run.counters.trim_ns);
                 if (run.counters.untrimmed != 0) try writer.writeAll(" UNTRIMMED");
                 try printTicksCompact(writer, RunTicks.of(&run.counters));
-                // Goals the search core expanded (none when it abstained),
-                // and the phase that found it (the core's is past the
-                // ladder's).
+                // Goals the search core expanded (none when it abstained).
                 if (run.counters.core_nodes != 0) try writer.print(" core={d}", .{run.counters.core_nodes});
-                if (run.found) try writer.print(" p{d}", .{run.counters.gen_last_phase});
                 if (run.err == null and !run.found) {
                     try writer.writeAll(" ");
                     try printMissCause(
                         writer,
-                        MissCause.of(&run.counters, options.ladderDepth()),
-                        run.counters.gen_last_phase,
+                        MissCause.of(&run.counters, options.defaultDepth()),
                         run.counters.gen_last_depth,
-                        options.ladderDepth(),
+                        options.defaultDepth(),
                     );
                 }
                 try writer.print(
@@ -2138,8 +1898,7 @@ fn runDepthFixture(
                 fail_ns = run.search_ns;
                 fail_ticks = RunTicks.of(&run.counters);
                 fail_status = .miss;
-                fail_cause = MissCause.of(&run.counters, options.ladderDepth());
-                fail_last_phase = run.counters.gen_last_phase;
+                fail_cause = MissCause.of(&run.counters, options.defaultDepth());
                 fail_last_depth = run.counters.gen_last_depth;
                 stats.miss_causes[@backingInt(fail_cause)] += 1;
                 if (options.retry_misses) {
@@ -2203,9 +1962,8 @@ fn runDepthFixture(
                     if (fail_status == .miss) try printMissCause(
                         writer,
                         fail_cause,
-                        fail_last_phase,
                         fail_last_depth,
-                        options.ladderDepth(),
+                        options.defaultDepth(),
                     );
                     try writer.writeAll(retry_note);
                     try writer.writeAll(") ");
@@ -2225,9 +1983,8 @@ fn runDepthFixture(
                 if (fail_status == .miss) try printMissCause(
                     writer,
                     fail_cause,
-                    fail_last_phase,
                     fail_last_depth,
-                    options.ladderDepth(),
+                    options.defaultDepth(),
                 );
                 try writer.writeAll(") fail ");
                 try printDurationCompact(writer, fail_ns);
@@ -2284,18 +2041,17 @@ fn retryMissNote(
     return out.written();
 }
 
-/// ` <cause> d<last>/<max>`: the bound that ended a miss and the ladder depth
-/// it was working at (the user-facing report's "at depth D of N").
+/// ` <cause> d<last>/<max>`: the bound that ended a miss and the depth the
+/// core was working at (the user-facing report's "at depth D of N").
 fn printMissCause(
     writer: anytype,
     cause: MissCause,
-    last_phase: usize,
     last_depth: usize,
     max_depth: usize,
 ) !void {
     try writer.print(" {s}", .{cause.label()});
     if (cause != .no_generation) {
-        try writer.print(" p{d} d{d}/{d}", .{ last_phase, last_depth, max_depth });
+        try writer.print(" d{d}/{d}", .{ last_depth, max_depth });
     }
 }
 

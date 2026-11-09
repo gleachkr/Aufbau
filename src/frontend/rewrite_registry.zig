@@ -1140,8 +1140,7 @@ pub const RewriteRegistry = struct {
     /// enrollment.
     ///
     /// Validation: the rule must be invertible-shaped — every hypothesis
-    /// binder determined by the conclusion (witness class 1 in
-    /// `search/backward/backtrack.zig`). A premise-only witness binder (`rex`-style
+    /// binder determined by the conclusion. A premise-only witness binder (`rex`-style
     /// contraction) would make a depth-free eager step a self-feeding
     /// cascade, so it is an annotation error.
     fn processEager(
@@ -1416,7 +1415,7 @@ pub const RewriteRegistry = struct {
     /// conclusion, so backward it matches every goal — yet it is a
     /// rewrite/congruence tool reached through the relation machinery, never a
     /// hand-applied backward proof step. Backward search therefore screens it
-    /// from candidacy on *all* paths (`backward/backtrack.zig`, `apply.zig`); this is a
+    /// from candidacy on *all* paths (`core/catalog.zig`, `apply.zig`); this is a
     /// deliberately different policy from the `@abstract` screen, which is
     /// generation-only, because a transport is useless backward in every mode.
     ///

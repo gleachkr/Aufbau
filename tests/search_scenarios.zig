@@ -279,16 +279,13 @@ pub const scenarios = [_]Scenario{
         // against a single goal context, collapsing `G=H={p∧q}` by idempotency)
         // from an EMPTY pool under an `imp_intro`. Was an unfound probe until
         // constrained backward MP (256e05d) let the split's minors generate.
-        // Same proof as `nd_and_comm_split` but with no pooled `l1`. The
-        // search core splits the context too and finds another proof first.
+        // Same goal as `nd_and_comm_split` but with no pooled `l1`.
         .name = "zermelo nd_and_comm auto?",
         .mm0_path = "tests/proof_cases/zermelo.mm0",
         .proof_path = "tests/search_bench_cases/nd_and_comm.auf",
         .marker = "auto?",
-        .expected_replacement = "imp_intro [and_intro " ++
-            "(G := $ p ∧ q $, H := $ p ∧ q $) " ++
-            "[and_elim_r [ax []], and_elim_l [ax []]]]",
-        .generate = .{ .enabled = true, .core = false, .ladder = true },
+        .expected_replacement = "imp_intro [and_intro [and_elim_r [ax (G := $ _ $, p := $ p ∧ q $) []], and_elim_l [ax []]]]",
+        .generate = .{ .enabled = true },
     },
     .{
         // Zermelo ND tautology over equality (probe): deep chain with eq rules.
@@ -308,8 +305,7 @@ pub const scenarios = [_]Scenario{
         // a *contraction* split `G=H={p∧q}` (the single member used in both
         // branches). The minors are generated as `and_elim_r [l1]`/`and_elim_l
         // [l1]`; their dropped-conjunct binders are pinned by the pooled `l1`, so
-        // no conclusion-only-binder gap, and no witness binder. Unsolvable without
-        // speculative ACUI context splitting (search/backward/split.zig).
+        // no conclusion-only-binder gap, and no witness binder.
         .name = "zermelo nd_and_comm split auto?",
         .mm0_path = "tests/proof_cases/zermelo.mm0",
         .proof_path = "tests/search_bench_cases/nd_and_comm_split.auf",
@@ -339,7 +335,7 @@ pub const scenarios = [_]Scenario{
     },
     .{
         // Multiplicative `or_elim` (`G,H,K ⊢ r`) with a populated pool (l1/l2/l4
-        // ax lines). Speculative ACUI context splitting (search/backward/split.zig)
+        // ax lines). Splitting the goal context
         // grounds the major `G ⊢ p∨q` from l1, collapses the minor contexts
         // `H`,`K` to `emp`, and *generates* the minors `or_intro_r`/`or_intro_l`.
         // The assembled `or_elim` is validated via the context-holey inline hint
@@ -442,9 +438,8 @@ pub const scenarios = [_]Scenario{
         .mm0_path = "tests/proof_cases/zermelo.mm0",
         .proof_path = "tests/search_bench_cases/nd_union_intro_imp.auf",
         .marker = "auto?",
-        .expected_replacement = "union_intro (y := $ y $) [ax [], ax []]",
-        // The search core proves it too, naming each `ax`'s context.
-        .generate = .{ .enabled = true, .core = false, .ladder = true },
+        .expected_replacement = "union_intro [ax (G := $ y ∈ A $, p := $ x ∈ y $) [], ax (G := $ x ∈ y $, p := $ y ∈ A $) []]",
+        .generate = .{ .enabled = true },
     },
     .{
         // Multiplicative `ex_elim` with a non-trivial complement: the major
@@ -554,78 +549,25 @@ pub const scenarios = [_]Scenario{
     },
     .{
         // martin_lof add_comm capstone: `nat_ind_elim` whose induction motive
-        // is not pinned by the conclusion (higher-order). Besides citing the
-        // motive `l5`, the search also generates it (`Id_form [l3, l4]`),
-        // opening the def's hidden `k` at that premise. The search core
-        // proves it, as `nat_ind_elim [l5, l10, l20, #1]`: the term
-        // `add_comm_p m n` states the motive, which the ladder offers too.
-        .name = "auto martin_lof add_comm capstone auto? (no result)",
+        // is not pinned by the conclusion (higher-order). The term
+        // `add_comm_p m n` states the motive, so the core cites `l5`.
+        .name = "auto martin_lof add_comm capstone auto?",
         .mm0_path = "tests/search_bench_cases/martin_lof_regular.mm0",
         .proof_path = "tests/search_bench_cases/ml_add_comm_capstone_auto.auf",
         .marker = "auto?",
-        .expected_replacement = "",
-        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
-        .expect_result = false,
-        .expected_suggestion_count = 5,
+        .expected_replacement = "nat_ind_elim [l5, l10, l20, #1]",
+        .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
         // martin_lof add_comm with the step case's last nine lines removed
-        // (the depth frontier's k=9 cut). `nat_ind_elim`'s base premise
-        // `g ⊢ z : [k/zero] C` opens the def's hidden `k`, which the
-        // substitution reduces away, so the pool rung names it at once
-        // (the fully-solved check in `open_slot.emitOpenTarget`). A child
-        // search there first,
-        // which never names it, spends the budget the step case needs.
-        // The search core proves it another way (`Id_form` for the motive).
+        // (the depth frontier's k=9 cut). The core states the motive by
+        // `Id_form` and rebuilds the step case through `J_elim`.
         .name = "auto martin_lof add_comm base case auto?",
         .mm0_path = "tests/search_bench_cases/martin_lof_frontier.mm0",
         .proof_path = "tests/search_bench_cases/ml_add_comm_base_case_auto.auf",
         .marker = "auto?",
-        .expected_replacement = "nat_ind_elim [l7, l14, id_trans_ty [l18, l20, suc_intro [l23], " ++
-            "add_ty [l15, l17, l19], l21, id_trans_ty [l18, suc_intro " ++
-            "[l23], weaken [l7, suc_intro [l6]], add_ty [l15, l17, l19], " ++
-            "ap_suc_ty [l15, l23, add_ty [l15, l17, l16], l22], id_sym_ty [l18, " ++
-            "add_ty [l15, l17, l19], weaken [l7, suc_intro [l6]], " ++
-            "add_suc_right [l15, l17, l16]]]], #2]",
-        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
-    },
-    .{
-        // add_comm with only the `g , k : Nat ⊢ …` lines left. The step
-        // premise opens both `k` and `ih`; the first free `@vars` names
-        // (sorted, `ih` before `k`) would swap them, and no line would fit.
-        // The pool rung names them after the lines instead
-        // (`open_slot.assignRefNames`). The search core misses it (martin_lof
-        // is parked), so the ladder runs alone.
-        .name = "auto martin_lof add_comm step names auto?",
-        .mm0_path = "tests/search_bench_cases/martin_lof_frontier.mm0",
-        .proof_path = "tests/search_bench_cases/ml_add_comm_step_names_auto.auf",
-        .marker = "auto?",
-        .expected_replacement = "nat_ind_elim [Id_form [l5, l6], id_trans_ty [l1, add_ty [#1, " ++
-            "zero_intro [#1], #3], #3, add_ty [#1, #3, zero_intro [#1]], " ++
-            "add_zero_left_path [#1, #3], id_sym_ty [l1, add_ty [#1, #3, " ++
-            "zero_intro [#1]], #3, add_zero_right [#1, #3]]], id_trans_ty " ++
-            "[nat_form [ext_ok [l2, Id_form [l5, l6]]], add_ty [ext_ok [l2, " ++
-            "Id_form [l5, l6]], weaken [Id_form [l5, l6], suc_intro [l3]], " ++
-            "weaken [Id_form [l5, l6], l4]], weaken [Id_form [l5, l6], " ++
-            "suc_intro [l5]], add_ty [ext_ok [l2, Id_form [l5, l6]], weaken " ++
-            "[Id_form [l5, l6], l4], weaken [Id_form [l5, l6], suc_intro " ++
-            "[l3]]], add_suc_left_path [ext_ok [l2, Id_form [l5, l6]], " ++
-            "var_wk [l1, Id_form [l5, l6]], weaken [Id_form [l5, l6], l4]], " ++
-            "id_trans_ty [nat_form [ext_ok [l2, Id_form [l5, l6]]], weaken " ++
-            "[Id_form [l5, l6], suc_intro [l5]], weaken [Id_form [l5, l6], " ++
-            "suc_intro [l6]], add_ty [ext_ok [l2, Id_form [l5, l6]], weaken " ++
-            "[Id_form [l5, l6], l4], weaken [Id_form [l5, l6], suc_intro " ++
-            "[l3]]], ap_suc_ty [ext_ok [l2, Id_form [l5, l6]], add_ty " ++
-            "[ext_ok [l2, Id_form [l5, l6]], var_wk [l1, Id_form [l5, l6]], " ++
-            "weaken [Id_form [l5, l6], l4]], add_ty [ext_ok [l2, Id_form " ++
-            "[l5, l6]], weaken [Id_form [l5, l6], l4], var_wk [l1, Id_form " ++
-            "[l5, l6]]], var [Id_form [l5, l6]]], id_sym_ty [nat_form " ++
-            "[ext_ok [l2, Id_form [l5, l6]]], add_ty [ext_ok [l2, Id_form " ++
-            "[l5, l6]], weaken [Id_form [l5, l6], l4], weaken [Id_form [l5, " ++
-            "l6], suc_intro [l3]]], weaken [Id_form [l5, l6], suc_intro " ++
-            "[l6]], weaken [Id_form [l5, l6], add_suc_right [l2, l4, " ++
-            "l3]]]]], #2]",
-        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
+        .expected_replacement = "nat_ind_elim (s := $ id_trans Nat (suc k + n) (suc (k + n)) (n + suc k) (refl Nat (suc k + n)) (id_trans Nat (suc (k + n)) (suc (n + k)) (n + suc k) (ap_suc (k + n) (n + k) ih) (id_sym Nat (n + suc k) (suc (n + k)) (add_suc_right_p n k))) $) [Id_form [add_ty [ext_ok [#1, l1], var [l1], weaken [l1, #3]], add_ty [ext_ok [#1, l1], weaken [l1, #3], var [l1]]], l14, app_elim [J_elim [id_trans_motive (x := $ p $, y := $ q $, z := $ u $) [l18, add_ty [l15, l17, l19]], id_trans_branch (x := $ p $, w := $ v $) [l18, add_ty [l15, l17, l19]], l20, suc_intro [l23], l21], arr_elim [Id_form [suc_intro [add_ty [l15, l17, l16]], add_ty [l15, l17, l19]], J_elim [id_trans_motive (x := $ p $, y := $ q $, z := $ u $) [l18, add_ty [l15, l17, l19]], id_trans_branch (x := $ p $, w := $ v $) [l18, add_ty [l15, l17, l19]], suc_intro [l23], suc_intro [add_ty [l15, l17, l16]], ap_suc_ty [l15, l23, add_ty [l15, l17, l16], l22]], id_sym_ty [l18, add_ty [l15, l17, l19], suc_intro [add_ty [l15, l17, l16]], add_suc_right [l15, l17, l16]], Id_form [suc_intro [l23], add_ty [l15, l17, l19]]], weaken (x := $ w $) [Id_form [suc_intro [l23], add_ty [l15, l17, l19]], Id_form [l20, add_ty [l15, l17, l19]]]], #2]",
+        .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
         // martin_lof add_comm: rebuild the WHOLE tail of the `id_trans` DAG
@@ -642,17 +584,15 @@ pub const scenarios = [_]Scenario{
     },
     .{
         // martin_lof id_sym_ty: `J_elim` (path induction) whose large motive
-        // and eigenvariables are not conclusion-pinned. The search core
-        // proves it, as `J_elim [l5, l6, #1]`, which the ladder offers
-        // too.
-        .name = "auto martin_lof id_sym_ty J_elim auto? (no result)",
+        // and eigenvariables are not conclusion-pinned.
+        .name = "auto martin_lof id_sym_ty J_elim auto?",
         .mm0_path = "tests/search_bench_cases/martin_lof_regular.mm0",
         .proof_path = "tests/search_bench_cases/ml_id_sym_ty_auto.auf",
         .marker = "auto?",
-        .expected_replacement = "",
-        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
+        .expected_replacement = "J_elim [l5, l6, #1]",
+        .generate = .{ .enabled = true, .max_depth = 6 },
         .expect_result = false,
-        .expected_suggestion_count = 4,
+        .expected_suggestion_count = 1,
     },
     .{
         // zermelo cb_bijection functional-from-injections: rebuild the nested
@@ -791,14 +731,13 @@ pub const scenarios = [_]Scenario{
         // `eq_intro_nd` proves `emp ⊢ 0 = 0`, and the match-back reads the
         // witness t := 0 off the child conclusion. The printed witness uses
         // notation (`0` for the term `d0`) via the notation-aware
-        // pretty-printer (a059e67). The ladder's open path, so the search
-        // core is off.
+        // pretty-printer (a059e67).
         .name = "euclid ex_intro open witness auto? (Stage 4 open backward)",
         .mm0_path = "tests/search_bench_cases/euclid.mm0",
         .proof_path = "tests/search_bench_cases/euclid_ex_intro_open_auto.auf",
         .marker = "auto?",
-        .expected_replacement = "ex_intro (t := $ 0 $) [eq_intro_nd []]",
-        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
+        .expected_replacement = "ex_intro [eq_intro_nd (a := $ 0 $) []]",
+        .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
         // PHASE 5 (constrained backward MP) reclassification. Before 256e05d a
@@ -816,7 +755,7 @@ pub const scenarios = [_]Scenario{
         .proof_path = "tests/search_bench_cases/meta_plain_hyp_only.auf",
         .marker = "auto?",
         .expected_replacement = "plain_only_use [pred_K []]",
-        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
+        .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
         // STAGE 4 negative control: an annotated rule whose deferred
@@ -923,10 +862,8 @@ pub const scenarios = [_]Scenario{
         .mm0_path = "tests/search_bench_cases/all_elim_forward.mm0",
         .proof_path = "tests/search_bench_cases/all_elim_forward3.auf",
         .marker = "auto?",
-        .expected_replacement = "all_elim [all_elim (t := $ v $) [all_elim (t := $ u $, p := $ " ++
-            "∀ a ∀ b (pair (pair g c) a = pair a b → c = b) $) [#1]]]",
-        // The search core proves it too, by `all_elim` backward.
-        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
+        .expected_replacement = "all_elim [all_elim (t := $ v $) [all_elim (t := $ u $, p := $ ∀ b ∀ a (pair (pair g c) b = pair b a → c = a) $) [#1]]]",
+        .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
         // STAGE 8 realistic two-layer chain in the full euclid theory: the
@@ -963,9 +900,8 @@ pub const scenarios = [_]Scenario{
         .mm0_path = "tests/search_bench_cases/euclid.mm0",
         .proof_path = "tests/search_bench_cases/euclid_dvd_fact_chain_auto.auf",
         .marker = "auto?",
-        .expected_replacement = "le_iff_add [lt_implies_le_ax [and_elim_l [l1]]]",
-        // The search core proves it too, through `pos_of_one_lt_ax`.
-        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
+        .expected_replacement = "le_iff_add [pos_of_one_lt_ax [and_elim_l [l1]]]",
+        .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
         // STAGES 4+7 composition, Hilbert style (minor premise in the pool):
@@ -1037,15 +973,14 @@ pub const scenarios = [_]Scenario{
         // the hint through the meta wildcard) concludes through its @view, so
         // this pins the recover-surface match-back (the raw `[x/K]p` line
         // expr would conflict structurally); the pinned minor is generated
-        // from `P_K_nd []`. The search core, which proves it first through the
-        // earlier `nd_fwd_bwd_minor_in_pool`, is off here.
+        // from `P_K_nd []`. The search core cites the earlier
+        // `nd_fwd_bwd_minor_in_pool` instead.
         .name = "fwd/bwd compose nd open-minor auto? (Stage 4+7)",
         .mm0_path = "tests/search_bench_cases/nd_forward_backward.mm0",
         .proof_path = "tests/search_bench_cases/nd_fwd_bwd_minor_generated.auf",
         .marker = "auto?",
-        .expected_replacement = "imp_elim (a := $ P K $) " ++
-            "[all_elim [#1], P_K_nd []]",
-        .generate = .{ .enabled = true, .max_depth = 6, .core = false, .ladder = true },
+        .expected_replacement = "nd_fwd_bwd_minor_in_pool [#1, P_K_nd []]",
+        .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
         // STAGE 8 saturation-loop stress (bounded, no result). `step` and

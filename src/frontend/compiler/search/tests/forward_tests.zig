@@ -1,12 +1,10 @@
 const helpers = @import("./helpers.zig");
 const std = helpers.std;
 const types = helpers.types;
-const Witness = helpers.Witness;
 const MetaStore = helpers.MetaStore;
 const ExprId = helpers.ExprId;
 const TheoremContext = helpers.TheoremContext;
 const Goal = helpers.Goal;
-const exact = helpers.exact;
 const fixtureFor = helpers.fixtureFor;
 const ContextHarness = helpers.ContextHarness;
 const tunables = helpers.tunables;
@@ -178,7 +176,7 @@ test "forward join grounds a nested family meta into a concrete fact" {
 // A family fills a backward rule premise whose binders the goal pins. `mp`
 // (not forward) on the goal `pf (Q c)` pins `b := Q c` and leaves `a` open,
 // so its major `pf (imp a (Q c))` takes the family `pf (imp (P ?x) (Q ?x))`
-// only by unifying the pinned `Q c` with `Q ?x` (`backtrack.solvePinnedMetas`),
+// only by unifying the pinned `Q c` with `Q ?x`,
 // which gives `a := P c`. No fact states the minor `pf (box (P c))`: backward
 // search proves it from `R c`, so no forward join reaches the goal.
 const fwd_pinned_mm0 =
@@ -209,15 +207,12 @@ test "forward family fills a backward premise by unifying its pinned binders" {
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    // Phase 5's constrained modus ponens reaches the same proof by opening `a`
-    // and running `genimp` backward; with its fuel at zero only the pinned
-    // fill can.
     var suggestions = try suggestionsAtNeedle(
         &arena,
         fwd_pinned_mm0,
         proof_src,
         "auto?",
-        .{ .generate = .{ .enabled = true, .phase5_fuel = 0 } },
+        .{ .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
 
@@ -398,7 +393,7 @@ const fwd_universal_mm0 =
     \\  $ ∀ x (pair f x = pair x f) $ > $ pair f u = pair v f $;
 ;
 
-test "derived ref with universal meta matches a later concrete goal" {
+test "auto instantiates a universal hypothesis at a concrete goal" {
     const proof_src =
         \\fwd_match
         \\---------
@@ -412,21 +407,17 @@ test "derived ref with universal meta matches a later concrete goal" {
         fwd_universal_mm0,
         proof_src,
         "auto?",
-        // The ladder alone: the search core proves it first, by `all_elim` backward.
-        .{ .counters = &counters, .generate = .{ .enabled = true, .core = false, .ladder = true } },
+        .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
 
-    // The goal-direct derived use and the plain backward route (supported
-    // boundary) both print as `all_elim [#1]`: the checker reads the solved
-    // universal meta (`t := u`) and the premise binders off the goal.
+    // The derived use and the plain backward route both print as
+    // `all_elim [#1]`: the checker reads the solved universal meta
+    // (`t := u`) and the premise binders off the goal.
     try expectOffered(suggestions.items, &.{"all_elim [#1]"});
+    // Forward saturation derived the one universal-meta ref.
     try std.testing.expectEqual(@as(usize, 1), counters.derived_ref_count);
     try std.testing.expectEqual(@as(usize, 1), counters.universal_metas_created);
-    // The repeated meta occurrence (`pair f ?t` / `pair ?t f`) was assigned
-    // once and checked consistent at the second position.
-    try std.testing.expect(counters.meta_assignments > 0);
-    try std.testing.expect(counters.meta_rollbacks > 0);
 }
 
 test "inconsistent repeated universal meta occurrence rejects the use" {
@@ -603,6 +594,13 @@ test "same derived ref is selected twice at two different witnesses" {
     try std.testing.expectEqual(@as(usize, 2), counters.derived_ref_count);
 }
 
+// ============================================================
+// Multi-premise and multi-layer forward saturation.
+// Layered semi-naive firing over pool + derived
+// sources, configurable bounds, recipe/shape dedupe, nested
+// recipe materialization.
+// ============================================================
+
 // The flagship theory with an `@vars` pool for `obj`, and a theorem whose
 // `obj` variables are all regular: no bound theorem variable can stand in
 // for `mono`'s hidden `.a .b`, so only the pool can name them.
@@ -615,7 +613,7 @@ const fwd_pool_mm0 = blk: {
         "  $ mono f $ > $ (pair f u = pair f v) → (u = v) $;\n";
 };
 
-test "derived recipe through a binder def names its hidden variables from the @vars pool" {
+test "auto names a binder def's hidden variables from the @vars pool" {
     const proof_src =
         \\fwd_pool
         \\--------
@@ -628,78 +626,16 @@ test "derived recipe through a binder def names its hidden variables from the @v
         fwd_pool_mm0,
         proof_src,
         "auto?",
-        // The ladder alone: the search core proves it first, by `all_elim` backward.
-        .{ .generate = .{ .enabled = true, .core = false, .ladder = true } },
+        .{ .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
 
-    // The search pre-materializes the pool tokens as proof dummies. Unused
-    // ones name the unfolded dummies, in both recipe layers.
+    // Unused pool tokens name the unfolded dummies, in both recipe layers.
     try expectOffered(suggestions.items, &.{
         "all_elim (p := $ pair f u = pair f a → u = a $) " ++
             "[all_elim (t := $ u $, p := $ ∀ a (pair f b = pair f a → b = a) $) [#1]]",
     });
 }
-
-// A derived fact fills `all_elim2`'s `∀ x p` premise beside `A`, which holds
-// the pool dummy `a` from a line the goal does not mention. Naming the
-// fact's hidden variable must skip `a`: with `x := a` beside `A := a`, `A`
-// would depend on the bound `x` and the checker would reject the candidate.
-const fwd_sibling_mm0 = blk: {
-    @setEvalBranchQuota(100_000);
-    const sort_decl = "sort obj;\n";
-    const at = std.mem.indexOf(u8, fwd_twice_mm0, sort_decl).?;
-    const theorems = std.mem.indexOf(u8, fwd_twice_mm0, "theorem fwd_twice").?;
-    break :blk fwd_twice_mm0[0..at] ++ "--| @vars a b c\n" ++
-        fwd_twice_mm0[at..theorems] ++
-        \\term Q (x: obj): wff;
-        \\axiom q_any (x: obj): $ Q x $;
-        \\--| @view {x: obj} (A: obj) (t: obj x) (p: wff x) (q: wff): $ Q A $ > $ ∀ x p $ > $ q $
-        \\--| @recover t q p x
-        \\axiom all_elim2 {x: obj} (A: obj) (t: obj x) (p: wff x):
-        \\  $ Q A $ > $ ∀ x p $ > $ [x/t] p $;
-        \\theorem fwd_sibling (f u v: obj):
-        \\  $ mono f $ > $ (pair f u = pair f v) → (u = v) $;
-        \\
-    ;
-};
-
-test "derived recipe names a hidden variable apart from a sibling binding" {
-    const proof_src =
-        \\fwd_sibling
-        \\-----------
-        \\l1: $ Q a $ by q_any (x := $ a $) []
-        \\l2: $ (pair f u = pair f v) → (u = v) $ by auto?
-    ;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var counters = types.SearchCounters{ .collect = true };
-    var suggestions = try suggestionsAtNeedle(
-        &arena,
-        fwd_sibling_mm0,
-        proof_src,
-        "auto?",
-        // The ladder alone: the search core proves it first, by `all_elim` backward.
-        .{ .counters = &counters, .generate = .{ .enabled = true, .core = false, .ladder = true } },
-    );
-    defer suggestions.deinit();
-    try std.testing.expectEqual(types.SearchStatus.found, suggestions.status);
-    const attempts = counters.rule_attempt_diagnostics[0..counters.rule_attempt_diagnostics_len];
-    for (attempts) |attempt| {
-        if (!std.mem.eql(u8, attempt.rule_name.slice(), "all_elim2")) continue;
-        try std.testing.expectEqual(@as(usize, 0), attempt.rejected);
-        try std.testing.expect(attempt.accepted != 0);
-        return;
-    }
-    return error.AllElim2NotTried;
-}
-
-// ============================================================
-// Multi-premise and multi-layer forward saturation.
-// Layered semi-naive firing over pool + derived
-// sources, configurable bounds, recipe/shape dedupe, nested
-// recipe materialization.
-// ============================================================
 
 // Two-step chain: layer 1 fires `pq` on `P K` (deriving `Q K`), layer 2
 // fires `qr` on the derived `Q K` (deriving `R K` whose recipe nests the
@@ -1245,109 +1181,6 @@ test "theories without trigger annotations mint no seeds on a miss" {
     try std.testing.expectEqual(@as(usize, 0), counters.trigger_seed_count);
 }
 
-test "verdict memo counts distinct rejects once" {
-    var memo = types.VerdictMemo{ .allocator = std.testing.allocator };
-    defer memo.deinit();
-
-    memo.recordReject(11);
-    memo.recordReject(22);
-    memo.recordReject(11);
-    try std.testing.expect(memo.rejectedBefore(11));
-    try std.testing.expect(memo.rejectedBefore(22));
-    try std.testing.expect(!memo.rejectedBefore(33));
-    try std.testing.expectEqual(@as(usize, 3), memo.reject_total);
-    try std.testing.expectEqual(@as(usize, 2), memo.reject_distinct);
-    try std.testing.expectEqual(memo.seen.count(), memo.reject_distinct);
-}
-
-fn contentHashOf(theorem: *const TheoremContext, id: ExprId) u64 {
-    var h = std.hash.Wyhash.init(0);
-    types.hashCanonicalContent(theorem, id, &h);
-    return h.final();
-}
-
-test "canonical content hash is stable across an interner-scope discard" {
-    // The invariant that lets the concrete/verdict/deep memos skip scope-exit
-    // eviction entirely: keys hash canonical CONTENT, so a `hookSolveOpen`
-    // scope discard — which re-mints the same raw ExprIds with different
-    // content — can never alias a surviving entry.
-    var base = TheoremContext.init(std.testing.allocator);
-    defer base.deinit();
-    const d0 = try base.addDummyVarResolved("wff", 0);
-
-    // Scope 1: a COW clone interns `f(d0)` (term_id 7).
-    var scope1 = try base.clone();
-    const a1 = try scope1.interner.internApp(7, &.{d0});
-    const hash_f = contentHashOf(&scope1, a1);
-    scope1.deinit();
-
-    // Scope 2: same base, so the discarded id is re-minted — this time for
-    // `g(d0)` (term_id 8). Same raw ExprId, different content: the raw id is
-    // ABA-ambiguous, the content hash is not.
-    var scope2 = try base.clone();
-    defer scope2.deinit();
-    const b2 = try scope2.interner.internApp(8, &.{d0});
-    try std.testing.expectEqual(a1, b2);
-    try std.testing.expect(contentHashOf(&scope2, b2) != hash_f);
-
-    // Re-interning the SAME content in the new scope reproduces the hash.
-    const a2 = try scope2.interner.internApp(7, &.{d0});
-    try std.testing.expectEqual(hash_f, contentHashOf(&scope2, a2));
-}
-
-test "canonical content hash keys dummies by index and sort" {
-    // Dummy leaves hash (index, sort), the pair that fully determines a
-    // dummy's semantics — so a same-index same-sort re-mint after a scope
-    // discard deliberately collides (it is interchangeable), while a
-    // different-sort re-mint at the same index does not.
-    var base = TheoremContext.init(std.testing.allocator);
-    defer base.deinit();
-
-    var scope1 = try base.clone();
-    const d_wff = try scope1.addDummyVarResolved("wff", 0);
-    const app1 = try scope1.interner.internApp(7, &.{d_wff});
-    const hash_wff = contentHashOf(&scope1, app1);
-    scope1.deinit();
-
-    var scope2 = try base.clone();
-    defer scope2.deinit();
-    const d_nat = try scope2.addDummyVarResolved("nat", 1);
-    const app2 = try scope2.interner.internApp(7, &.{d_nat});
-    try std.testing.expectEqual(app1, app2);
-    try std.testing.expect(contentHashOf(&scope2, app2) != hash_wff);
-
-    var scope3 = try base.clone();
-    defer scope3.deinit();
-    const d_wff_again = try scope3.addDummyVarResolved("wff", 0);
-    const app3 = try scope3.interner.internApp(7, &.{d_wff_again});
-    try std.testing.expectEqual(hash_wff, contentHashOf(&scope3, app3));
-}
-
-test "complement shapes derive from ax's repeated-binder template pair" {
-    // tait's `ax (d: ctx) (a: wff): ⊢ a , (¬ a) , d` repeats binder `a`
-    // (arg index 1) across two region members — coercion-wrapped as
-    // `hyp(a)` / `hyp(¬ a)`, so neither member is a bare binder. It must be
-    // the fixture's ONLY complement shape: the ctx_eq axioms repeat `g`
-    // only as identical bare members (excluded), and every other repeated
-    // binder sits outside an ACUI carrier region.
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-    const mm0 = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/tait.mm0", allocator, .unlimited);
-    var fixture = try fixtureFor(allocator, mm0, "ex_all_to_all_ex");
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-
-    var shapes: [Witness.max_complement_shapes]Witness.ComplementShape = undefined;
-    const count = Witness.collectComplementShapes(&context, &shapes);
-    try std.testing.expectEqual(@as(usize, 1), count);
-    try std.testing.expectEqual(@as(usize, 1), shapes[0].hole);
-    // Both members are compound (coercion-wrapped), not bare binders.
-    try std.testing.expect(shapes[0].first == .app);
-    try std.testing.expect(shapes[0].second == .app);
-}
-
 test "auto co-solves a complementary two-meta ax leaf through the rule template" {
     // Regenerating `⊢ (∃ x ¬ R x y) , (∃ w R z w)` from the bare goal takes
     // two nested `rex` slots whose witnesses only the `ax` leaf forces: the
@@ -1386,311 +1219,5 @@ test "auto co-solves a complementary two-meta ax leaf through the rule template"
     try std.testing.expect(found);
 }
 
-test "anchor shapes derive from ax's member-to-succedent binder repeat" {
-    // nd_fol's `ax (g: ctx) (a: wff): g , a ⊢ a` repeats binder `a` (arg
-    // index 1) as the context member `hyp(a)` and as `nd`'s bare second
-    // argument, outside every region. It must be the fixture's ONLY anchor
-    // shape: the relation axioms repeat binders either inside ctx regions
-    // (no outside site) or only outside them (no member).
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-    const mm0 = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/nd_fol.mm0", allocator, .unlimited);
-    var fixture = try fixtureFor(allocator, mm0, "ex_all_to_all_ex");
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-
-    var shapes: [Witness.max_anchor_shapes]Witness.AnchorShape = undefined;
-    const count = Witness.collectAnchorShapes(&context, &shapes);
-    try std.testing.expectEqual(@as(usize, 1), count);
-    try std.testing.expectEqual(@as(usize, 1), shapes[0].hole);
-    try std.testing.expect(shapes[0].member == .app);
-    try std.testing.expectEqual(@as(u8, 1), shapes[0].path_len);
-    try std.testing.expectEqual(@as(u8, 1), shapes[0].path[0]);
-}
-
-test "auto co-solves a context-member/succedent two-meta ax leaf" {
-    // `∀ x R x y ⊢ ∃ w R z w` needs `all_left` (context instance `R ?t y`)
-    // and `ex_intro` (goal `R z ?w`) whose witnesses only the `ax` leaf
-    // forces: `?t := z`, `?w := y`. The pair spans the context member and the
-    // succedent, so the region sweeps never see it — the anchored pass does.
-    // Without it the analytic proof is unreachable (the search only found a
-    // costly route through the non-enrolled `all_elim`). The fixture's
-    // `@auto trigger` on `ax` is stripped here: its seed `∀ x R x y ⊢ ∀ x R x y`
-    // feeds `all_elim` directly, a shorter proof the search would find first
-    // and never reach the anchored pass. The anchored pass is the generation
-    // search's, so the search core, which finds the `all_elim` route
-    // itself, is off.
-    const proof_src =
-        \\ex_all_to_all_ex
-        \\----------------
-        \\l1: $ ∀ x R x y ⊢ ∃ w R z w $ by auto?
-    ;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-    const fixture_mm0 = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/nd_fol.mm0", allocator, .unlimited);
-    const trigger_line = "--| @auto trigger (hyp a)\n";
-    try std.testing.expect(std.mem.indexOf(u8, fixture_mm0, trigger_line) != null);
-    const mm0 = try std.mem.replaceOwned(u8, allocator, fixture_mm0, trigger_line, "");
-    var suggestions = try suggestionsAtNeedle(
-        &arena,
-        mm0,
-        proof_src,
-        "auto?",
-        .{ .generate = .{ .enabled = true, .core = false, .ladder = true } },
-    );
-    defer suggestions.deinit();
-
-    try std.testing.expect(suggestions.items.len > 0);
-    var found = false;
-    for (suggestions.items) |item| {
-        if (std.mem.indexOf(u8, item.replacement, "all_left") != null and
-            std.mem.indexOf(u8, item.replacement, "ex_intro") != null)
-        {
-            found = true;
-        }
-    }
-    try std.testing.expect(found);
-}
-
-test "member witness match rejects values captured under a member binder" {
-    // A meta-bearing fragment may ground its witness off any *free* subterm
-    // of a domain member, but not off a subterm under the member's own
-    // intact binder: that value escapes its scope (the materialized target
-    // would mention the variable free while the sibling member still binds
-    // it), so the fill can never validate — before the capture check each
-    // one launched a full doomed child search (the forall_mono node flood).
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\sort ctx;
-        \\sort obj;
-        \\term not (a: wff): wff;
-        \\term ex {x: obj} (p: wff x): wff;
-        \\term Q (a: obj): wff;
-        \\term hyp (a: wff): ctx;
-        \\term T: wff;
-        \\theorem t: $ T $;
-    ;
-    var fixture = try fixtureFor(allocator, mm0_src, "t");
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    try theorem.seedAssertion(fixture.assertion);
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-
-    const not_id = fixture.theory.env.term_names.get("not").?;
-    const ex_id = fixture.theory.env.term_names.get("ex").?;
-    const q_id = fixture.theory.env.term_names.get("Q").?;
-    const hyp_id = fixture.theory.env.term_names.get("hyp").?;
-
-    var store = MetaStore.init(allocator, &fixture.theory.env);
-    defer store.deinit();
-    const meta = try store.mint(&theorem, "obj", std.math.maxInt(u55), .existential);
-    const fragment = try theorem.interner.internApp(q_id, &.{meta});
-
-    // Captured anchor: hyp(∃ x ¬(Q x)) — the only Q-node sits under the
-    // member's own binder, so ?w := x must be refused outright (the old
-    // descent read it off and returned true).
-    const x = try theorem.interner.internVar(.{ .theorem_var = 0 });
-    const captured = try theorem.interner.internApp(hyp_id, &.{
-        try theorem.interner.internApp(ex_id, &.{
-            x,
-            try theorem.interner.internApp(not_id, &.{
-                try theorem.interner.internApp(q_id, &.{x}),
-            }),
-        }),
-    });
-    const mark = store.mark();
-    try std.testing.expect(!Witness.matchFragmentToMember(
-        &context,
-        &store,
-        &theorem,
-        fragment,
-        captured,
-    ));
-    store.rollbackTo(mark);
-
-    // Free anchor: hyp(Q z) with z free in the member still forces ?w := z
-    // (the ordinary member-force, e.g. off a rall eigenvariable).
-    const z = try theorem.interner.internVar(.{ .theorem_var = 1 });
-    const free_anchor = try theorem.interner.internApp(hyp_id, &.{
-        try theorem.interner.internApp(q_id, &.{z}),
-    });
-    try std.testing.expect(Witness.matchFragmentToMember(
-        &context,
-        &store,
-        &theorem,
-        fragment,
-        free_anchor,
-    ));
-    try std.testing.expectEqual(z, try store.materialize(&theorem, meta));
-    store.rollbackTo(mark);
-}
-
 // ---------------------------------------------------------------------------
 // Per-call tunables + failure detail (search/tunables.zig, buildStatusDetail)
-
-test "solveCorrespondenceUnfolding reads back through a def and mints only on success" {
-    // `allin s a` unfolds to `∀ y (y ∈ s → a ∈ y)`, `y` hidden. A child proof
-    // of `allin s a` reads back onto the open `∀ ?x ?p` only through that
-    // unfolding. Minting the hidden `y` spends a dependency slot of the
-    // theorem, so a failed match must mint nothing.
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\sort set;
-        \\term im (a b: wff): wff;
-        \\term mem (a b: set): wff;
-        \\term eq (a b: set): wff;
-        \\term all {x: set} (p: wff x): wff;
-        \\term suc (a: set): set;
-        \\def allin (s a: set) (.y: set): wff = $ all y (im (mem y s) (mem a y)) $;
-        \\def allin2 (s a: set): wff = $ allin s a $;
-        \\def both (.y .z: set): wff = $ all y (all z (mem y z)) $;
-        \\def twice (s: set) (.y: set): wff = $ all y (im (mem y s) (mem y s)) $;
-        \\def once (s a: set) (.y: set): wff = $ all y (im (mem y s) (mem (suc a) s)) $;
-        \\theorem t (s: set) {a b: set}: $ allin s a $;
-    ;
-    var fixture = try fixtureFor(allocator, mm0_src, "t");
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    try theorem.seedAssertion(fixture.assertion);
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-
-    const term = struct {
-        fn id(f: anytype, name: []const u8) u32 {
-            return f.theory.env.term_names.get(name).?;
-        }
-    };
-    const s = theorem.theorem_vars.items[0];
-    const a = theorem.theorem_vars.items[1];
-    const b = theorem.theorem_vars.items[2];
-    const app = struct {
-        fn of(th: *TheoremContext, head: u32, args: []const ExprId) !ExprId {
-            return th.interner.internApp(head, args);
-        }
-    }.of;
-    const all_id = term.id(&fixture, "all");
-    const im_id = term.id(&fixture, "im");
-    const mem_id = term.id(&fixture, "mem");
-    const allin_sa = try app(&theorem, term.id(&fixture, "allin"), &.{ s, a });
-    const body = struct {
-        fn over(th: *TheoremContext, ids: [3]u32, sv: ExprId, av: ExprId, y: ExprId) !ExprId {
-            return app(th, ids[1], &.{ try app(th, ids[2], &.{ y, sv }), try app(th, ids[2], &.{ av, y }) });
-        }
-    }.over;
-    const ids = [3]u32{ all_id, im_id, mem_id };
-
-    var store = MetaStore.init(allocator, &fixture.theory.env);
-    defer store.deinit();
-    const x = try store.mint(&theorem, "set", std.math.maxInt(u55), .existential);
-    const p = try store.mint(&theorem, "wff", std.math.maxInt(u55), .existential);
-    const target = try app(&theorem, all_id, &.{ x, p });
-    const before = theorem.next_placeholder_dep;
-
-    const Case = struct { source: ExprId, pattern: ExprId };
-    // Fails without minting: a mismatch inside the body (`?x ∈ a`, not
-    // `?x ∈ s`); the hidden `y` met by `a`, which the def's argument
-    // mentions (`∀ a (a ∈ s → a ∈ a)` captures it); and the two hidden
-    // variables of `both` met by the one `b`.
-    const q = try store.mint(&theorem, "wff", std.math.maxInt(u55), .existential);
-    const failing = [_]Case{
-        .{ .source = allin_sa, .pattern = try app(&theorem, all_id, &.{
-            x,
-            try app(&theorem, im_id, &.{ try app(&theorem, mem_id, &.{ x, a }), q }),
-        }) },
-        .{ .source = allin_sa, .pattern = try app(&theorem, all_id, &.{ a, p }) },
-        .{ .source = try app(&theorem, term.id(&fixture, "both"), &.{}), .pattern = try app(&theorem, all_id, &.{
-            b,
-            try app(&theorem, all_id, &.{ b, q }),
-        }) },
-    };
-    for (failing) |case| {
-        const mark = store.mark();
-        try std.testing.expect(!try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, case.source, case.pattern, true));
-        store.rollbackTo(mark);
-    }
-    try std.testing.expectEqual(before, theorem.next_placeholder_dep);
-
-    // A hidden variable met by a variable the arguments do not mention
-    // takes it; nothing minted.
-    var mark = store.mark();
-    try std.testing.expect(try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, allin_sa, try app(&theorem, all_id, &.{ b, p }), true));
-    try std.testing.expectEqual(before, theorem.next_placeholder_dep);
-    try std.testing.expectEqual(try body(&theorem, ids, s, a, b), try store.materialize(&theorem, p));
-    store.rollbackTo(mark);
-
-    // A probe of `∀ ?x ?p` succeeds without minting, `?x` left open.
-    mark = store.mark();
-    try std.testing.expect(try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, allin_sa, target, false));
-    try std.testing.expectEqual(before, theorem.next_placeholder_dep);
-    try std.testing.expect(!store.isFullySolved(&theorem, x));
-    store.rollbackTo(mark);
-
-    // Against `∀ ?x ?p`, the hidden `y` is minted once, `?x` names it, and
-    // `?p` is the body over it.
-    try std.testing.expect(try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, allin_sa, target, true));
-    try std.testing.expectEqual(before + 1, theorem.next_placeholder_dep);
-    const y = try store.materialize(&theorem, x);
-    try std.testing.expect(theorem.interner.node(y).* == .placeholder);
-    try std.testing.expectEqual(try body(&theorem, ids, s, a, y), try store.materialize(&theorem, p));
-
-    // The pattern's def unfolds too, its hidden variable matched against
-    // the source's own bound variable (`b`), so nothing is minted; and its
-    // body names another def (`allin2` is `allin`), which unfolds in turn.
-    // Against `∀ a (a ∈ s → a ∈ a)` the same fold would capture `a`.
-    const unfolded = try app(&theorem, all_id, &.{ b, try body(&theorem, ids, s, a, b) });
-    const captured = try app(&theorem, all_id, &.{ a, try body(&theorem, ids, s, a, a) });
-    const m = try store.mint(&theorem, "set", std.math.maxInt(u55), .existential);
-    const minted = theorem.next_placeholder_dep;
-    for ([_][]const u8{ "allin", "allin2" }) |name| {
-        const folded = try app(&theorem, term.id(&fixture, name), &.{ s, m });
-        mark = store.mark();
-        try std.testing.expect(try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, unfolded, folded, true));
-        try std.testing.expectEqual(a, try store.materialize(&theorem, m));
-        store.rollbackTo(mark);
-        try std.testing.expect(!try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, captured, folded, true));
-        store.rollbackTo(mark);
-        try std.testing.expectEqual(minted, theorem.next_placeholder_dep);
-    }
-
-    // A different head that is not a def does not unfold.
-    const eq_sa = try app(&theorem, term.id(&fixture, "eq"), &.{ s, a });
-    const r = try store.mint(&theorem, "wff", std.math.maxInt(u55), .existential);
-    try std.testing.expect(!try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, eq_sa, try app(&theorem, all_id, &.{ a, r }), true));
-
-    // A meta met twice, first by a subtree over the hidden variable: the
-    // second meeting is checked against the first. `twice s` against
-    // `∀ ?u (?v → ?v)` agrees, and mints the one hidden variable; `once s a`
-    // would need the hidden variable to stand for `suc a`.
-    const u = try store.mint(&theorem, "set", std.math.maxInt(u55), .existential);
-    const v = try store.mint(&theorem, "wff", std.math.maxInt(u55), .existential);
-    const imp_vv = try app(&theorem, all_id, &.{ u, try app(&theorem, im_id, &.{ v, v }) });
-    const minted_before_twice = theorem.next_placeholder_dep;
-    mark = store.mark();
-    try std.testing.expect(!try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, try app(&theorem, term.id(&fixture, "once"), &.{ s, a }), imp_vv, false));
-    store.rollbackTo(mark);
-    try std.testing.expect(try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, try app(&theorem, term.id(&fixture, "twice"), &.{s}), imp_vv, true));
-    try std.testing.expectEqual(minted_before_twice + 1, theorem.next_placeholder_dep);
-    const w = try store.materialize(&theorem, u);
-    try std.testing.expectEqual(try app(&theorem, mem_id, &.{ w, s }), try store.materialize(&theorem, v));
-    store.rollbackTo(mark);
-
-    // A hidden variable may not stand for a placeholder a def argument
-    // mentions, any more than for a variable: `allin s P` against `∀ P ?p`.
-    const placeholder = try theorem.addPlaceholderResolved("set");
-    const t_meta = try store.mint(&theorem, "wff", std.math.maxInt(u55), .existential);
-    try std.testing.expect(!try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, try app(&theorem, term.id(&fixture, "allin"), &.{ s, placeholder }), try app(&theorem, all_id, &.{ placeholder, t_meta }), false));
-}

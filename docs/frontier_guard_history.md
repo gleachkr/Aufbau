@@ -15,7 +15,7 @@ the default md=6 because it is a balanced tree of height 6, while `all_swap`
 (8 lines) needed md=7 because it is a linear chain of height 7.
 
 `drinker` flooded at md≥8 (its usable window was md∈[5,7]). The depth-major
-phase ladder (`generate.zig` `runPhaseLadder`, 2026-07-05) fixed that; with
+phase ladder (generate.zig (since deleted) `runPhaseLadder`, 2026-07-05) fixed that; with
 `forall_mono`'s node floor removed by the member-side capture check, the
 fixture was 20/20 FULL at every md≥8 with no overrides.
 
@@ -43,13 +43,13 @@ fixture was 20/20 FULL at every md≥8 with no overrides.
   full validation per chain node). Closed by the internal-child enumeration
   cutoff (`ExactOptions.internal_open_child`) plus the witness-class
   candidate order (`witnessClass` in
-  `src/frontend/compiler/search/backward/backtrack.zig`): FULL 7/7 at the
+  src/frontend/compiler/search/backward/backtrack.zig (since deleted)): FULL 7/7 at the
   default budget and nodes (worst row 1.68G, was 9.5G plus n=4096 floors).
 - **ex_all_to_all_ex**, formerly the hardest of the set (its single `ax`
   leaf must co-solve two open rex witnesses in one complementary pair, with
   no rigid anchor), was closed by the complementary coupled sweep
   (`collectComplementShapes` / `unifyMembersThroughShape` in
-  `src/frontend/compiler/search/backward/witness.zig`).
+  src/frontend/compiler/search/backward/witness.zig (since deleted)).
 
 ### `@auto eager` (2026-07-05)
 
@@ -63,7 +63,7 @@ net.
 The nested-inline binder-extraction residual (task #93) closed at the same
 time: accepted `@auto eager` candidates inside internal generation child
 solves carry their resolved bindings rendered on the spliced application
-(`internal_child` in `src/frontend/compiler/search/backward/validate.zig`),
+(`internal_child` in src/frontend/compiler/search/backward/validate.zig (since deleted)),
 so the parent re-check never re-infers them from an ACUI-reassociated hint. The old resolution churn
 (k≥6 rows at ~3.4G ticks, over the 3.35G default cap) collapsed to ~58M;
 the worst theorem became ~0.31G (exists_mono).
@@ -74,7 +74,7 @@ the worst theorem became ~0.31G (exists_mono).
 
 `cb_bijection_maps_domain` went 6/8 → FULL when `auto?` started harvesting
 `@auto trigger` seeds again at a sub-goal that names a variable free which
-the root goal does not (task #512 piece 1; `generate.zig` `Reseed`). Its
+the root goal does not (task #512 piece 1; generate.zig (since deleted) `Reseed`). Its
 k=7 cut is an `or_elim` over a derived disjunction whose branch member
 `cb_g_branch A B f g x y` is no subterm of the goal, so the root harvest
 cannot seed the `ax` instance the branch's `and_elim_r` minor needs; the
@@ -168,3 +168,6 @@ generation search's principal-retention phase tried that. The search core
 lets a member the match has fixed take one an earlier part took, which is
 what `tag_member`'s `D , p` needs, but it does not widen an unbound rest
 binder that way.
+
+When the generation search was deleted (2026-11-08), every guard stayed as it
+was and passed on the search core alone.

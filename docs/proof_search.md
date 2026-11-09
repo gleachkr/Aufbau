@@ -518,14 +518,12 @@ are printed, but the searches still run.
   the last round is left as written.
 - `-v` adds what each search cost: its work ticks, which repeat from run
   to run, the number of candidates validated, the wall time, and the
-  depth and phase the search ended in, which for a find are the ones
-  that found the proof. With `--retry`, each round's
-  cost is listed, followed by the retry it led to. `-vv` also prints why
-  the search missed and the rules it tried most.
+  depth the search ended at, which for a find is the one that found the
+  proof. With `--retry`, each round's cost is listed, followed by the
+  retry it led to. `-vv` also prints why the search missed.
 - `--json` prints each record as one line of JSON with every field,
   whatever the verbosity: the proofs or candidates, hole values, retry,
-  failure detail, cost, rules tried, and the earlier rounds of a retried
-  search.
+  failure detail, cost, and the earlier rounds of a retried search.
 
 ## The `@auto` rule annotations
 

@@ -454,8 +454,7 @@ fn scanAcuiSpine(
 /// minors, or non-ACUI proofs like church beta) and off any hint the strict
 /// pre-pass already produced. No speculative ACUI context
 /// splitting happens here: the open context becomes a wildcard placeholder, not
-/// an enumeration of candidate members (that lives only in search-side
-/// `backward/split.zig`).
+/// an enumeration of candidate members.
 ///
 /// After the probe and the `@view` pass, a hint still missing on a concrete
 /// goal comes from the goal alone, each binder it leaves open a line hole:

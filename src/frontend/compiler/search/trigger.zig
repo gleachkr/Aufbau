@@ -1,5 +1,5 @@
 //! `@auto trigger` seed harvesting for `auto?`: the seeds join the derived
-//! pool before the search ladder runs.
+//! pool before the search runs.
 //!
 //! Each trigger annotation is a pattern e-matched (structurally) against the
 //! subterms of the original goal. Every match grounds the annotated rule's
@@ -13,11 +13,8 @@
 //! analytic leaf set the backward search cannot otherwise invent (the
 //! elimination-major "left rule" gap).
 //!
-//! Bounded and forced: one pass over the original goal, plus one over each
-//! generated sub-goal that names a variable free which the goal does not
-//! (an eigenvariable the search minted; `generate.zig`'s `Reseed`), keeping
-//! only the seeds naming such a variable — O(goal size × patterns) matches
-//! per pass, ground instances only. Soundness rides on the ordinary
+//! Bounded and forced: one pass over the original goal — O(goal size ×
+//! patterns) matches, ground instances only. Soundness rides on the ordinary
 //! discipline — a seed is a search
 //! hint whose materialized application (`by ax`, binders inferred from the
 //! slot) is re-checked by `tryCandidate` at the point of use; a useless seed
@@ -27,7 +24,7 @@ const std = @import("std");
 const ArenaAllocator = @import("../../arena_allocator.zig").ArenaAllocator;
 const types = @import("./types.zig");
 const refs_mod = @import("./refs.zig");
-const acui = @import("./backward/acui.zig");
+const acui = @import("./acui.zig");
 const ExprId = @import("../../expr.zig").ExprId;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
 const MetaStore = @import("./meta_store.zig").MetaStore;

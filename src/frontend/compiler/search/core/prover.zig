@@ -2338,7 +2338,7 @@ pub const Prover = struct {
 
     /// The variables that may name a wvar of `sort_name` left unbound: its
     /// `@vars` pool in pool order, then the theorem's own bound variables of
-    /// the sort by name (the ladder's `forward.Namer` takes them too).
+    /// the sort by name (`forward.Namer` takes them too).
     pub fn pool(self: *Prover, sort_name: []const u8) Error![]const ExprId {
         if (self.pools.get(sort_name)) |known| return known;
         var vars = try PoolVars.init(

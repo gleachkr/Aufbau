@@ -2,17 +2,12 @@ const helpers = @import("./helpers.zig");
 const std = helpers.std;
 const types = helpers.types;
 const source = helpers.source;
-const backtrack = helpers.backtrack;
-const prune = helpers.prune;
-const plausible = helpers.plausible;
-const seed = helpers.seed;
 const acui = helpers.acui;
 const ExprId = helpers.ExprId;
 const Canonicalizer = @import("../../../normalizer.zig").Canonicalizer;
 const TheoremContext = helpers.TheoremContext;
 const Check = helpers.Check;
 const apply = helpers.apply;
-const exact = helpers.exact;
 const fixtureFor = helpers.fixtureFor;
 const parseGoal = helpers.parseGoal;
 const expectTimingCounter = helpers.expectTimingCounter;
@@ -592,249 +587,6 @@ test "source suggestions work in a trailing local lemma" {
     try std.testing.expectEqual(types.SearchStatus.found, trailing.status);
 }
 
-// Minimal one-sided ACUI sequent theory exercising the unbound-repeated-binder
-// branch of `closedAcuiTemplateMismatch` (repeatedBinderMemberMismatch): the
-// `ax`-style closing rule `⊢ a , (~ a) , d` repeats the wff binder `a` across two
-// ACUI succedent members with no rigid anchor, so nothing binds `a` before
-// validation. A goal with no complementary literal pair can never close by `ax`,
-// and the prune must reject it (cheaply, before `tryCandidate`) — while a goal
-// that does have the pair must still be found.
-const one_sided_ax_mm0 =
-    \\delimiter $ ( ) $;
-    \\provable sort wff;
-    \\sort ctx;
-    \\term ctx_eq (g h: ctx): wff;
-    \\term emp: ctx;
-    \\--| @acui ctx_assoc ctx_comm emp ctx_idem
-    \\term join (g h: ctx): ctx;
-    \\infixl join: $,$ prec 5;
-    \\term hyp (a: wff): ctx;
-    \\coercion hyp: wff > ctx;
-    \\term seq (d: ctx): wff;
-    \\prefix seq: $|-$ prec 1;
-    \\term lnot (a: wff): wff;
-    \\prefix lnot: $~$ prec 40;
-    \\term P: wff;
-    \\term Q: wff;
-    \\term R: wff;
-    \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
-    \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
-    \\axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
-    \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
-    \\axiom ctx_assoc (g h i: ctx): $ ctx_eq ( ( g , h ) , i ) ( g , ( h , i ) ) $;
-    \\axiom ctx_comm (g h: ctx): $ ctx_eq ( g , h ) ( h , g ) $;
-    \\axiom ctx_idem (g: ctx): $ ctx_eq ( g , g ) g $;
-    \\axiom ax (d: ctx) (a: wff): $ |- a , ( ~ a ) , d $;
-    \\term lor (a b: wff): wff;
-    \\infixl lor: $v$ prec 20;
-    \\axiom ror (d: ctx) (a b: wff): $ |- a , b , d $ > $ |- ( a v b ) , d $;
-    \\theorem good: $ |- P , ( ~ P ) , R $;
-    \\theorem bad: $ |- P , ( ~ Q ) , R $;
-    \\theorem orgood: $ |- ( P v Q ) , R $;
-;
-
-// Directly exercises the unbound-repeated-binder branch through the public
-// `finalConclusionPlausible`, with `ax`'s binders left unbound (the open-backward
-// state the seed can't pin). A goal WITH a complementary pair must stay plausible
-// (never drop a winnable candidate); a goal WITHOUT one must be refuted (pruned)
-// and must bump `final_conclusion_prunes`. This isolates the branch regardless of
-// whether a full search happens to reach it.
-test "repeated-binder prune refutes a doomed ax and spares a valid one" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var fixture = try fixtureFor(allocator, one_sided_ax_mm0, "good");
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    try theorem.seedAssertion(fixture.assertion);
-    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
-    defer theorem_vars.deinit();
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-
-    // Both goals interned into `theorem` before the candidate clone below, so the
-    // clone (which preserves ExprIds) resolves either.
-    const good_goal = try parseGoal(&fixture, &theorem, &theorem_vars, "|- P , ( ~ P ) , R");
-    const bad_goal = try parseGoal(&fixture, &theorem, &theorem_vars, "|- P , ( ~ Q ) , R");
-
-    var ax_id: ?u32 = null;
-    for (context.env.rules.items, 0..) |rule, i| {
-        if (std.mem.eql(u8, rule.name, "ax")) ax_id = @intCast(i);
-    }
-    const rid = ax_id orelse return error.MissingAxRule;
-
-    // All of `ax`'s binders (`d`, `a`) left unbound — the open state.
-    const nbind = context.env.rules.items[rid].args.len;
-    const bindings = try allocator.alloc(?ExprId, nbind);
-    @memset(bindings, null);
-
-    var candidate = types.ApplyCandidate{
-        .allocator = allocator,
-        .rule_id = rid,
-        .rule_name = "ax",
-        .declaration_order = 0,
-        .theorem = try theorem.clone(),
-        .bindings = try allocator.alloc(?ExprId, 0),
-        .conclusion = good_goal.concrete,
-        .unresolved_hyps = try allocator.alloc(types.UnresolvedHypothesis, 0),
-    };
-    defer candidate.deinit();
-
-    // `finalConclusionPlausible` returns whether the candidate could still match;
-    // `false` is the prune (its caller, `validateSelectedRefs`, is what bumps the
-    // `final_conclusion_prunes` counter — not exercised here).
-    // Complementary pair present → the branch finds a consistent `a := P` and must
-    // NOT prune.
-    try std.testing.expect(plausible.finalConclusionPlausible(
-        &context,
-        &candidate,
-        good_goal,
-        bindings,
-        .{},
-        null,
-    ));
-    // No complementary pair → no value of `a` covers both `a` and `~ a`, so the
-    // branch refutes it before any `tryCandidate`.
-    try std.testing.expect(!plausible.finalConclusionPlausible(
-        &context,
-        &candidate,
-        bad_goal,
-        bindings,
-        .{},
-        null,
-    ));
-}
-
-// Directly exercises the hyp-vs-ref member-consistency check with `ror`'s
-// binders left unbound (the loose-candidate state a one-sided ACUI conclusion
-// forces: seeding never descends the region, so the premise slot is a wildcard
-// sequent that would otherwise pair with every pool line through a full
-// `tryCandidate`). The valid premise must stay plausible; a ref carrying a
-// member no assignment derives (direction 1) and a ref missing a member the
-// rest binder must carry (direction 3) must both be refuted.
-test "hyp-ref member prune refutes doomed premise refs and spares the valid one" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var fixture = try fixtureFor(allocator, one_sided_ax_mm0, "orgood");
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    try theorem.seedAssertion(fixture.assertion);
-    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
-    defer theorem_vars.deinit();
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-
-    const goal = try parseGoal(&fixture, &theorem, &theorem_vars, "|- ( P v Q ) , R");
-    const good_ref = try parseGoal(&fixture, &theorem, &theorem_vars, "|- P , Q , R");
-    const missing_ref = try parseGoal(&fixture, &theorem, &theorem_vars, "|- P , Q");
-    const alien_ref = try parseGoal(&fixture, &theorem, &theorem_vars, "|- P , ( ~ P ) , R");
-
-    var ror_id: ?u32 = null;
-    for (context.env.rules.items, 0..) |rule, i| {
-        if (std.mem.eql(u8, rule.name, "ror")) ror_id = @intCast(i);
-    }
-    const rid = ror_id orelse return error.MissingRorRule;
-
-    // All of `ror`'s binders (`d`, `a`, `b`) unbound — the loose state.
-    const nbind = context.env.rules.items[rid].args.len;
-    const bindings = try allocator.alloc(?ExprId, nbind);
-    @memset(bindings, null);
-
-    // The true premise `⊢ P , Q , R` is consistent under `a v b := P v Q`.
-    try std.testing.expect(plausible.hypRefMembersPlausible(
-        &context,
-        &theorem,
-        rid,
-        goal,
-        bindings,
-        &[_]?ExprId{good_ref.concrete},
-    ));
-    // `⊢ P , ( ~ P ) , R` holds a member (`~ P`) no assignment derives.
-    try std.testing.expect(!plausible.hypRefMembersPlausible(
-        &context,
-        &theorem,
-        rid,
-        goal,
-        bindings,
-        &[_]?ExprId{alien_ref.concrete},
-    ));
-    // `⊢ P , Q` is missing `R`, which the rest binder `d` must carry.
-    try std.testing.expect(!plausible.hypRefMembersPlausible(
-        &context,
-        &theorem,
-        rid,
-        goal,
-        bindings,
-        &[_]?ExprId{missing_ref.concrete},
-    ));
-    // A generated (non-pool) slot gives the check nothing to judge — abstain.
-    try std.testing.expect(plausible.hypRefMembersPlausible(
-        &context,
-        &theorem,
-        rid,
-        goal,
-        bindings,
-        &[_]?ExprId{null},
-    ));
-}
-
-// Generation-order witness classes (`witnessClass`): a rule not enrolled in
-// `@auto backward` is class 0; an enrolled rule whose every hypothesis binder
-// is conclusion-determined is class 1; an enrolled rule with a premise-only
-// binder — a witness backward application must defer as an existential meta
-// (tait's `rex`, or `mp`'s antecedent) — is class 2. The 1-vs-2 split is what
-// orders a one-sided calculus (where EVERY rule is enrolled, so the
-// annotation alone distinguishes nothing) so the invertible ladder runs
-// before the witness contraction cascade.
-const witness_class_mm0 =
-    \\delimiter $ ( ) $;
-    \\provable sort wff;
-    \\term im (a b: wff): wff;
-    \\infixr im: $->$ prec 25;
-    \\term an (a b: wff): wff;
-    \\infixl an: $&$ prec 20;
-    \\term P: wff;
-    \\axiom ax_id (a: wff): $ a -> a $;
-    \\--| @auto backward
-    \\axiom andi (a b: wff): $ a $ > $ b $ > $ ( a & b ) $;
-    \\--| @auto backward
-    \\axiom mp (a b: wff): $ ( a -> b ) $ > $ a $ > $ b $;
-    \\theorem t: $ P -> P $;
-;
-
-test "witnessClass splits un-enrolled, conclusion-determined, and witness rules" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var fixture = try fixtureFor(allocator, witness_class_mm0, "t");
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-
-    var by_name = [_]struct { name: []const u8, class: u8 }{
-        .{ .name = "ax_id", .class = 0 }, // not enrolled
-        .{ .name = "andi", .class = 1 }, // enrolled, binders in conclusion
-        .{ .name = "mp", .class = 2 }, // enrolled, `a` is premise-only
-    };
-    for (&by_name) |expected| {
-        var rule_id: ?u32 = null;
-        for (context.env.rules.items, 0..) |rule, i| {
-            if (std.mem.eql(u8, rule.name, expected.name)) rule_id = @intCast(i);
-        }
-        const rid = rule_id orelse return error.MissingRule;
-        try std.testing.expectEqual(
-            expected.class,
-            backtrack.witnessClass(&context, rid),
-        );
-    }
-}
-
 // Three rules share the shape `P (f y x) x` and differ only in the head `f`:
 // a primitive `h`, a def `K` that drops its second argument, and a `@rewrite`
 // head `k2` that reduces to its first. Against `P (f a b) c` the re-pin may pin
@@ -878,253 +630,6 @@ const repin_heads_mm0 =
     \\theorem t3 (a b c: obj): $ R a $ > $ Q c $ > $ P (k2 a b) c $;
     \\theorem t3K (a b c: obj): $ R a $ > $ Q c $ > $ P (K a b) c $;
 ;
-
-test "re-pin descends only into arguments the head determines" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var fixture = try fixtureFor(allocator, repin_heads_mm0, "t");
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    try theorem.seedAssertion(fixture.assertion);
-    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
-    defer theorem_vars.deinit();
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-
-    const cases = [_]struct { rule: []const u8, goal: []const u8, plausible: bool }{
-        .{ .rule = "r_h", .goal = "P (h a b) c", .plausible = false },
-        .{ .rule = "r_K", .goal = "P (K a b) c", .plausible = true },
-        .{ .rule = "r_k2", .goal = "P (k2 a b) c", .plausible = true },
-    };
-    var goals: [cases.len]types.Goal = undefined;
-    for (cases, &goals) |case, *goal| {
-        goal.* = try parseGoal(&fixture, &theorem, &theorem_vars, case.goal);
-    }
-    var failed = false;
-    for (cases, goals) |case, goal| {
-        const rid = context.env.getRuleId(case.rule) orelse
-            return error.MissingRule;
-        // Both binders unbound: the seed nulls `x` on its conflicting
-        // occurrences, and `y` is left for the re-pin to fill.
-        const bindings = try allocator.alloc(?ExprId, 2);
-        @memset(bindings, null);
-        var candidate = types.ApplyCandidate{
-            .allocator = allocator,
-            .rule_id = rid,
-            .rule_name = case.rule,
-            .declaration_order = 0,
-            .theorem = try theorem.clone(),
-            .bindings = try allocator.alloc(?ExprId, 0),
-            .conclusion = goal.concrete,
-            .unresolved_hyps = try allocator.alloc(types.UnresolvedHypothesis, 0),
-        };
-        defer candidate.deinit();
-        const actual = plausible.finalConclusionPlausible(
-            &context,
-            &candidate,
-            goal,
-            bindings,
-            .{ .repin_prune_enabled = true },
-            null,
-        );
-        if (actual != case.plausible) {
-            std.debug.print("rule {s}: expected plausible={}\n", .{ case.rule, case.plausible });
-            failed = true;
-        }
-    }
-    try std.testing.expect(!failed);
-}
-
-test "folded-body check compares only determined args of a same-head @rewrite" {
-    // `y := k2 a b` against the goal's `k2 a c`: both reduce to `a`, so the
-    // differing second argument is no mismatch.
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-    const mm0_src = repin_heads_mm0 ++
-        \\axiom r_y (y x: obj): $ P y x $;
-        \\theorem t_y (a b c: obj): $ P (k2 a c) c $;
-    ;
-
-    var fixture = try fixtureFor(allocator, mm0_src, "t_y");
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    try theorem.seedAssertion(fixture.assertion);
-    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
-    defer theorem_vars.deinit();
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-
-    const goal = try parseGoal(&fixture, &theorem, &theorem_vars, "P (k2 a c) c");
-    const other = try parseGoal(&fixture, &theorem, &theorem_vars, "P (k2 a b) c");
-    const y_value = theorem.interner.node(other.concrete).app.args[0];
-    const rule_id = fixture.theory.env.getRuleId("r_y") orelse return error.MissingRule;
-    const bindings = try allocator.dupe(?ExprId, &.{ y_value, null });
-    var candidate = types.ApplyCandidate{
-        .allocator = allocator,
-        .rule_id = rule_id,
-        .rule_name = "r_y",
-        .declaration_order = 0,
-        .theorem = try theorem.clone(),
-        .bindings = try allocator.alloc(?ExprId, 0),
-        .conclusion = goal.concrete,
-        .unresolved_hyps = try allocator.alloc(types.UnresolvedHypothesis, 0),
-    };
-    defer candidate.deinit();
-    try std.testing.expect(plausible.finalConclusionPlausible(
-        &context,
-        &candidate,
-        goal,
-        bindings,
-        .{ .repin_prune_enabled = true },
-        null,
-    ));
-}
-
-test "a stuck @rewrite redex clashes with a rigid conclusion head" {
-    // `sb_irrel` fires only when `p` does not depend on `x`. With `p: wff x`
-    // the redex `sb x t p` is in normal form, so it can never become an `an`;
-    // with `q: wff` it reduces to `q`, which an instance of `an a b` may be.
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\sort obj;
-        \\term bi (a b: wff): wff;
-        \\infixl bi: $<->$ prec 5;
-        \\--| @relation wff bi biid bitr bisym mpbi
-        \\axiom biid (a: wff): $ a <-> a $;
-        \\axiom bitr (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
-        \\axiom bisym (a b: wff): $ a <-> b $ > $ b <-> a $;
-        \\axiom mpbi (a b: wff): $ a <-> b $ > $ a $ > $ b $;
-        \\term an (a b: wff): wff;
-        \\term sb {x: obj} (t: obj) (p: wff x): wff;
-        \\--| @rewrite
-        \\axiom sb_irrel {x: obj} (t: obj) (p: wff): $ sb x t p <-> p $;
-        \\axiom r_an (a b: wff): $ an a b $;
-        \\theorem t {x: obj} (t: obj) (p: wff x) (q: wff): $ sb x t p $;
-    ;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var fixture = try fixtureFor(allocator, mm0_src, "t");
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    try theorem.seedAssertion(fixture.assertion);
-    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
-    defer theorem_vars.deinit();
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-
-    const stuck = (try parseGoal(&fixture, &theorem, &theorem_vars, "sb x t p")).concrete;
-    const reducible = (try parseGoal(&fixture, &theorem, &theorem_vars, "sb x t q")).concrete;
-    try std.testing.expect(helpers.def_match.stuckRedex(&context, &theorem, stuck));
-    try std.testing.expect(!helpers.def_match.stuckRedex(&context, &theorem, reducible));
-
-    const rule_id = fixture.theory.env.getRuleId("r_an") orelse return error.MissingRule;
-    const concl = fixture.theory.env.rules.items[rule_id].concl;
-    const unbound = [_]?ExprId{ null, null };
-    try std.testing.expect(helpers.def_match.templateDefiniteMismatch(
-        &context,
-        &theorem,
-        concl,
-        stuck,
-        &unbound,
-    ));
-    try std.testing.expect(!helpers.def_match.templateDefiniteMismatch(
-        &context,
-        &theorem,
-        concl,
-        reducible,
-        &unbound,
-    ));
-}
-
-test "a @rewrite head that is also a def or an ACUI combiner is never stuck" {
-    // No rewrite at the root of either term is what keeps it unchanged: the
-    // checker unfolds `sbd x t p` to `an p p`, an instance of `an a b`, and
-    // its normalizer rewrites `join (hyp q) (hyp r)` by `join_hyp`.
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\sort obj;
-        \\sort ctx;
-        \\term bi (a b: wff): wff;
-        \\infixl bi: $<->$ prec 5;
-        \\--| @relation wff bi biid bitr bisym mpbi
-        \\axiom biid (a: wff): $ a <-> a $;
-        \\axiom bitr (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
-        \\axiom bisym (a b: wff): $ a <-> b $ > $ b <-> a $;
-        \\axiom mpbi (a b: wff): $ a <-> b $ > $ a $ > $ b $;
-        \\term an (a b: wff): wff;
-        \\def sbd {x: obj} (t: obj) (p: wff x): wff = $ an p p $;
-        \\--| @rewrite
-        \\axiom sbd_irrel {x: obj} (t: obj) (p: wff): $ sbd x t p <-> p $;
-        \\axiom r_an (a b: wff): $ an a b $;
-        \\term ctx_eq (g h: ctx): wff;
-        \\term emp: ctx;
-        \\--| @acui ctx_assoc ctx_comm emp ctx_idem
-        \\term join (g h: ctx): ctx;
-        \\term hyp (a: wff): ctx;
-        \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
-        \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
-        \\axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
-        \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
-        \\axiom ctx_assoc (g h i: ctx): $ ctx_eq (join (join g h) i) (join g (join h i)) $;
-        \\axiom ctx_comm (g h: ctx): $ ctx_eq (join g h) (join h g) $;
-        \\axiom ctx_idem (g: ctx): $ ctx_eq (join g g) g $;
-        \\--| @rewrite
-        \\axiom join_hyp (a b: wff): $ ctx_eq (join (hyp a) (hyp b)) (hyp (an a b)) $;
-        \\theorem t {x: obj} (t: obj) (p: wff x) (q r: wff) (g: ctx): $ sbd x t p $;
-    ;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var fixture = try fixtureFor(allocator, mm0_src, "t");
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    try theorem.seedAssertion(fixture.assertion);
-    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
-    defer theorem_vars.deinit();
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-
-    const def_redex = (try parseGoal(&fixture, &theorem, &theorem_vars, "sbd x t p")).concrete;
-    const bag_eq = (try parseGoal(&fixture, &theorem, &theorem_vars, "ctx_eq (join (hyp q) (hyp r)) g")).concrete;
-    // Put the bag in canonical order first (its members only, not its
-    // rewrite), so only the head's class can make it not stuck.
-    var canon = Canonicalizer.init(allocator, &theorem, context.registry, context.env, {});
-    defer canon.deinit();
-    const raw_bag = theorem.interner.node(bag_eq).app.args[0];
-    const join_acui = (try context.registry.resolveStructuralCombiner(
-        context.env,
-        theorem.interner.node(raw_bag).app.term_id,
-    )).?;
-    const bag = try canon.canonicalizeAcui(raw_bag, join_acui);
-    try std.testing.expectEqual(
-        theorem.interner.node(raw_bag).app.term_id,
-        theorem.interner.node(bag).app.term_id,
-    );
-    try std.testing.expect(!helpers.def_match.stuckRedex(&context, &theorem, def_redex));
-    try std.testing.expect(!helpers.def_match.stuckRedex(&context, &theorem, bag));
-
-    const rule_id = fixture.theory.env.getRuleId("r_an") orelse return error.MissingRule;
-    const unbound = [_]?ExprId{ null, null };
-    try std.testing.expect(!helpers.def_match.templateDefiniteMismatch(
-        &context,
-        &theorem,
-        fixture.theory.env.rules.items[rule_id].concl,
-        def_redex,
-        &unbound,
-    ));
-}
 
 // End to end: a rule that repeats `x` proves `P (_ a b) c` with `x := c`
 // when the head drops its second argument, so the conclusion prunes must not
@@ -1379,7 +884,6 @@ test "source search declines a target that depends on a dropped declaration" {
 // back untrimmed. The cases are built on the goal-switching `not_left`
 // (`g , ¬ a ⊢ a > g , ¬ a ⊢ ⊥`, whose conclusion fixes no `a`), which nd_fol
 // has since replaced with signed negation rules; the fixture gets it back.
-// The cases trim the ladder's inline sub-proofs, so the search core is off.
 // ---------------------------------------------------------------------------
 
 fn expectNdFolTrim(proof_src: []const u8, expected: []const u8) !void {
@@ -1399,16 +903,13 @@ fn expectNdFolTrim(proof_src: []const u8, expected: []const u8) !void {
     var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
         .max_results = 3,
         .exact_result_limit = 1,
-        .generate = .{ .enabled = true, .core = false, .ladder = true },
+        .generate = .{ .enabled = true },
     });
     defer suggestions.deinit();
     try expectOffered(suggestions.items, &.{expected});
 }
 
 test "trimming supplies an inline sub-proof the binders its hint lacks" {
-    // `l2` lacks the principal, so `all_left`'s premise needs `weak [l2]`,
-    // which gets no hint from a bare `all_left`; the retry supplies the `t`
-    // its premise leaves open.
     try expectNdFolTrim(
         \\vac_all_or
         \\----------
@@ -1416,22 +917,18 @@ test "trimming supplies an inline sub-proof the binders its hint lacks" {
         \\l2: $ (s0 ∨ s0) ⊢ s0 $ by or_left [l1, l1]
         \\l4: $ ∅ ⊢ (∀ x (s0 ∨ s0)) → s0 $ by auto?
     ,
-        "imp_intro [all_left (t := $ u $) [weak [l2]]]",
+        "imp_intro [all_left (t := $ u $) [weak (h := $ ∀ x (s0 ∨ s0) $) [l2]]]",
     );
 }
 
 test "trimming forces the binders an inline sub-proof proved past" {
-    // Under a bare `not_left`, `ex_intro [ax []]` checks against a weak hint
-    // and proves something other than `not_left`'s premise; `not_left`'s
-    // binders are then supplied before inference, and `ex_intro`'s `p`,
-    // forced along with them, is dropped again.
     try expectNdFolTrim(
         \\not_ex_to_all_not
         \\-----------------
         \\l6: $ ∅ ⊢ (¬ ∃ x P x) → ∀ y (¬ P y) $ by auto?
     ,
-        "imp_intro [all_intro [not_intro (g := $ ¬ ∃ x P x $, a := $ P u $) " ++
-            "[not_left [ex_intro (t := $ u $) [ax []]]]]]",
+        "imp_intro [all_intro [not_intro [not_left [ex_intro (x := $ x $, p := $ P x $) " ++
+            "[ax (g := $ ¬ ∃ x P x $, a := $ P u $) []]]]]]",
     );
 }
 
@@ -1453,14 +950,6 @@ test "trimming accepts an inferred binder equal to the search's up to ACUI" {
 }
 
 test "trimming checks again with the kept bindings stated" {
-    // The first oracle check keeps a set the line rejects once the kept
-    // bindings are stated (a stated binder changes the hint an inline
-    // sub-proof gets); the second check, with them stated, keeps
-    // `not_left`'s. The goal is the `∀` step of `drinker`: `all_intro` names
-    // its eigenvariable `u` after `l4`, and `ex_intro [l4]` closes under it.
-    // (From `∅`, the fresh-eigenvariable rules make the self-contained proof,
-    // with a pool witness, the first one found, so the carried `t := C` of
-    // the older form of this case no longer arises.)
     try expectNdFolTrim(
         \\drinker
         \\-------
@@ -1470,7 +959,7 @@ test "trimming checks again with the kept bindings stated" {
         \\l4: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u ⊢ P u → ∀ y P y $ by imp_intro [l3]
         \\l8: $ ¬ ∃ x (P x → ∀ y P y) , P C ⊢ ∀ y P y $ by auto?
     ,
-        "all_intro [raa [not_left (g := $ P C , ¬ P u $, a := $ ∃ x (P x → ∀ y P y) $) " ++
-            "[ex_intro [l4]]]]",
+        "all_intro [raa [not_left (g := $ P C , ¬ P u $) " ++
+            "[ex_intro (x := $ x $, p := $ P x → ∀ y P y $) [l4]]]]",
     );
 }

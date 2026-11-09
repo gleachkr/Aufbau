@@ -44,7 +44,7 @@ const usage_text =
     "                   found put in place; the report goes to standard error\n" ++
     "  --json           Report each search marker as one line of JSON\n" ++
     "  -v, -vv          Report what each search cost; -vv adds why it\n" ++
-    "                   missed and the rules it tried most\n" ++
+    "                   missed\n" ++
     "  --only THEOREM[:LABEL]\n" ++
     "                   Search only the markers of THEOREM, or of its line\n" ++
     "                   LABEL\n" ++
@@ -85,13 +85,6 @@ const SearchCommand = struct {
     retries: usize = 0,
     depth: ?u64 = null,
     budget: ?u64 = null,
-    /// `--no-core`: leave the search core out (`GenerateOptions.core`), so
-    /// with `--ladder` the generation ladder runs alone. A development
-    /// switch for measuring the ladder, so the usage text does not list it.
-    core: bool = true,
-    /// `--ladder`: run the generation ladder after the core
-    /// (`GenerateOptions.ladder`). Unlisted, like `--no-core`.
-    ladder: bool = false,
 };
 
 const JoinCommand = struct {
@@ -191,10 +184,6 @@ fn parseSearchFlag(
         search.depth = try flagNumber(argv, i);
     } else if (std.mem.eql(u8, arg, "--budget")) {
         search.budget = try flagNumber(argv, i);
-    } else if (std.mem.eql(u8, arg, "--no-core")) {
-        search.core = false;
-    } else if (std.mem.eql(u8, arg, "--ladder")) {
-        search.ladder = true;
     } else return false;
     return true;
 }
@@ -482,7 +471,7 @@ fn runSearch(
         allocator,
         pair.mm0.text,
         proof.text,
-        .{ .only = cmd.only, .retries = cmd.retries, .params = params, .core = cmd.core, .ladder = cmd.ladder },
+        .{ .only = cmd.only, .retries = cmd.retries, .params = params },
     );
     defer result.deinit();
     if (cmd.only) |only| if (result.markers.len == 0) {
@@ -706,17 +695,12 @@ fn writeSearchReport(
 /// to run.
 fn writeCost(w: *std.Io.Writer, cost: SearchDriver.Cost) !void {
     try w.writeAll("  cost: ");
-    if (cost.phase != 0) try w.print("{d} ticks, ", .{cost.ticks});
+    if (cost.searched) try w.print("{d} ticks, ", .{cost.ticks});
     try w.print("{d} candidates, {f} ms wall", .{
         cost.candidates,
         Milliseconds{ .ns = cost.wall_ns },
     });
-    if (cost.phase != 0) {
-        try w.print(", depth {d} in {s}", .{
-            cost.depth,
-            mm0.CompilerSupport.Search.phaseName(cost.phase),
-        });
-    }
+    if (cost.searched) try w.print(", depth {d}", .{cost.depth});
     try w.writeAll("\n");
 }
 
@@ -736,19 +720,9 @@ const Milliseconds = struct {
     }
 };
 
-/// `-vv`: why a search missed, and the rules it tried most.
+/// `-vv`: why a search missed.
 fn writeDetail(w: *std.Io.Writer, marker: SearchMarker) !void {
     if (marker.detail) |detail| try w.print("  why: {s}\n", .{detail});
-    if (marker.cost.rules.len == 0) return;
-    try w.writeAll("  rules tried most:\n");
-    for (marker.cost.rules) |rule| {
-        try w.print("    {s}: {d} tried, {d} accepted, {d} rejected\n", .{
-            rule.name,
-            rule.attempts,
-            rule.accepted,
-            rule.rejected,
-        });
-    }
 }
 
 /// `--json`: one object per marker and line, with every field at every
@@ -795,15 +769,11 @@ fn writeSearchJson(
 }
 
 fn writeCostFields(jw: *std.json.Stringify, cost: SearchDriver.Cost) !void {
-    const ran = cost.phase != 0;
     try writeFields(jw, .{
         .ticks = cost.ticks,
         .candidates = cost.candidates,
         .wall_ms = Milliseconds{ .ns = cost.wall_ns },
-        .depth = if (ran) cost.depth else null,
-        .phase = if (ran) cost.phase else null,
-        .phase_name = if (ran) mm0.CompilerSupport.Search.phaseName(cost.phase) else null,
-        .rules = cost.rules,
+        .depth = if (cost.searched) cost.depth else null,
     });
 }
 

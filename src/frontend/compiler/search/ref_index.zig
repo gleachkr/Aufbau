@@ -20,8 +20,7 @@ pub const SourceKind = enum {
 
 pub const Entry = struct {
     pool_index: usize,
-    /// The pool ref behind this entry. Null for indexes built over bare
-    /// expressions (`buildFromExprs`), e.g. the derived-ref pool.
+    /// The pool ref behind this entry.
     ref: ?@import("../../proof_script.zig").Ref,
     source_kind: SourceKind,
     expr: ExprId,
@@ -163,56 +162,6 @@ pub const Index = struct {
         return result;
     }
 
-    /// Build an index over bare expressions — used for the derived-ref pool,
-    /// whose shapes carry universal-meta leaves. The shape
-    /// builder maps placeholder leaves to covering wildcards, so a lookup can
-    /// only over-approximate the matching derived refs, never miss one.
-    /// Entries carry no pool ref; lookups consume `pool_index` (= the
-    /// position in `exprs`).
-    pub fn buildFromExprs(
-        allocator: std.mem.Allocator,
-        context: *const Context,
-        theorem: *const TheoremContext,
-        exprs: []const ExprId,
-        counters: ?*SearchCounters,
-    ) !Index {
-        const build_start = timer.timestampIf(SearchCounters.timingOn(counters));
-        const entries = try allocator.alloc(Entry, exprs.len);
-        errdefer allocator.free(entries);
-        var result = Index{
-            .allocator = allocator,
-            .context = context,
-            .clipper_index = try clipper.Index.init(allocator),
-            .entries = entries,
-        };
-        errdefer result.clipper_index.deinit();
-
-        const builder = shape_mod.Builder.initWithRegistry(
-            allocator,
-            context.env,
-            context.registry,
-            .{},
-        );
-        for (exprs, 0..) |expr, idx| {
-            const item = result.clipper_index.addItem();
-            std.debug.assert(item == idx);
-            result.entries[idx] = .{
-                .pool_index = idx,
-                .ref = null,
-                .source_kind = .checked_line,
-                .expr = expr,
-                .order = idx,
-            };
-            const shape = try builder.fromExprId(theorem, expr);
-            defer shape_mod.deinitShape(allocator, shape);
-            try result.clipper_index.insertShape(idx, shape);
-        }
-        if (counters) |actual| {
-            if (actual.timing) actual.ref_index_build_ns += timer.elapsedSince(build_start);
-        }
-        return result;
-    }
-
     pub fn deinit(self: *Index) void {
         if (self.shape_cache) |cache| {
             cache.deinit(self.allocator);
@@ -228,28 +177,6 @@ pub const Index = struct {
         const cache = try self.allocator.create(ShapeCache);
         cache.* = .{};
         self.shape_cache = cache;
-    }
-
-    pub fn lookupExpected(
-        self: *const Index,
-        theorem: *const TheoremContext,
-        expected: ExprId,
-        counters: ?*SearchCounters,
-    ) !LookupResult {
-        const builder = shape_mod.Builder.initWithRegistry(
-            self.allocator,
-            self.context.env,
-            self.context.registry,
-            .{},
-        );
-        const shape_start = timer.timestampIf(SearchCounters.timingOn(counters));
-        const shape = try builder.fromExprId(theorem, expected);
-        defer shape_mod.deinitShape(self.allocator, shape);
-        if (counters) |actual| {
-            if (actual.timing) actual.shape_emission_ns += timer.elapsedSince(shape_start);
-            actual.shape_emissions += 1;
-        }
-        return try self.lookupShape(shape, counters);
     }
 
     pub fn lookupTemplate(
@@ -385,18 +312,6 @@ pub const Index = struct {
         );
     }
 
-    // A `@recover` coupling constraint expressed as an ACUI-member containment
-    // query: the context (arg `ctx_arg_index` of the `turnstile_term_id`
-    // sequent) of the matched hypothesis must hold a member `wrapper(pattern)`
-    // with the recover `hole` widened. See `lookupTemplateInjectedDual`.
-    pub const RecoverMemberInjection = struct {
-        turnstile_term_id: u32,
-        ctx_arg_index: usize,
-        wrapper_term_id: u32,
-        pattern: ExprId,
-        hole: ExprId,
-    };
-
     // Like `lookupTemplateDual`, but before querying, splice extra ACUI
     // members into the context region of the built sequent shape. This pushes
     // a cross-hyp `@recover` coupling constraint into the index: instead of
@@ -406,46 +321,6 @@ pub const Index = struct {
     // cheaply at lookup rather than after full validation. Sound: injecting a
     // member only narrows the accept set, and the pattern's hole is widened so
     // any valid witness still matches.
-    pub fn lookupTemplateInjectedDual(
-        self: *const Index,
-        secondary: ?*const Index,
-        theorem: *const TheoremContext,
-        template: @import("../../rules.zig").TemplateExpr,
-        args: []const @import("../../parse_recovery.zig").ArgInfo,
-        bindings: []const ?ExprId,
-        injections: []const RecoverMemberInjection,
-        counters: ?*SearchCounters,
-    ) !DualLookup {
-        const builder = shape_mod.Builder.initWithRegistry(
-            self.allocator,
-            self.context.env,
-            self.context.registry,
-            .{},
-        );
-        const shape_start = timer.timestampIf(SearchCounters.timingOn(counters));
-        var shape = try builder.fromTemplateWithBindings(
-            theorem,
-            template,
-            args,
-            bindings,
-        );
-        defer shape_mod.deinitShape(self.allocator, shape);
-        for (injections) |inj| {
-            try injectMember(self.allocator, &builder, theorem, &shape, inj);
-        }
-        if (counters) |actual| {
-            if (actual.timing) actual.shape_emission_ns += timer.elapsedSince(shape_start);
-            actual.shape_emissions += 1;
-        }
-        var primary = try self.lookupShape(shape, counters);
-        errdefer primary.deinit();
-        const second: ?LookupResult = if (secondary) |index|
-            try index.lookupShape(shape, counters)
-        else
-            null;
-        return .{ .primary = primary, .secondary = second };
-    }
-
     fn lookupShape(
         self: *const Index,
         shape: clipper.ShapeNode,
@@ -506,47 +381,6 @@ pub const Index = struct {
         return indices;
     }
 };
-
-// Splice one recover-coupling member into a sequent shape's context region.
-// No-ops (sound) unless the shape is the expected turnstile with an ACUI
-// region at `ctx_arg_index` — a wildcard/broad shape or an unexpected shape
-// simply keeps its permissive form. The built member is owned by the shape
-// tree afterwards (freed by `deinitShape`).
-fn injectMember(
-    allocator: std.mem.Allocator,
-    builder: *const shape_mod.Builder,
-    theorem: *const TheoremContext,
-    shape: *clipper.ShapeNode,
-    inj: Index.RecoverMemberInjection,
-) !void {
-    const cnode = switch (shape.*) {
-        .concrete => |*c| c,
-        else => return,
-    };
-    if (cnode.token.term_id != inj.turnstile_term_id) return;
-    if (inj.ctx_arg_index >= cnode.children.len) return;
-    const children = @constCast(cnode.children);
-    const ctx_child = &children[inj.ctx_arg_index];
-    const acui = switch (ctx_child.*) {
-        .acui => |*a| a,
-        else => return,
-    };
-
-    const member = try builder.recoverMemberShape(
-        theorem,
-        inj.wrapper_term_id,
-        inj.pattern,
-        inj.hole,
-    );
-    errdefer shape_mod.deinitShape(allocator, member);
-
-    const old = acui.members;
-    const new_members = try allocator.alloc(clipper.ShapeNode, old.len + 1);
-    @memcpy(new_members[0..old.len], old);
-    new_members[old.len] = member;
-    allocator.free(@constCast(old));
-    acui.members = new_members;
-}
 
 fn sourceKind(ref: @import("../../proof_script.zig").Ref) SourceKind {
     return switch (ref) {

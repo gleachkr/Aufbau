@@ -91,12 +91,9 @@ pub const guards = [_]FrontierGuard{
             "tests/search_bench_cases/witness_carry_probe.auf",
         .mode = "depth",
     },
-    // Depth guard for open targets with several child proofs
-    // (`generate.hookSolveOpen` offers each to the slot in turn): the first
+    // Depth guard for open targets with several child proofs: the first
     // child proof pins the witness to `all_intro`'s eigenvariable and the
-    // parent must fall through to the next. At depth 3 it also needs the
-    // eager steps on the open chain (`imp_intro`, `all_intro`) to keep
-    // their parent's depth, as `hookSolve` does on a concrete one.
+    // parent must fall through to the next.
     .{
         .filter = "witness_retry_probe",
         .files = "tests/search_bench_cases/witness_retry_probe.mm0:" ++
@@ -128,12 +125,10 @@ pub const guards = [_]FrontierGuard{
             "tests/search_bench_cases/ordered_ctx_probe.auf",
         .mode = "depth",
     },
-    // Depth guards for fresh variables hidden by a def
-    // (`open_slot.tryFreshBoundGenerate`): `A → B` unfolds to `Π x : A. B`,
-    // so `pi_form` (`arr_form`) and `app_elim` (`arr_elim`) need a premise
-    // `g , x : A ⊢ Ty B` for an `x` that nothing pins. Without a fresh `x`
-    // both miss at k=1. The bench copy enrolls `pi_form` `@auto backward`,
-    // and its witness ladder must take the same route.
+    // Depth guards for fresh variables hidden by a def: `A → B` unfolds to
+    // `Π x : A. B`, so `pi_form` (`arr_form`) and `app_elim` (`arr_elim`)
+    // need a premise `g , x : A ⊢ Ty B` for an `x` that nothing pins.
+    // Without a fresh `x` both miss at k=1.
     .{
         .filter = "arr_form",
         .files = "tests/search_bench_cases/martin_lof_frontier.mm0:" ++
@@ -188,11 +183,9 @@ pub const guards = [_]FrontierGuard{
             "tests/search_bench_cases/empty_pool_witness_probe.auf",
         .mode = "depth",
     },
-    // Depth guards for the success transposition memo (`generate.zig`
-    // `Driver.concrete_ok`). `branch_converge` and `fan_in` are the convergent
-    // (DAG-shaped) additive proofs whose shared subgoals the memo collapses;
-    // without it they need ~40× the node/fuel budget. The memo keys subgoals
-    // by an ACUI-canonical form, so commuted-context subgoals share a slot too.
+    // Depth guards for convergent proofs. `branch_converge` and `fan_in` are
+    // the convergent (DAG-shaped) additive proofs whose shared subgoals a
+    // success memo collapses, commuted-context subgoals included.
     // They are genuinely deep (proof depth ≥ 9). These guards raise the
     // limits *only* for these two lines, pinning them
     // FULL as the memo's regression check (breadth finds them through the pool
@@ -404,14 +397,9 @@ pub const guards = [_]FrontierGuard{
         .mode = "depth",
         .max_k = 1,
     },
-    // Sub-goal `@auto trigger` re-seeding (task #512 piece 1,
-    // `generate.zig` `Reseed`): the k=7 cut leaves an `or_elim` whose
-    // branch member `cb_g_branch …` is a disjunct of a derived line, not a
-    // subterm of the goal, so only a harvest at the case-split sub-goal
-    // (which names the eigenvariable `y`) yields the `ax` seed its
-    // `and_elim_r` minor needs. 6/8 before, FULL with it; trips if the
-    // sub-goal harvest, its free-variable gate, or the scoped extension
-    // pool regresses. Capped at k=5, the frontier, for the core budget
+    // A cut whose `or_elim` branch member `cb_g_branch …` is a disjunct of a
+    // derived line, not a subterm of the goal (added for sub-goal `@auto
+    // trigger` re-seeding, task #512). Capped at k=5, the frontier, for the core budget
     // spend described at `lt_trans_ax`, so this no longer reaches the k=7
     // cut. The k=4 and k=5 cuts take 3.3G since the core passes open cuts
     // through rules and retries a premise no fact closes first when the

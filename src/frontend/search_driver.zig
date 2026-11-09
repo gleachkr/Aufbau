@@ -32,29 +32,19 @@ pub const Edit = struct {
     text: []const u8,
 };
 
-pub const RuleTally = struct {
-    name: []const u8,
-    attempts: usize,
-    accepted: usize,
-    rejected: usize,
-};
-
 /// What a marker's search cost.
 pub const Cost = struct {
-    /// The weighted work ticks of `auto?` generation
+    /// The weighted work ticks of an `auto?` search
     /// (`Search.weightedTicks`), which the per-call budget charges. Unlike
     /// wall time they repeat from run to run.
     ticks: u64 = 0,
     /// Rule applications validated.
     candidates: usize = 0,
     wall_ns: u64 = 0,
-    /// The generation cell that found the proof, or the last one started
-    /// on a miss: its depth and its 1-based phase (`Search.phaseName`).
-    /// Both 0 when generation did not run.
+    /// Whether the search core ran on an `auto?` goal, and the depth it
+    /// found the proof at, or the last one it started on a miss.
+    searched: bool = false,
     depth: usize = 0,
-    phase: usize = 0,
-    /// The rules with the most validation attempts, most first.
-    rules: []const RuleTally = &.{},
     /// Suggestions the binding oracle failed to trim
     /// (`SearchCounters.untrimmed`); any is an oracle gap.
     untrimmed: u32 = 0,
@@ -143,10 +133,6 @@ pub const Options = struct {
     retries: usize = 0,
     /// `auto?` parameters for every marker that does not set them itself.
     params: []const ProofScript.SearchParam = &.{},
-    /// Run the search core (`GenerateOptions.core`).
-    core: bool = true,
-    /// Run the generation ladder after it (`GenerateOptions.ladder`).
-    ladder: bool = false,
 };
 
 pub const Result = struct {
@@ -160,9 +146,6 @@ pub const Result = struct {
         self.* = undefined;
     }
 };
-
-/// How many of the most-tried rules `Cost.rules` lists.
-const max_rules = 5;
 
 const search_options: Search.SourceSuggestionOptions = .{
     // The editor's settings: one proof for `exact?`/`auto?`/`conversion?`,
@@ -186,8 +169,6 @@ pub fn run(
     // A marker's own parameters are applied over these by the search.
     var marker_options = search_options;
     Search.tunables.applySearchParams(&marker_options.generate, options.params);
-    marker_options.generate.core = options.core;
-    marker_options.generate.ladder = options.ladder;
 
     var markers = std.ArrayListUnmanaged(Marker).empty;
     // The found markers whose lines may have holes: where each proof went
@@ -370,12 +351,9 @@ fn searchMarker(
         .miss => .missed,
         .budget_exhausted => .cut_short,
     };
-    marker.cost = try costOf(out, &counters);
+    marker.cost = costOf(&counters);
     if (search.status_detail) |detail| {
-        // `cost.rules` lists the most-tried rules, so drop the sentence
-        // that names them.
-        const kept = Search.statusDetailWithoutRules(detail);
-        if (kept.len != 0) marker.detail = try out.dupe(u8, kept);
+        if (detail.len != 0) marker.detail = try out.dupe(u8, detail);
     }
     var spans: Spans = .{};
     if (search.retry) |retry| {
@@ -448,33 +426,9 @@ const FoundAt = struct {
     growth: isize,
 };
 
-fn costOf(out: std.mem.Allocator, counters: *const Search.SearchCounters) !Cost {
-    const tallies = counters.rule_attempt_diagnostics[0..counters.rule_attempt_diagnostics_len];
-    var order_buf: [counters.rule_attempt_diagnostics.len]usize = undefined;
-    const order = order_buf[0..tallies.len];
-    for (order, 0..) |*index, i| index.* = i;
-    std.mem.sort(usize, order, tallies, struct {
-        fn moreAttempts(
-            context: []const Search.RuleAttemptDiagnostic,
-            a: usize,
-            b: usize,
-        ) bool {
-            return context[a].attempts > context[b].attempts;
-        }
-    }.moreAttempts);
-    const rules = try out.alloc(RuleTally, @min(order.len, max_rules));
-    for (rules, order[0..rules.len]) |*rule, index| {
-        const tally = &tallies[index];
-        rule.* = .{
-            .name = try out.dupe(u8, tally.rule_name.slice()),
-            .attempts = tally.attempts,
-            .accepted = tally.accepted,
-            .rejected = tally.rejected,
-        };
-    }
-    const generated = counters.gen_last_phase != 0;
+fn costOf(counters: *const Search.SearchCounters) Cost {
     return .{
-        .ticks = if (generated) Search.weightedTicks(
+        .ticks = if (counters.core_ran) Search.weightedTicks(
             counters.gen_work_ticks,
             counters.gen_sym_ticks,
             counters.gen_walk_ticks,
@@ -483,9 +437,8 @@ fn costOf(out: std.mem.Allocator, counters: *const Search.SearchCounters) !Cost 
         ) else 0,
         .candidates = counters.full_try_candidate_calls,
         .wall_ns = counters.cold_setup_ns + counters.warm_search_ns,
+        .searched = counters.core_ran,
         .depth = counters.gen_last_depth,
-        .phase = counters.gen_last_phase,
-        .rules = rules,
         .untrimmed = counters.untrimmed,
     };
 }

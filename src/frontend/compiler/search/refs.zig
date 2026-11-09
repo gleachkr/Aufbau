@@ -100,15 +100,3 @@ fn refNameLessThan(lhs: ProofScript.Ref, rhs: ProofScript.Ref) bool {
         .application => false,
     };
 }
-
-pub fn rankReferenceIndices(base: usize, indices: []const usize) usize {
-    if (base == 0) return 0;
-    var rank: usize = 0;
-    for (indices) |idx| {
-        rank = std.math.mul(usize, rank, base) catch
-            std.math.maxInt(usize);
-        rank = std.math.add(usize, rank, idx) catch
-            std.math.maxInt(usize);
-    }
-    return rank;
-}

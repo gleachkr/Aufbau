@@ -13,25 +13,6 @@ const Context = types.Context;
 const AttemptOptions = types.AttemptOptions;
 const NameExprMap = types.NameExprMap;
 
-/// `validateSelectedRefs`' explicit-binding retry guard: an assembly that
-/// fails with one of these errors is NOT a terminal reject — the caller
-/// retries it with every resolved binding rendered and may succeed. Whether
-/// that retry adds a binding depends on the candidate, not on the
-/// application, so the rendered bindings do not decide it here. Such rejects
-/// must not be memoized (see `tryCandidate`), unless the attempt is the retry
-/// itself (`AttemptOptions.final_attempt`). The UnifyMismatch arm's view/meta
-/// scoping lives with the caller and arrives via
-/// `AttemptOptions.unify_retry_eligible`.
-pub fn retryEligibleReject(
-    err: anyerror,
-    goal: Goal,
-    unify_retry_eligible: bool,
-) bool {
-    return err == error.MissingBinderAssignment or
-        (err == error.HypothesisMismatch and goal == .implicit_whole_conclusion) or
-        (err == error.UnifyMismatch and unify_retry_eligible);
-}
-
 /// A successful non-committing attempt. It BORROWS the probed theorem:
 /// `theorem` is a copy-on-write clone layered over the caller's theorem, so
 /// the probe must be deinitialized before that theorem is mutated, moved, or
@@ -156,32 +137,6 @@ fn tryCandidate(
     const allocator = context.allocator;
     const saved_diag = compiler.getDiagnostic();
 
-    // Lever A: cross-phase reject-verdict memo. The verdict is a pure function
-    // of (application assembly, goal, fixed base theorem); a rejected assembly
-    // rejects identically in every later phase. In measurement mode we only
-    // observe (record rejects); when `skip_enabled` we also short-circuit a
-    // known-rejecting assembly before the expensive re-derivation.
-    //
-    // Holey goals are excluded: their signature would key on a raw `*const Expr`
-    // address (`applicationSignature`), which is ABA-unstable across phases, so a
-    // freed-and-reused holey goal could alias a stale reject. Concrete and
-    // implicit-whole-conclusion goals key on scope-stable canonical goal content
-    // (`hashCanonicalContent`).
-    const verdict_memo: ?*types.VerdictMemo = switch (goal) {
-        .holey => null,
-        else => options.runtime.verdict_memo,
-    };
-    const verdict_sig: u64 = if (verdict_memo != null)
-        types.applicationSignature(theorem, application, goal)
-    else
-        0;
-    if (verdict_memo) |m| {
-        if (m.skip_enabled and m.rejectedBefore(verdict_sig)) {
-            m.skips += 1;
-            return error.MemoizedReject;
-        }
-    }
-
     // Timers are diagnostics, gated by `collect` so production (whose counters
     // block exists only for the result's status flags) does not pay clock reads
     // per candidate.
@@ -234,23 +189,6 @@ fn tryCandidate(
         if (collect) {
             if (options.counters) |c| {
                 c.tc_apply_ns += @intCast(@max(0, timer.nanoTimestamp() - apply_start));
-            }
-        }
-        // A checker rejection is a monotone verdict for THIS assembly — but only
-        // a TERMINAL one. An assembly that fails with a retry-eligible error is
-        // not terminal: `validateSelectedRefs` retries it with more explicitly
-        // rendered bindings and can SUCCEED, so memoizing the reject would make
-        // a later re-encounter short-circuit to `error.MemoizedReject` and skip
-        // that retry, losing a winnable proof.
-        // Skip what the caller's retry guard retries, and never memoize OOM
-        // (a transient resource error, not a verdict). The retry itself is
-        // terminal.
-        if (verdict_memo) |m| {
-            if (err != error.OutOfMemory and
-                (options.final_attempt or
-                    !retryEligibleReject(err, goal, options.unify_retry_eligible)))
-            {
-                m.recordReject(verdict_sig);
             }
         }
         CheckedIr.rollbackToMark(allocator, &scratch_checked, checked_mark);

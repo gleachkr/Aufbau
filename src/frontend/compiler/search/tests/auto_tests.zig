@@ -3,8 +3,6 @@ const std = helpers.std;
 const types = helpers.types;
 const def_match = helpers.def_match;
 const acui = helpers.acui;
-const split = helpers.split;
-const backtrack = helpers.backtrack;
 const TemplateExpr = helpers.TemplateExpr;
 const ExprId = helpers.ExprId;
 const TheoremContext = helpers.TheoremContext;
@@ -14,7 +12,6 @@ const DiagnosticSink = helpers.DiagnosticSink;
 const Goal = helpers.Goal;
 const Context = helpers.Context;
 const apply = helpers.apply;
-const exact = helpers.exact;
 const fixtureFor = helpers.fixtureFor;
 const parseGoal = helpers.parseGoal;
 const readProofCase = helpers.readProofCase;
@@ -22,7 +19,6 @@ const expectTimingCounter = helpers.expectTimingCounter;
 const ContextHarness = helpers.ContextHarness;
 const auto_chain_mm0 = helpers.auto_chain_mm0;
 const auto_inline_mm0 = helpers.auto_inline_mm0;
-const GeneratedConclusionHookCtx = helpers.GeneratedConclusionHookCtx;
 const suggestionsAtNeedle = helpers.suggestionsAtNeedle;
 const expectOffered = helpers.expectOffered;
 const ruleArgIndex = helpers.ruleArgIndex;
@@ -59,7 +55,7 @@ test "auto generates a depth-1 inline chain" {
 
     try expectOffered(suggestions.items, &.{"pq [p []]"});
     // Generation found it, not the direct exact pass.
-    try std.testing.expect(counters.gen_last_phase != 0);
+    try std.testing.expect(counters.core_ran);
 }
 
 /// Whether `T` holds no pointer anywhere in its layout (through optionals,
@@ -87,10 +83,9 @@ fn holdsNoPointers(comptime T: type) bool {
 }
 
 test "search counters are value-only statistics" {
-    // The memos and the prune policy travel in `SearchRuntime`, threaded by
-    // value beside the counters sink, so a counters block may be reused across
-    // calls or omitted without changing what the search does. Pin that no
-    // borrowed pointer or policy switch creeps back onto the sink.
+    // A counters block may be reused across calls or omitted without
+    // changing what the search does. Pin that no borrowed pointer or policy
+    // switch creeps onto the sink.
     comptime {
         if (!holdsNoPointers(types.SearchCounters)) {
             @compileError("SearchCounters must hold no pointers");
@@ -98,230 +93,10 @@ test "search counters are value-only statistics" {
         for (std.meta.fieldNames(types.SearchCounters)) |field_name| {
             if (std.mem.endsWith(u8, field_name, "_enabled")) {
                 @compileError("SearchCounters." ++ field_name ++
-                    " is a policy switch; policy belongs on SearchRuntime");
+                    " is a policy switch; policy belongs on GenerateOptions");
             }
         }
     }
-}
-
-// The propositional natural-deduction fragment of `nd_minimal` (ACUI
-// contexts, `ax`, the `∨` rules). On `p ⊢ q ∨ p` the re-pin
-// conclusion-plausibility check (Lever B) refutes a candidate the plain check
-// let through, so whether the re-pin PRUNE is armed is observable here: this
-// is the fixture that separates "policy from this call's options" from
-// "policy left behind on a reused observer".
-const nd_or_mm0 =
-    \\delimiter $ ( ) { } , $;
-    \\strict provable sort wff;
-    \\sort ctx;
-    \\term im (p q: wff): wff;
-    \\infixr im: $→$ prec 25;
-    \\term or (p q: wff): wff;
-    \\infixr or: $∨$ prec 28;
-    \\term bi (p q: wff): wff;
-    \\infixr bi: $↔$ prec 20;
-    \\term ctx_eq (G H: ctx): wff;
-    \\term emp: ctx;
-    \\notation emp: ctx = ($_$:max);
-    \\--| @acui ctx_assoc ctx_comm emp ctx_idem
-    \\term join (G H: ctx): ctx;
-    \\infixl join: $,$ prec 5;
-    \\term hyp (p: wff): ctx;
-    \\coercion hyp: wff > ctx;
-    \\term nd (G: ctx) (p: wff): wff;
-    \\infixl nd: $⊢$ prec 0;
-    \\--| @relation wff bi biid bitr bisym mpbi
-    \\axiom biid (p: wff): $ p ↔ p $;
-    \\axiom bitr (p q r: wff): $ p ↔ q $ > $ q ↔ r $ > $ p ↔ r $;
-    \\axiom bisym (p q: wff): $ p ↔ q $ > $ q ↔ p $;
-    \\axiom mpbi (p q: wff): $ p ↔ q $ > $ p $ > $ q $;
-    \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
-    \\axiom ctx_refl (G: ctx): $ ctx_eq G G $;
-    \\axiom ctx_trans (G H K: ctx):
-    \\  $ ctx_eq G H $ > $ ctx_eq H K $ > $ ctx_eq G K $;
-    \\axiom ctx_sym (G H: ctx): $ ctx_eq G H $ > $ ctx_eq H G $;
-    \\axiom ctx_assoc (G H K: ctx):
-    \\  $ ctx_eq ((G , H) , K) (G , (H , K)) $;
-    \\axiom ctx_comm (G H: ctx): $ ctx_eq (G , H) (H , G) $;
-    \\axiom ctx_idem (G: ctx): $ ctx_eq (G , G) G $;
-    \\axiom ctx_unit (G: ctx): $ ctx_eq (emp , G) G $;
-    \\--| @congr
-    \\axiom join_congr (G1 G2 H1 H2: ctx):
-    \\  $ ctx_eq G1 G2 $ > $ ctx_eq H1 H2 $ >
-    \\  $ ctx_eq (G1 , H1) (G2 , H2) $;
-    \\--| @congr
-    \\axiom hyp_congr (p q: wff): $ p ↔ q $ > $ ctx_eq (hyp p) (hyp q) $;
-    \\--| @congr
-    \\axiom nd_congr (G H: ctx) (p q: wff):
-    \\  $ ctx_eq G H $ > $ p ↔ q $ > $ (G ⊢ p) ↔ (H ⊢ q) $;
-    \\--| @auto trigger (hyp p)
-    \\--| @auto trigger (im p _)
-    \\--| @auto trigger (or p _)
-    \\--| @auto trigger (or _ p)
-    \\axiom ax (G: ctx) (p: wff): $ G , p ⊢ p $;
-    \\--| @auto backward
-    \\axiom imp_intro (G: ctx) (p q: wff):
-    \\  $ G , p ⊢ q $ > $ G ⊢ p → q $;
-    \\--| @auto forward
-    \\axiom imp_elim (G H: ctx) (p q: wff):
-    \\  $ G ⊢ p → q $ > $ H ⊢ p $ > $ G , H ⊢ q $;
-    \\--| @auto backward
-    \\axiom or_intro_l (G: ctx) (p q: wff):
-    \\  $ G ⊢ p $ > $ G ⊢ p ∨ q $;
-    \\--| @auto backward
-    \\axiom or_intro_r (G: ctx) (p q: wff):
-    \\  $ G ⊢ q $ > $ G ⊢ p ∨ q $;
-    \\--| @auto forward
-    \\axiom or_elim (G H K: ctx) (p q r: wff):
-    \\  $ G ⊢ p ∨ q $ > $ H , p ⊢ r $ > $ K , q ⊢ r $ >
-    \\  $ G , H , K ⊢ r $;
-    \\theorem nd_or_comm_min (p q: wff): $ p ∨ q ⊢ q ∨ p $;
-;
-
-const nd_or_proof =
-    \\nd_or_comm_min
-    \\--------------
-    \\l1: $ p ∨ q ⊢ p ∨ q $ by ax
-    \\l2: $ p ⊢ p $ by ax
-    \\l3: $ p ⊢ q ∨ p $ by auto?
-;
-
-const NdPolicy = struct {
-    search_memo: bool = true,
-    deep_member_prune: bool = true,
-};
-
-fn ndOrSuggestions(
-    arena: *std.heap.ArenaAllocator,
-    counters: ?*types.SearchCounters,
-    policy: NdPolicy,
-) !types.SourceSuggestions {
-    // The policy is the generation ladder's, so the search core stays out.
-    return suggestionsAtNeedle(arena, nd_or_mm0, nd_or_proof, "auto?", .{
-        .counters = counters,
-        .generate = .{
-            .enabled = true,
-            .core = false,
-            .ladder = true,
-            .search_memo = policy.search_memo,
-            .deep_member_prune = policy.deep_member_prune,
-        },
-    });
-}
-
-/// The work a call did, in the accumulating counters the policy can change.
-const NdWork = struct {
-    tries: usize,
-    rejects: usize,
-    repin_prunes: usize,
-    deep_member_prunes: usize,
-
-    fn of(c: *const types.SearchCounters) NdWork {
-        return .{
-            .tries = c.full_try_candidate_calls,
-            .rejects = c.rejected_candidates_after_validation,
-            .repin_prunes = c.repin_prunes,
-            .deep_member_prunes = c.deep_member_prunes,
-        };
-    }
-
-    fn since(after: NdWork, before: NdWork) NdWork {
-        return .{
-            .tries = after.tries - before.tries,
-            .rejects = after.rejects - before.rejects,
-            .repin_prunes = after.repin_prunes - before.repin_prunes,
-            .deep_member_prunes = after.deep_member_prunes - before.deep_member_prunes,
-        };
-    }
-};
-
-fn expectSameSuggestions(
-    expected: types.SourceSuggestions,
-    actual: types.SourceSuggestions,
-) !void {
-    try std.testing.expectEqual(expected.items.len, actual.items.len);
-    for (expected.items, actual.items) |e, a| {
-        try std.testing.expectEqualStrings(e.replacement, a.replacement);
-    }
-}
-
-/// One fresh, collecting observer per policy: the reference for each.
-fn ndFresh(
-    arena: *std.heap.ArenaAllocator,
-    policy: NdPolicy,
-) !struct { suggestions: types.SourceSuggestions, work: NdWork, skips: usize } {
-    var counters = types.SearchCounters{ .collect = true };
-    const suggestions = try ndOrSuggestions(arena, &counters, policy);
-    return .{
-        .suggestions = suggestions,
-        .work = NdWork.of(&counters),
-        .skips = counters.verdict_skips,
-    };
-}
-
-test "a reused counters block carries no search policy across calls" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const memo_on = try ndFresh(&arena, .{});
-    const memo_off = try ndFresh(&arena, .{ .search_memo = false });
-    const deep_off = try ndFresh(&arena, .{ .deep_member_prune = false });
-
-    // The fixture must actually exercise the re-pin check (it is what the
-    // stale flag used to leave armed), and the search must do real work.
-    var probe = types.SearchCounters{ .collect = true };
-    var probe_suggestions = try ndOrSuggestions(&arena, &probe, .{});
-    defer probe_suggestions.deinit();
-    try std.testing.expect(probe.repin_would_prune > 0);
-    try std.testing.expect(probe.full_try_candidate_calls > 0);
-    try std.testing.expect(memo_on.suggestions.items.len > 0);
-    try std.testing.expectEqualStrings(
-        "or_intro_r [l2]",
-        memo_on.suggestions.items[0].replacement,
-    );
-    // The policy is completeness-neutral: every setting suggests the same.
-    try expectSameSuggestions(memo_on.suggestions, memo_off.suggestions);
-    try expectSameSuggestions(memo_on.suggestions, deep_off.suggestions);
-
-    // Policy toggled on a REUSED observer, in both orders and for both
-    // switches: each call must match the fresh-observer reference for its own
-    // options, never the previous call's.
-    const orders = [_][2]NdPolicy{
-        .{ .{}, .{ .search_memo = false } },
-        .{ .{ .search_memo = false }, .{} },
-        .{ .{}, .{ .deep_member_prune = false } },
-        .{ .{ .deep_member_prune = false }, .{} },
-    };
-    for (orders) |order| {
-        var reused = types.SearchCounters{ .collect = true };
-        for (order) |policy| {
-            const before = NdWork.of(&reused);
-            var suggestions = try ndOrSuggestions(&arena, &reused, policy);
-            defer suggestions.deinit();
-            const reference = if (!policy.search_memo)
-                memo_off
-            else if (!policy.deep_member_prune)
-                deep_off
-            else
-                memo_on;
-            try expectSameSuggestions(reference.suggestions, suggestions);
-            try std.testing.expectEqual(
-                reference.work,
-                NdWork.since(NdWork.of(&reused), before),
-            );
-            try std.testing.expectEqual(reference.skips, reused.verdict_skips);
-        }
-    }
-
-    // A non-collecting observer, and no observer at all, search identically.
-    var quiet = types.SearchCounters{};
-    var quiet_suggestions = try ndOrSuggestions(&arena, &quiet, .{});
-    defer quiet_suggestions.deinit();
-    try expectSameSuggestions(memo_on.suggestions, quiet_suggestions);
-    try std.testing.expectEqual(memo_on.work.tries, quiet.full_try_candidate_calls);
-    var absent_suggestions = try ndOrSuggestions(&arena, null, .{});
-    defer absent_suggestions.deinit();
-    try expectSameSuggestions(memo_on.suggestions, absent_suggestions);
 }
 
 fn autoInlineSuggestions(
@@ -364,7 +139,35 @@ test "auto generates a depth-1 chain inside a slot" {
     try std.testing.expect(suggestions.target_span.?.start <= auto_offset);
     try std.testing.expect(suggestions.target_span.?.end >= auto_offset);
     // Generation actually fired (this is not a plain direct match).
-    try std.testing.expect(counters.gen_last_phase != 0);
+    try std.testing.expect(counters.core_ran);
+}
+
+test "inline auto generates a longer chain in a slot" {
+    // Outer rule `rx` needs a proof of `R` in its slot. `R` is only reachable by
+    // a two-level chain `qr [pq [p]]`, so the slot must recurse twice, producing
+    // a strictly longer inline application than the depth-1 case.
+    const proof_src =
+        \\tX
+        \\----
+        \\l1: $ X $ by rx [auto?]
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Without the earlier theorem `t`, which would close the slot at once.
+    const mm0_src = try std.mem.replaceOwned(
+        u8,
+        arena.allocator(),
+        auto_inline_mm0,
+        "theorem t: $ R $;\n",
+        "",
+    );
+    try std.testing.expect(mm0_src.len < auto_inline_mm0.len);
+    var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
+        .generate = .{ .enabled = true },
+    });
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"qr [pq [p []]]"});
 }
 
 test "inline auto still resolves a slot from a direct ref without generating" {
@@ -409,62 +212,6 @@ test "inline auto reports a miss on an unprovable slot" {
     defer suggestions.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
-}
-
-test "inline auto generates a longer chain in a slot" {
-    // Outer rule `rx` needs a proof of `R` in its slot. `R` is only reachable by
-    // a two-level chain `qr [pq [p]]`, so the slot must recurse twice, producing
-    // a strictly longer inline application than the depth-1 case.
-    const proof_src =
-        \\tX
-        \\----
-        \\l1: $ X $ by rx [auto?]
-    ;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var counters = types.SearchCounters{};
-    // The ladder's slot recursion, without the earlier theorem `t` that
-    // would close the slot at once.
-    const mm0_src = try std.mem.replaceOwned(
-        u8,
-        arena.allocator(),
-        auto_inline_mm0,
-        "theorem t: $ R $;\n",
-        "",
-    );
-    try std.testing.expect(mm0_src.len < auto_inline_mm0.len);
-    var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
-        .counters = &counters,
-        .generate = .{ .enabled = true, .core = false, .ladder = true },
-    });
-    defer suggestions.deinit();
-
-    try expectOffered(suggestions.items, &.{"qr [pq [p []]]"});
-    try std.testing.expect(counters.generated_chain_attempts > 0);
-}
-
-test "inline auto grounds an existential meta inside a slot" {
-    // The slot goal `R` (concrete) is provable by `r2 (a: wff): a > Q > R`, whose
-    // first argument `a` is NOT pinned by the conclusion. Generation opens `a` as
-    // an existential meta and grounds it from the theorem hypothesis `#1` (= P),
-    // then fills the concrete sibling `Q` with `pq [#1]` — exercising the same
-    // metavar-grounding path `auto_open_mm0` covers at top level, now in a slot.
-    const proof_src =
-        \\tPX
-        \\----
-        \\l1: $ X $ by rx [auto?]
-    ;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var counters = types.SearchCounters{};
-    // The ladder's open slot (`r2`'s `a`); the search core leaves `r2` out.
-    var suggestions = try autoInlineSuggestions(&arena, proof_src, "auto?", .{
-        .counters = &counters,
-        .generate = .{ .enabled = true, .core = false, .ladder = true },
-    });
-    defer suggestions.deinit();
-
-    try expectOffered(suggestions.items, &.{"r2 [#1, pq [#1]]"});
 }
 
 // Real Zermelo natural-deduction theory: `,` (the sequent context) is a full
@@ -517,62 +264,6 @@ test "inline exact resolves either and_intro premise slot (ACUI context split)" 
     defer second.deinit();
     try std.testing.expectEqual(types.SearchStatus.found, second.status);
     try expectOffered(second.items, &.{"l2"});
-}
-
-fn expectGeneratedConclusionGate(wrong_conclusion: bool) !usize {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-    var fixture = try fixtureFor(allocator, auto_chain_mm0, "t");
-    var sink = DiagnosticSink.init(auto_chain_mm0, "");
-    var compiler = CompilerContext.init(auto_chain_mm0, "", .none, &sink);
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    try theorem.seedAssertion(fixture.assertion);
-    var theorem_vars = try Check.buildTheoremVarMap(
-        allocator,
-        fixture.assertion,
-    );
-    defer theorem_vars.deinit();
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-    const goal = try parseGoal(&fixture, &theorem, &theorem_vars, "Q");
-    const wrong_expr = try parseGoal(&fixture, &theorem, &theorem_vars, "Q");
-    var hook_ctx = GeneratedConclusionHookCtx{
-        .wrong_conclusion = wrong_conclusion,
-        .wrong_expr = switch (wrong_expr) {
-            .concrete => |expr| expr,
-            else => return error.ExpectedConcreteGoal,
-        },
-    };
-    const hook = types.GenerationHook{
-        .ctx = &hook_ctx,
-        .solveFn = GeneratedConclusionHookCtx.solve,
-        .allow_split = false,
-    };
-    var results = try exact(
-        &compiler,
-        &context,
-        goal,
-        &theorem,
-        &theorem_vars,
-        .{ .max_results = 1, .generator = &hook },
-    );
-    defer results.deinit();
-    try std.testing.expect(hook_ctx.calls > 0);
-    return results.candidates.len;
-}
-
-test "generated child conclusion is checked against the target" {
-    try std.testing.expectEqual(
-        @as(usize, 1),
-        try expectGeneratedConclusionGate(false),
-    );
-    try std.testing.expectEqual(
-        @as(usize, 0),
-        try expectGeneratedConclusionGate(true),
-    );
 }
 
 // `red` rewrites `f p` to `g p`, but `feq` has no `@congr`, so the checker
@@ -906,35 +597,6 @@ test "auto depth cap stops escalation" {
     try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
 }
 
-test "auto global fuel floor stops the search and reports exhaustion" {
-    const proof_src =
-        \\t
-        \\----
-        \\l1: $ R $ by auto?
-    ;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var counters = types.SearchCounters{};
-    // The two-level chain `qr [pq [p]]` needs several validations; a fuel of 1
-    // is spent on the first `tryCandidate`, so the next one trips the floor.
-    // Fuel bounds the ladder; the search core, which validates once, is off.
-    var suggestions = try suggestionsAtNeedle(
-        &arena,
-        auto_depth2_mm0,
-        proof_src,
-        "auto?",
-        .{ .counters = &counters, .generate = .{ .enabled = true, .fuel = 1, .core = false, .ladder = true } },
-    );
-    defer suggestions.deinit();
-    // Budget exhaustion is reported distinctly, and surfaces no suggestion.
-    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
-    try std.testing.expect(counters.phase_fuel_exhausted);
-    try std.testing.expectEqual(
-        types.SearchStatus.budget_exhausted,
-        suggestions.status,
-    );
-}
-
 test "auto global budget stop is not reported as a phase fuel-out" {
     const proof_src =
         \\t
@@ -1125,64 +787,6 @@ test "the @auto eager cut still tries an eager rule that splits the context" {
     try expectOffered(suggestions.items, &.{"mix [#1, ror [#2]]"});
 }
 
-/// nd_fol's rules (the focus probe fixture without its goal) with
-/// `imp_left`'s `@auto focus` line replaced by `imp_left_focus`, searched on
-/// a two-step `imp_left` chain at depth `max_depth`: one `imp_left` decides
-/// on `P C → (P D → P E)`, the second decomposes what the first left.
-fn focusChainSuggestions(
-    arena: *std.heap.ArenaAllocator,
-    imp_left_focus: []const u8,
-    max_depth: usize,
-) !types.SourceSuggestions {
-    const allocator = arena.allocator();
-    const fixture = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/focus_chain_probe.mm0", allocator, .unlimited);
-    const goal_at = std.mem.indexOf(u8, fixture, "-- Problem signature") orelse return error.MissingGoal;
-    const line = "--| @auto focus $ a → b $ : $ a $ $ b $\n";
-    const at = std.mem.indexOf(u8, fixture[0..goal_at], line) orelse return error.MissingFocusLine;
-    const mm0_src = try std.mem.concat(allocator, u8, &.{
-        fixture[0..at],
-        imp_left_focus,
-        fixture[at + line.len .. goal_at],
-        "theorem chain: $ (P C → (P D → P E)) , P C , P D ⊢ P E $;\n",
-    });
-    const proof_src =
-        \\chain
-        \\-----
-        \\l1: $ (P C → (P D → P E)) , P C , P D ⊢ P E $ by auto?
-    ;
-    return suggestionsAtNeedle(arena, mm0_src, proof_src, "auto?", .{
-        .generate = .{ .enabled = true, .max_depth = max_depth, .ladder = true },
-    });
-}
-
-test "an @auto focus chain pays only for its decide" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const focus = "--| @auto focus $ a → b $ : $ a $ $ b $\n";
-    // The second `imp_left` continues the first's focus on `P D → P E`, so
-    // the chain fits depth 1.
-    var focused = try focusChainSuggestions(&arena, focus, 1);
-    defer focused.deinit();
-    try std.testing.expect(focused.items.len > 0);
-    // Unannotated, each `imp_left` is a step of its own.
-    var plain = try focusChainSuggestions(&arena, "", 1);
-    defer plain.deinit();
-    try std.testing.expectEqual(@as(usize, 0), plain.items.len);
-    var plain_deeper = try focusChainSuggestions(&arena, "", 2);
-    defer plain_deeper.deinit();
-    try std.testing.expect(plain_deeper.items.len > 0);
-}
-
-test "an @auto focus premise marked `_` releases focus" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    // With the second premise released, the second `imp_left` is a decide
-    // of its own again.
-    var released = try focusChainSuggestions(&arena, "--| @auto focus $ a → b $ : $ a $ _\n", 1);
-    defer released.deinit();
-    try std.testing.expectEqual(@as(usize, 0), released.items.len);
-}
-
 test "an @auto focus failure does not cover the same goal unfocused" {
     // `imp_left` on the first member leaves `… ⊢ A | B` focused, where only
     // `or_r1`/`or_r2` apply and both fail. The second member's `&` releases
@@ -1256,41 +860,7 @@ test "an @auto focus failure does not cover the same goal unfocused" {
     try std.testing.expect(suggestions.items.len > 0);
 }
 
-test "auto stack guard stops the search and reports exhaustion" {
-    const proof_src =
-        \\t
-        \\----
-        \\l1: $ R $ by auto?
-    ;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var counters = types.SearchCounters{};
-    // A 1-byte guard trips at the first recursive sub-solve: the honest-miss
-    // degradation path a real overflow-threatening descent would take.
-    var suggestions = try suggestionsAtNeedle(
-        &arena,
-        auto_depth2_mm0,
-        proof_src,
-        "auto?",
-        .{
-            .counters = &counters,
-            .generate = .{ .enabled = true, .ladder = true, .stack_guard_bytes = 1 },
-        },
-    );
-    defer suggestions.deinit();
-    // The guard is reported like a budget exhaustion, never a hard error.
-    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
-    try std.testing.expect(counters.stack_guard_exhausted);
-    // It ends the whole ladder at the cell that tripped: no later phase
-    // (which would only walk back into the same wall) runs after it.
-    try std.testing.expectEqual(@as(usize, 1), counters.gen_last_phase);
-    try std.testing.expectEqual(
-        types.SearchStatus.budget_exhausted,
-        suggestions.status,
-    );
-}
-
-test "auto with ample fuel finds the chain without tripping the floor" {
+test "auto finds the chain without tripping the stack guard" {
     const proof_src =
         \\t
         \\----
@@ -1309,10 +879,9 @@ test "auto with ample fuel finds the chain without tripping the floor" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"qr [pq [p []]]"});
-    // The default fuel floor is generous; a normal proof never trips it.
-    try std.testing.expect(!counters.phase_fuel_exhausted);
-    // Same for the default call-stack guard.
-    try std.testing.expect(!counters.stack_guard_exhausted);
+    // The default call-stack guard is generous; a normal proof never trips
+    // it.
+    try std.testing.expect(counters.core_end == null);
     try std.testing.expectEqual(types.SearchStatus.found, suggestions.status);
 }
 
@@ -1731,342 +1300,6 @@ test "extractHypPartialBindings reads only arguments the head determines" {
     try std.testing.expectEqual(@as(?ExprId, null), bindings[1]);
 }
 
-test "recoverDefiniteMismatch compares only arguments the head determines" {
-    // `kst` drops its second argument, so `kst a0 c0` can recover from the
-    // pattern `kst a0 d0` (both unfold to `a0`); only a clash in the first
-    // argument is definite.
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\sort obj;
-        \\term pr (a: obj): wff;
-        \\term a0: obj;
-        \\term c0: obj;
-        \\term d0: obj;
-        \\term h0: obj;
-        \\def kst (a b: obj): obj = $ a $;
-        \\theorem t: $ pr a0 $;
-    ;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var fixture = try fixtureFor(allocator, mm0_src, "t");
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    const names = &fixture.theory.env.term_names;
-    const a0 = try theorem.interner.internApp(names.get("a0").?, &.{});
-    const c0 = try theorem.interner.internApp(names.get("c0").?, &.{});
-    const d0 = try theorem.interner.internApp(names.get("d0").?, &.{});
-    const hole = try theorem.interner.internApp(names.get("h0").?, &.{});
-    const kst = names.get("kst").?;
-    const pr = names.get("pr").?;
-    const source = try theorem.interner.internApp(
-        pr,
-        &.{try theorem.interner.internApp(kst, &.{ a0, c0 })},
-    );
-    const dropped_differs = try theorem.interner.internApp(
-        pr,
-        &.{try theorem.interner.internApp(kst, &.{ a0, d0 })},
-    );
-    const kept_differs = try theorem.interner.internApp(
-        pr,
-        &.{try theorem.interner.internApp(kst, &.{ d0, c0 })},
-    );
-
-    try std.testing.expect(!def_match.recoverDefiniteMismatch(
-        &context,
-        &theorem,
-        source,
-        dropped_differs,
-        hole,
-    ));
-    try std.testing.expect(def_match.recoverDefiniteMismatch(
-        &context,
-        &theorem,
-        source,
-        kept_differs,
-        hole,
-    ));
-}
-
-test "templateDefiniteMismatch compares a binder-introducing def by its arguments" {
-    // `some` hides a bound variable behind its body, yet `some a ≡ some b`
-    // still forces `a ≡ b`: the dummy is fresh on both sides.
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\sort obj;
-        \\term pr (a b: obj): wff;
-        \\term all {x: obj} (p: wff x): wff;
-        \\term a0: obj;
-        \\term c0: obj;
-        \\def some (a: obj) {.y: obj}: wff = $ all y (pr y a) $;
-        \\theorem t: $ some a0 $;
-    ;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var fixture = try fixtureFor(allocator, mm0_src, "t");
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    const names = &fixture.theory.env.term_names;
-    const a0 = try theorem.interner.internApp(names.get("a0").?, &.{});
-    const c0 = try theorem.interner.internApp(names.get("c0").?, &.{});
-    const some = names.get("some").?;
-    const ref = try theorem.interner.internApp(some, &.{c0});
-
-    // Template `some binder0`.
-    const some_args = [_]TemplateExpr{.{ .binder = 0 }};
-    const template = TemplateExpr{ .app = .{ .term_id = some, .args = &some_args } };
-
-    const matching = [_]?ExprId{c0};
-    try std.testing.expect(!def_match.templateDefiniteMismatch(
-        &context,
-        &theorem,
-        template,
-        ref,
-        &matching,
-    ));
-    const clashing = [_]?ExprId{a0};
-    try std.testing.expect(def_match.templateDefiniteMismatch(
-        &context,
-        &theorem,
-        template,
-        ref,
-        &clashing,
-    ));
-}
-
-/// The canonicalizeAcui tests' theory: `join` is full ACUI, `bag` ACU,
-/// `seq` AU.
-const acui_subsets_mm0 =
-    \\delimiter $ ( ) , $;
-    \\strict provable sort wff;
-    \\sort ctx;
-    \\term ctx_eq (G H: ctx): wff;
-    \\infixl ctx_eq: $=$ prec 10;
-    \\term emp: ctx;
-    \\term bemp: ctx;
-    \\term semp: ctx;
-    \\--| @acui ctx_assoc ctx_comm emp ctx_idem
-    \\term join (G H: ctx): ctx;
-    \\--| @acui bag_assoc bag_comm bemp _
-    \\term bag (G H: ctx): ctx;
-    \\--| @acui seq_assoc _ semp _
-    \\term seq (G H: ctx): ctx;
-    \\term ca: ctx;
-    \\term cb: ctx;
-    \\term cc: ctx;
-    \\axiom ctx_assoc (G H K: ctx): $ G = G $;
-    \\axiom ctx_comm (G H: ctx): $ G = G $;
-    \\axiom ctx_idem (G: ctx): $ G = G $;
-    \\axiom bag_assoc (G H K: ctx): $ G = G $;
-    \\axiom bag_comm (G H: ctx): $ G = G $;
-    \\axiom seq_assoc (G H K: ctx): $ G = G $;
-    \\theorem t (G: ctx): $ G = G $;
-;
-
-test "canonicalizeAcui respects the registered combiner subset" {
-    // The success/failure memo keys (`generate.zig` `canonicalKey`) collapse
-    // ACUI-equal subgoals via `canonicalizeAcui`. It must collapse only the laws
-    // the *registered subset* declares: over-collision would let a sub-proof be
-    // reused for a genuinely-unequal goal (an unsound memo hit). Three combiners
-    // exercise the distinguishing subset cells: `join` is full ACUI; `bag` is ACU
-    // (commutative but NOT idempotent — sort, but keep duplicates); `seq` is AU
-    // (NOT commutative, not idempotent — keep order and duplicates).
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var fixture = try fixtureFor(allocator, acui_subsets_mm0, "t");
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-
-    const ti_join = fixture.theory.env.term_names.get("join").?;
-    const ti_bag = fixture.theory.env.term_names.get("bag").?;
-    const ti_seq = fixture.theory.env.term_names.get("seq").?;
-    const ti_emp = fixture.theory.env.term_names.get("emp").?;
-    const ti_bemp = fixture.theory.env.term_names.get("bemp").?;
-    const ti_semp = fixture.theory.env.term_names.get("semp").?;
-    const ti_ca = fixture.theory.env.term_names.get("ca").?;
-    const ti_cb = fixture.theory.env.term_names.get("cb").?;
-    const ti_cc = fixture.theory.env.term_names.get("cc").?;
-
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    const ca = try theorem.interner.internApp(ti_ca, &.{});
-    const cb = try theorem.interner.internApp(ti_cb, &.{});
-    const cc = try theorem.interner.internApp(ti_cc, &.{});
-    const emp = try theorem.interner.internApp(ti_emp, &.{});
-    const bemp = try theorem.interner.internApp(ti_bemp, &.{});
-    const semp = try theorem.interner.internApp(ti_semp, &.{});
-
-    const j = struct {
-        fn mk(t: *TheoremContext, head: u32, x: ExprId, y: ExprId) !ExprId {
-            return t.interner.internApp(head, &.{ x, y });
-        }
-    }.mk;
-    const canon = struct {
-        fn f(c: *const Context, t: *TheoremContext, e: ExprId) !ExprId {
-            return acui.canonicalizeAcui(c, t, e);
-        }
-    }.f;
-
-    // A bare atom canonicalizes to itself.
-    try std.testing.expectEqual(ca, try canon(&context, &theorem, ca));
-
-    // --- join: full ACUI ---
-    // C: order-variant regions collide.
-    try std.testing.expectEqual(
-        try canon(&context, &theorem, try j(&theorem, ti_join, ca, cb)),
-        try canon(&context, &theorem, try j(&theorem, ti_join, cb, ca)),
-    );
-    // A: re-association collides.
-    try std.testing.expectEqual(
-        try canon(&context, &theorem, try j(&theorem, ti_join, try j(&theorem, ti_join, ca, cb), cc)),
-        try canon(&context, &theorem, try j(&theorem, ti_join, ca, try j(&theorem, ti_join, cb, cc))),
-    );
-    // U: a unit member drops.
-    try std.testing.expectEqual(ca, try canon(&context, &theorem, try j(&theorem, ti_join, ca, emp)));
-    // I: a duplicate member collapses.
-    try std.testing.expectEqual(ca, try canon(&context, &theorem, try j(&theorem, ti_join, ca, ca)));
-
-    // --- bag: ACU (commutative, NOT idempotent) ---
-    // C: order-variants collide.
-    try std.testing.expectEqual(
-        try canon(&context, &theorem, try j(&theorem, ti_bag, ca, cb)),
-        try canon(&context, &theorem, try j(&theorem, ti_bag, cb, ca)),
-    );
-    // NOT idempotent: a duplicate must be KEPT (sorting must not imply dedup).
-    try std.testing.expect(
-        (try canon(&context, &theorem, try j(&theorem, ti_bag, ca, ca))) != ca,
-    );
-    // U still holds.
-    try std.testing.expectEqual(ca, try canon(&context, &theorem, try j(&theorem, ti_bag, ca, bemp)));
-
-    // --- seq: AU only (the soundness-critical negatives) ---
-    // NOT commutative: order-variants must stay DISTINCT.
-    try std.testing.expect(
-        (try canon(&context, &theorem, try j(&theorem, ti_seq, ca, cb))) !=
-            (try canon(&context, &theorem, try j(&theorem, ti_seq, cb, ca))),
-    );
-    // NOT idempotent: a duplicate must NOT collapse.
-    try std.testing.expect(
-        (try canon(&context, &theorem, try j(&theorem, ti_seq, ca, ca))) != ca,
-    );
-    // A still holds: re-association collides.
-    try std.testing.expectEqual(
-        try canon(&context, &theorem, try j(&theorem, ti_seq, try j(&theorem, ti_seq, ca, cb), cc)),
-        try canon(&context, &theorem, try j(&theorem, ti_seq, ca, try j(&theorem, ti_seq, cb, cc))),
-    );
-    // U still holds: the unit member drops.
-    try std.testing.expectEqual(ca, try canon(&context, &theorem, try j(&theorem, ti_seq, ca, semp)));
-
-    // --- U drops only the combiner's OWN unit ---
-    // The three combiners share the sort `ctx`, like ring `+` (unit `0`) and
-    // `*` (unit `1`): `bemp` is a real member of a `join`, as `x + 1` keeps its
-    // `1`.
-    const join_bemp = try j(&theorem, ti_join, ca, bemp);
-    try std.testing.expect((try canon(&context, &theorem, join_bemp)) != ca);
-    try std.testing.expectEqual(join_bemp, try acui.normalizeAcuiUnits(&context, &theorem, join_bemp));
-    // A member that rebuilds to the combiner's own unit still drops.
-    try std.testing.expectEqual(
-        ca,
-        try canon(&context, &theorem, try j(&theorem, ti_join, ca, try j(&theorem, ti_join, emp, emp))),
-    );
-}
-
-test "canonicalizeAcui orders members by content, not interning order" {
-    // Child searches intern into their own scopes, where the same members can
-    // carry different ids, and the memo keys built from the canonical form
-    // must still agree. Two theorems intern the parts of
-    // `join(ca, cb, cc, bag(?m, cc), bag(?n, cb))` in opposite orders, the
-    // metas included; both canonical forms must list the members alike.
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var fixture = try fixtureFor(allocator, acui_subsets_mm0, "t");
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-    const names = &fixture.theory.env.term_names;
-    const Terms = struct { join: u32, bag: u32, ca: u32, cb: u32, cc: u32 };
-    const terms = Terms{
-        .join = names.get("join").?,
-        .bag = names.get("bag").?,
-        .ca = names.get("ca").?,
-        .cb = names.get("cb").?,
-        .cc = names.get("cc").?,
-    };
-
-    const Build = struct {
-        fn goal(t: *TheoremContext, ti: Terms, reversed: bool) !ExprId {
-            var ca: ExprId = undefined;
-            var cb: ExprId = undefined;
-            var cc: ExprId = undefined;
-            var m: ExprId = undefined;
-            var n: ExprId = undefined;
-            var bag_m: ExprId = undefined;
-            var bag_n: ExprId = undefined;
-            if (!reversed) {
-                ca = try t.interner.internApp(ti.ca, &.{});
-                cb = try t.interner.internApp(ti.cb, &.{});
-                cc = try t.interner.internApp(ti.cc, &.{});
-                m = try t.addMetaPlaceholderResolved("ctx");
-                n = try t.addMetaPlaceholderResolved("ctx");
-                bag_m = try t.interner.internApp(ti.bag, &.{ m, cc });
-                bag_n = try t.interner.internApp(ti.bag, &.{ n, cb });
-            } else {
-                cc = try t.interner.internApp(ti.cc, &.{});
-                cb = try t.interner.internApp(ti.cb, &.{});
-                ca = try t.interner.internApp(ti.ca, &.{});
-                n = try t.addMetaPlaceholderResolved("ctx");
-                m = try t.addMetaPlaceholderResolved("ctx");
-                bag_n = try t.interner.internApp(ti.bag, &.{ n, cb });
-                bag_m = try t.interner.internApp(ti.bag, &.{ m, cc });
-            }
-            var acc = bag_n;
-            for ([_]ExprId{ bag_m, cc, cb, ca }) |member| {
-                acc = try t.interner.internApp(ti.join, &.{ member, acc });
-            }
-            return acc;
-        }
-        // The expression's content, every placeholder spelled `?`.
-        fn spell(t: *const TheoremContext, e: ExprId, out: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator) !void {
-            switch (t.interner.node(e).*) {
-                .variable => try out.append(a, 'v'),
-                .placeholder => try out.append(a, '?'),
-                .app => |app| {
-                    try out.print(a, "t{d}(", .{app.term_id});
-                    for (app.args) |arg| try spell(t, arg, out, a);
-                    try out.append(a, ')');
-                },
-            }
-        }
-    };
-
-    var spelled: [2]std.ArrayListUnmanaged(u8) = .{ .empty, .empty };
-    for (&spelled, [_]bool{ false, true }) |*out, reversed| {
-        var theorem = TheoremContext.init(allocator);
-        defer theorem.deinit();
-        const goal = try Build.goal(&theorem, terms, reversed);
-        try Build.spell(&theorem, try acui.canonicalizeAcui(&context, &theorem, goal), out, allocator);
-    }
-    try std.testing.expectEqualStrings(spelled[0].items, spelled[1].items);
-}
-
 test "source exact inside inline or_elim uses sibling branch" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -2266,278 +1499,6 @@ test "recover member injection skips pinned-target laws" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"myrule [l1, l2]"});
-}
-
-/// One context combiner under the laws `comm` and `idem` name (`_` for none),
-/// with a two-context rule, a context-extension rule, a context `nil` that
-/// unfolds to the unit, a context `one a` that unfolds to one member, and the
-/// goal context `A , B , A`.
-fn splitLawMm0(comptime comm: []const u8, comptime idem: []const u8) []const u8 {
-    return
-    \\delimiter $ ( ) $;
-    \\provable sort wff;
-    \\sort ctx;
-    \\term ctx_eq (g h: ctx): wff;
-    \\term emp: ctx;
-    \\--| @acui ctx_assoc 
-    ++ comm ++ " emp " ++ idem ++ "\n" ++
-        \\term join (g h: ctx): ctx;
-        \\term hyp (a: wff): ctx;
-        \\term seq (g: ctx) (a: wff): wff;
-        \\term A: wff;
-        \\term B: wff;
-        \\term P: wff;
-        \\def nil: ctx = $ emp $;
-        \\def one (a: wff): ctx = $ hyp a $;
-        \\axiom ctx_assoc (g h i: ctx):
-        \\  $ ctx_eq (join (join g h) i) (join g (join h i)) $;
-        \\axiom ctx_comm (g h: ctx): $ ctx_eq (join g h) (join h g) $;
-        \\axiom ctx_idem (g: ctx): $ ctx_eq (join g g) g $;
-        \\axiom two (g h: ctx): $ seq g P $ > $ seq h P $ > $ seq (join g h) P $;
-        \\axiom ext (g: ctx) (a: wff): $ seq g a $ > $ seq (join g (hyp a)) a $;
-        \\axiom keep (g: ctx) (a: wff): $ seq (join (hyp B) (join (hyp a) g)) a $ >
-        \\  $ seq (join g (hyp a)) a $;
-        \\theorem t: $ seq (join (join (hyp A) (hyp B)) (hyp A)) P $;
-        \\theorem u: $ seq (join (join (hyp A) (hyp B)) (hyp A)) A $;
-    ;
-}
-
-/// Parse context `text` (not a provable sort) as the context of `seq (text) P`.
-fn parseContext(
-    fixture: anytype,
-    theorem: *TheoremContext,
-    theorem_vars: anytype,
-    text: []const u8,
-) !ExprId {
-    var buf: [256]u8 = undefined;
-    const wrapped = try std.fmt.bufPrint(&buf, "seq ({s}) P", .{text});
-    const seq = (try parseGoal(fixture, theorem, theorem_vars, wrapped)).concrete;
-    return theorem.interner.node(seq).app.args[0];
-}
-
-/// The split candidates `rule_name`'s context binder `g` gets against the goal
-/// of theorem `theorem_name`, with binder `h` bound to `h_value` when given, as
-/// math strings `expected` in candidate order.
-fn expectSplitCandidates(
-    mm0_src: []const u8,
-    theorem_name: []const u8,
-    rule_name: []const u8,
-    h_value: ?[]const u8,
-    retain_claimed: bool,
-    expected: []const []const u8,
-) !void {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-    var fixture = try fixtureFor(allocator, mm0_src, theorem_name);
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    try theorem.seedAssertion(fixture.assertion);
-    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
-    defer theorem_vars.deinit();
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-    const goal_expr = try theorem.internParsedExpr(fixture.assertion.concl);
-
-    const rule_id = fixture.theory.env.getRuleId(rule_name) orelse return error.MissingRule;
-    const rule = &fixture.theory.env.rules.items[@intCast(rule_id)];
-    const bindings = try allocator.alloc(?ExprId, rule.args.len);
-    @memset(bindings, null);
-    const g_idx = try ruleArgIndex(rule, "g");
-    if (h_value) |text| {
-        bindings[try ruleArgIndex(rule, "h")] =
-            try parseContext(&fixture, &theorem, &theorem_vars, text);
-    }
-    const site = split.findSplitSite(&context, &theorem, rule.concl, goal_expr, g_idx) orelse
-        return error.MissingSplitSite;
-    const enumerator = split.buildEnumerator(&context, &theorem, site, bindings, g_idx, retain_claimed) orelse
-        return error.MissingEnumerator;
-
-    try std.testing.expectEqual(expected.len, enumerator.count());
-    for (expected, 0..) |text, i| {
-        const want = try parseContext(&fixture, &theorem, &theorem_vars, text);
-        const got = (try enumerator.candidate(&context, &theorem, i)) orelse
-            return error.MissingCandidate;
-        try std.testing.expectEqual(want, got);
-    }
-}
-
-test "split of a set context enumerates sub-sets of its distinct members" {
-    try expectSplitCandidates(splitLawMm0("ctx_comm", "ctx_idem"), "t", "two", null, false, &.{
-        "emp",
-        "hyp A",
-        "hyp B",
-        "join (hyp A) (hyp B)",
-    });
-}
-
-test "split of a multiset context counts repeated members" {
-    // With `h` open, `g` takes any sub-multiset of `A , B , A`: `A , A` too.
-    try expectSplitCandidates(splitLawMm0("ctx_comm", "_"), "t", "two", null, false, &.{
-        "emp",
-        "hyp A",
-        "hyp B",
-        "join (hyp A) (hyp A)",
-        "join (hyp A) (hyp B)",
-        "join (hyp A) (join (hyp B) (hyp A))",
-    });
-    // With `h := B` bound, `g` must take exactly what is left.
-    try expectSplitCandidates(splitLawMm0("ctx_comm", "_"), "t", "two", "hyp B", false, &.{
-        "join (hyp A) (hyp A)",
-    });
-    // `one B` is one member, but not by identity the goal's `hyp B`, so `h`
-    // is as good as open.
-    try expectSplitCandidates(splitLawMm0("ctx_comm", "_"), "t", "two", "one B", false, &.{
-        "emp",
-        "hyp A",
-        "hyp B",
-        "join (hyp A) (hyp A)",
-        "join (hyp A) (hyp B)",
-        "join (hyp A) (join (hyp B) (hyp A))",
-    });
-    // `hyp P` can never be a goal member: it claims nothing.
-    try expectSplitCandidates(splitLawMm0("ctx_comm", "_"), "t", "two", "hyp P", false, &.{
-        "join (hyp A) (join (hyp B) (hyp A))",
-    });
-}
-
-test "split of a set context reads a def sibling as possibly any goal member" {
-    try expectSplitCandidates(splitLawMm0("ctx_comm", "ctx_idem"), "t", "two", "one B", false, &.{
-        "emp",
-        "hyp A",
-        "hyp B",
-        "join (hyp A) (hyp B)",
-    });
-    try expectSplitCandidates(splitLawMm0("ctx_comm", "ctx_idem"), "t", "two", "hyp B", false, &.{
-        "hyp A",
-        "join (hyp A) (hyp B)",
-    });
-}
-
-test "split of a sequence context enumerates contiguous runs only" {
-    // `g` opens the sequence and `h` is open, so `g` is a prefix.
-    try expectSplitCandidates(splitLawMm0("_", "_"), "t", "two", null, false, &.{
-        "emp",
-        "hyp A",
-        "join (hyp A) (hyp B)",
-        "join (hyp A) (join (hyp B) (hyp A))",
-    });
-    // `g , hyp a` pins `g` to everything but the last member.
-    try expectSplitCandidates(splitLawMm0("_", "_"), "u", "ext", null, false, &.{
-        "join (hyp A) (hyp B)",
-    });
-    // `h := nil` may unfold to nothing, so it does not pin where `g` ends.
-    try expectSplitCandidates(splitLawMm0("_", "_"), "t", "two", "nil", false, &.{
-        "emp",
-        "hyp A",
-        "join (hyp A) (hyp B)",
-        "join (hyp A) (join (hyp B) (hyp A))",
-    });
-}
-
-test "split of an idempotent sequence context retains principals as any run" {
-    // `A , B , A` under `a , a = a`: retaining the principal `hyp a` lets `g`
-    // overlap it, so `g` may be any contiguous run, each built once.
-    try expectSplitCandidates(splitLawMm0("_", "ctx_idem"), "u", "ext", null, true, &.{
-        "emp",
-        "hyp A",
-        "hyp B",
-        "join (hyp A) (hyp B)",
-        "join (hyp B) (hyp A)",
-        "join (hyp A) (join (hyp B) (hyp A))",
-    });
-    // Without retention the principal pins `g` as in a plain sequence.
-    try expectSplitCandidates(splitLawMm0("_", "ctx_idem"), "u", "ext", null, false, &.{
-        "join (hyp A) (hyp B)",
-    });
-}
-
-/// Whether `rule_name`'s premise restates the principal its conclusion's
-/// context binder `g` is split around, against the goal of theorem `u`.
-fn restatesPrincipals(mm0_src: []const u8, rule_name: []const u8) !bool {
-    return restatesPrincipalsAt(mm0_src, "u", rule_name);
-}
-
-fn restatesPrincipalsAt(mm0_src: []const u8, theorem_name: []const u8, rule_name: []const u8) !bool {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-    var fixture = try fixtureFor(allocator, mm0_src, theorem_name);
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    try theorem.seedAssertion(fixture.assertion);
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-    const goal_expr = try theorem.internParsedExpr(fixture.assertion.concl);
-    const rule_id = fixture.theory.env.getRuleId(rule_name) orelse return error.MissingRule;
-    const rule = &fixture.theory.env.rules.items[@intCast(rule_id)];
-    const g_idx = try ruleArgIndex(rule, "g");
-    const site = split.findSplitSite(&context, &theorem, rule.concl, goal_expr, g_idx) orelse
-        return error.MissingSplitSite;
-    return split.hypRestatesPrincipals(&context, site, rule.hyps[0], g_idx);
-}
-
-test "a premise that restates its principal does not retain it in a set context" {
-    // `keep`'s premise still holds `hyp a`, so a `g` that also holds it would
-    // only repeat it, which `a , a = a` erases.
-    try std.testing.expect(try restatesPrincipals(splitLawMm0("ctx_comm", "ctx_idem"), "keep"));
-    try std.testing.expect(!try restatesPrincipals(splitLawMm0("ctx_comm", "ctx_idem"), "ext"));
-    // In an ordered context the repeat may sit elsewhere in the sequence.
-    try std.testing.expect(!try restatesPrincipals(splitLawMm0("_", "ctx_idem"), "keep"));
-}
-
-test "a two-sided premise restates its principal in the context that is split" {
-    const mm0_src = comptime splitLawMm0("ctx_comm", "ctx_idem") ++
-        \\term seq2 (l g: ctx): wff;
-        \\axiom right_keep (l g: ctx) (a: wff):
-        \\  $ seq2 (join l (hyp B)) (join (hyp a) g) $ > $ seq2 l (join g (hyp a)) $;
-        \\axiom left_only (l g: ctx) (a: wff):
-        \\  $ seq2 (join l (hyp a)) g $ > $ seq2 l (join g (hyp a)) $;
-        \\theorem v: $ seq2 (hyp B) (join (join (hyp A) (hyp B)) (hyp A)) $;
-        \\
-    ;
-    // `g` is split on the right; the left context's summands say nothing
-    // about it, whichever comes first.
-    try std.testing.expect(try restatesPrincipalsAt(mm0_src, "v", "right_keep"));
-    try std.testing.expect(!try restatesPrincipalsAt(mm0_src, "v", "left_only"));
-}
-
-/// `premiseOpenAcuiOwned` for premise `hyp_index` of `rule_name` against the
-/// goal of theorem `w`, with only the conclusion binders the goal pins
-/// outside the context bound.
-fn premiseOwned(mm0_src: []const u8, rule_name: []const u8, hyp_index: usize, pinned: []const []const u8) !bool {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-    var fixture = try fixtureFor(allocator, mm0_src, "w");
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    try theorem.seedAssertion(fixture.assertion);
-    var harness = ContextHarness.init(allocator);
-    defer harness.deinit();
-    const context = harness.context(&fixture);
-    const goal_expr = try theorem.internParsedExpr(fixture.assertion.concl);
-    const rule_id = fixture.theory.env.getRuleId(rule_name) orelse return error.MissingRule;
-    const rule = &fixture.theory.env.rules.items[@intCast(rule_id)];
-    const bindings = try allocator.alloc(?ExprId, rule.args.len);
-    @memset(bindings, null);
-    const goal_ctx = theorem.interner.node(goal_expr).app.args[0];
-    for (pinned) |name| bindings[try ruleArgIndex(rule, name)] = goal_ctx;
-    return backtrack.premiseOpenAcuiOwned(&context, &theorem, rule, hyp_index, goal_expr, bindings);
-}
-
-test "constrained MP leaves a premise whose open binders an ACUI split owns" {
-    const mm0_src = comptime splitLawMm0("ctx_comm", "_") ++
-        \\axiom cut (g: ctx) (a: wff): $ seq g a $ > $ seq (join g (hyp a)) P $ > $ seq g P $;
-        \\theorem w: $ seq (join (join (hyp A) (hyp B)) (hyp A)) P $;
-        \\
-    ;
-    // `two`'s `g` is a spine binder of the conclusion's context split.
-    try std.testing.expect(try premiseOwned(mm0_src, "two", 0, &.{}));
-    // `cut`'s `a` occurs nowhere in the conclusion, so no step owns it.
-    try std.testing.expect(!try premiseOwned(mm0_src, "cut", 0, &.{"g"}));
 }
 
 // `@auto bridge`: `wk` fills its premise from the pool only. `rleft [wk [#1]]`

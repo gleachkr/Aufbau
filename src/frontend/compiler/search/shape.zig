@@ -122,34 +122,6 @@ pub const Builder = struct {
     // member carries. Rendered as stored members are, with the wrapper head
     // kept concrete, and with transparent defs in the pattern unfolded so they
     // line up with the index's unfolded ref members. Caller owns the result.
-    pub fn recoverMemberShape(
-        self: *const Builder,
-        theorem: *const TheoremContext,
-        wrapper_term_id: u32,
-        pattern: ExprId,
-        hole: ExprId,
-    ) !clipper.ShapeNode {
-        var acui_sorts = try self.acuiSorts();
-        defer acui_sorts.deinit(self.allocator);
-
-        const wrapper_decl = self.lookupTerm(wrapper_term_id) orelse
-            return error.UnknownTerm;
-        const wrapper_sort = try sortFromName(self.env, wrapper_decl.ret_sort_name);
-
-        var state = State.init(self.options, &acui_sorts);
-        state.hole = hole;
-        const inner = try self.exprShape(pattern, null, theorem, &state);
-
-        const children = self.allocator.alloc(clipper.ShapeNode, 1) catch |err| {
-            deinitShape(self.allocator, inner);
-            return err;
-        };
-        children[0] = inner;
-        // A member keeps its own head: no region wrap around the wrapper.
-        const member = concrete(wrapper_term_id, wrapper_sort, children);
-        return member;
-    }
-
     // One visitor per kind of source: templates (a rule's, or an unfolded
     // def's body), theorem expressions, and parsed surface expressions. Each
     // hands an application to `applicationShape`, which unfolds a transparent

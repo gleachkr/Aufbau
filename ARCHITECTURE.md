@@ -1281,10 +1281,11 @@ and copy returned suggestions into the caller's allocator.
 
 There are distinct engines with different contracts:
 
-- `compiler/search/backward/backtrack.zig` finds one-step applications for
-  `exact?`/`apply?`.
-- `generate.zig` drives that engine recursively for `auto?`, with forward
-  saturation, phase/depth scheduling, budgets, and scoped memoization.
+- `compiler/search/core/` is the search core behind `auto?` and `exact?`
+  (one step): a goal-directed prover over witness variables, with iterative
+  deepening, a per-call budget and failure/success memos. `entry.zig` sets a
+  call up: the `@vars` pool, `@auto trigger` seeds and forward saturation.
+  `apply.zig` probes each rule against the goal for `apply?`.
 - `conversion.zig` drives a separate e-graph. `egraph.zig` records justified
   equality unions; `compiler/search/egraph/explain.zig` extracts explanations;
   `compiler/search/conversion/lowerer.zig` renders proof-script steps.

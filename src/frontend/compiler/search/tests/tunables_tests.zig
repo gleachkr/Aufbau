@@ -4,10 +4,8 @@ const types = helpers.types;
 const source = helpers.source;
 const ProofScript = helpers.ProofScript;
 const apply = helpers.apply;
-const exact = helpers.exact;
 const tunables = helpers.tunables;
 const miss_mod = helpers.miss;
-const generate = helpers.generate;
 const tunable_chain_mm0 = helpers.tunable_chain_mm0;
 
 fn testParam(name: []const u8, value: u64) ProofScript.SearchParam {
@@ -198,34 +196,12 @@ test "auto? retry keeps the parameters it does not raise" {
     );
 }
 
-test "auto? miss detail reports the exhausted space" {
+test "auto? miss detail is opt-in" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    var counters = types.SearchCounters{};
-    var miss = try tunableChainSuggestions(&arena,
-        \\ts
-        \\----
-        \\l1: $ S $ by auto? (depth: 3)
-    , .{
-        // The ladder's report: the core's is the next test's.
-        .generate = .{ .enabled = true, .ladder = true },
-        .status_detail = true,
-        .counters = &counters,
-    });
-    defer miss.deinit();
-    try std.testing.expectEqual(types.SearchStatus.miss, miss.status);
-    const detail = miss.status_detail orelse return error.MissingStatusDetail;
-    try std.testing.expect(
-        std.mem.indexOf(u8, detail, "no proof found within depth 3") != null,
-    );
-    // The core searched every depth in full, and nothing cut it short.
-    try std.testing.expectEqual(@as(usize, 3), counters.gen_core_depth_done);
-    try std.testing.expectEqual(@as(usize, 0), counters.gen_node_capped_passes);
-    try std.testing.expect(!counters.work_budget_exhausted);
-
-    // The detail is opt-in: the same miss without the flag carries none
-    // (the bench/programmatic path stays untouched).
+    // A miss without the flag carries no detail (the bench/programmatic
+    // path stays untouched).
     var plain = try tunableChainSuggestions(&arena,
         \\ts
         \\----
@@ -234,42 +210,6 @@ test "auto? miss detail reports the exhausted space" {
     defer plain.deinit();
     try std.testing.expectEqual(types.SearchStatus.miss, plain.status);
     try std.testing.expectEqual(@as(?[]const u8, null), plain.status_detail);
-}
-
-test "miss detail without its rules sentence is the detail of a run with no tallies" {
-    var counters = types.SearchCounters{};
-    const without = (try source.buildStatusDetail(
-        std.testing.allocator,
-        "auto?",
-        true,
-        .miss,
-        &counters,
-        .{ .enabled = true },
-    )).?;
-    defer std.testing.allocator.free(without);
-
-    counters.rule_attempt_diagnostics[0] = .{ .attempts = 3, .rejected = 3 };
-    counters.rule_attempt_diagnostics[0].rule_name.set("loop");
-    counters.rule_attempt_diagnostics_len = 1;
-    const with = (try source.buildStatusDetail(
-        std.testing.allocator,
-        "auto?",
-        true,
-        .miss,
-        &counters,
-        .{ .enabled = true },
-    )).?;
-    defer std.testing.allocator.free(with);
-
-    try std.testing.expect(std.mem.indexOf(u8, with, "loop (3 tried") != null);
-    try std.testing.expectEqualStrings(
-        without,
-        source.statusDetailWithoutRules(with),
-    );
-    try std.testing.expectEqualStrings(
-        without,
-        source.statusDetailWithoutRules(without),
-    );
 }
 
 test "exact? miss detail reports pool coverage and suggests auto?" {
@@ -298,91 +238,20 @@ test "exact? miss detail reports pool coverage and suggests auto?" {
     try std.testing.expectEqual(@as(?types.SourceSuggestion, null), miss.retry);
 }
 
-test "auto? fuel exhaustion is reported as truncation with a fuel hint" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    // `fuel: 1` starves every phase before the two-level chain assembles;
-    // the miss must surface as truncation (not a definitive miss), name the
-    // fuel bound, and suggest raising it. Fuel bounds the ladder, so the
-    // search core is off.
-    var starved = try tunableChainSuggestions(&arena,
-        \\t
-        \\----
-        \\l1: $ R $ by auto? (fuel: 1)
-    , .{ .generate = .{ .enabled = true, .core = false, .ladder = true }, .status_detail = true });
-    defer starved.deinit();
-    try std.testing.expectEqual(
-        types.SearchStatus.budget_exhausted,
-        starved.status,
-    );
-    const detail = starved.status_detail orelse
-        return error.MissingStatusDetail;
-    try std.testing.expect(
-        std.mem.indexOf(u8, detail, "ran out of fuel") != null,
-    );
-    // Fuel doubles, and the budget grows with it.
-    try std.testing.expect(std.mem.indexOf(u8, detail, "fuel: 2") != null);
-    try std.testing.expect(std.mem.indexOf(u8, detail, "budget: 6)'") != null);
-    const retry = starved.retry orelse return error.MissingRetry;
-    try std.testing.expect(std.mem.indexOf(u8, retry.replacement, "fuel: 2") != null);
-}
-
-test "auto? node-cap truncation is reported as truncation with a nodes hint" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    // `nodes: 1` lets each pass expand a single subgoal, too few for the
-    // two-level chain. No budget or fuel runs out, so before the node cap was
-    // reported the miss read as an exhausted search space.
-    var counters = types.SearchCounters{};
-    var capped = try tunableChainSuggestions(&arena,
-        \\t
-        \\----
-        \\l1: $ R $ by auto? (nodes: 1)
-    , .{
-        // The node cap bounds the ladder, so the search core is off.
-        .generate = .{ .enabled = true, .core = false, .ladder = true },
-        .status_detail = true,
-        .counters = &counters,
-    });
-    defer capped.deinit();
-    try std.testing.expectEqual(
-        types.SearchStatus.budget_exhausted,
-        capped.status,
-    );
-    // Depth 1 expands a single subgoal, so the cap first stops a pass at
-    // depth 2. Only depth 1 counts as searched in full, and no budget ran
-    // out.
-    try std.testing.expect(counters.gen_node_capped_passes > 0);
-    try std.testing.expectEqual(@as(usize, 1), counters.gen_core_depth_done);
-    try std.testing.expect(!counters.work_budget_exhausted);
-    const detail = capped.status_detail orelse
-        return error.MissingStatusDetail;
-    try std.testing.expect(
-        std.mem.indexOf(u8, detail, "limit of 1 subgoals per pass") != null,
-    );
-    try std.testing.expect(std.mem.indexOf(u8, detail, "nodes: 2") != null);
-    try std.testing.expect(std.mem.indexOf(u8, detail, "budget: 6)'") != null);
-    try std.testing.expect(
-        std.mem.indexOf(u8, detail, "search space was exhausted") == null,
-    );
-}
-
 test "only a search with no budget gets a default depth limit in the core" {
     try std.testing.expectEqual(@as(?usize, null), (types.GenerateOptions{}).coreDepth());
     try std.testing.expectEqual(@as(?usize, 3), (types.GenerateOptions{ .max_depth = 3 }).coreDepth());
     try std.testing.expectEqual(
-        @as(?usize, types.GenerateOptions.ladder_depth),
+        @as(?usize, types.GenerateOptions.default_depth),
         (types.GenerateOptions{ .global_budget = null }).coreDepth(),
     );
-    try std.testing.expectEqual(types.GenerateOptions.ladder_depth, (types.GenerateOptions{}).ladderDepth());
+    try std.testing.expectEqual(types.GenerateOptions.default_depth, (types.GenerateOptions{}).defaultDepth());
 }
 
 test "auto? names the core's depth with no limit when it spends the budget" {
     const counters = types.SearchCounters{
         .work_budget_exhausted = true,
-        .gen_last_phase = generate.search_core_phase,
+        .core_ran = true,
         .gen_last_depth = 9,
     };
     const detail = (try source.buildStatusDetail(
@@ -394,7 +263,7 @@ test "auto? names the core's depth with no limit when it spends the budget" {
         .{},
     )) orelse return error.MissingStatusDetail;
     defer std.testing.allocator.free(detail);
-    try std.testing.expect(std.mem.indexOf(u8, detail, "ran out during the search core at depth 9") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "ran out at depth 9") != null);
     try std.testing.expect(std.mem.indexOf(u8, detail, "depth 9 of") == null);
 }
 
@@ -422,18 +291,12 @@ test "auto? budget truncation names every limit that was hit" {
         .work_budget_exhausted = true,
         .phase_fuel_exhausted = true,
         .gen_node_capped_passes = 3,
-        .gen_last_phase = 1,
+        .core_ran = true,
         .gen_last_depth = 4,
-        .gen_core_depth_done = 2,
+        .core_end = .budget,
     });
     defer std.testing.allocator.free(detail);
-    const where = try std.fmt.allocPrint(
-        std.testing.allocator,
-        "ran out during {s} at depth 4 of 6",
-        .{generate.phaseName(1)},
-    );
-    defer std.testing.allocator.free(where);
-    try std.testing.expect(std.mem.indexOf(u8, detail, where) != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "ran out at depth 4 of 6") != null);
     try std.testing.expect(std.mem.indexOf(
         u8,
         detail,
@@ -454,15 +317,14 @@ test "auto? budget truncation names every limit that was hit" {
 }
 
 test "auto? budget truncation past every core depth suggests more depth" {
-    // `add_suc_right`'s shape: the core searched depths 1–6 in full, then
-    // the budget ran out in the constrained-MP tail, where a pass also hit
-    // the node cap.
+    // The core searched depths 1–5 in full, then the budget ran out at
+    // the limit, where a pass also hit the node cap.
     const detail = try budgetDetail(.{
         .work_budget_exhausted = true,
         .gen_node_capped_passes = 1,
-        .gen_last_phase = 5,
-        .gen_last_depth = 2,
-        .gen_core_depth_done = 6,
+        .core_ran = true,
+        .gen_last_depth = 6,
+        .core_end = .budget,
     });
     defer std.testing.allocator.free(detail);
     try std.testing.expect(std.mem.indexOf(
@@ -480,9 +342,9 @@ test "auto? budget truncation past every core depth suggests more depth" {
 test "auto? budget truncation before the depth limit suggests only budget" {
     const detail = try budgetDetail(.{
         .work_budget_exhausted = true,
-        .gen_last_phase = 1,
+        .core_ran = true,
         .gen_last_depth = 4,
-        .gen_core_depth_done = 3,
+        .core_end = .budget,
     });
     defer std.testing.allocator.free(detail);
     try std.testing.expect(std.mem.indexOf(u8, detail, "try 'auto? (budget: 12)'") != null);
@@ -493,30 +355,30 @@ test "miss retry is null when no parameter can help" {
     const gen = types.GenerateOptions{};
     // The stack guard protects the process stack; no parameter raises it.
     try std.testing.expectEqual(@as(?miss_mod.Retry, null), miss_mod.retryFor(
-        miss_mod.MissReport.of(&.{ .stack_guard_exhausted = true, .gen_last_phase = 1 }),
+        miss_mod.MissReport.of(&.{ .core_ran = true, .core_end = .stack }),
         gen,
     ));
-    // Generation never ran (an exact?-style miss).
+    // The search core never ran (an exact?-style miss).
     try std.testing.expectEqual(@as(?miss_mod.Retry, null), miss_mod.retryFor(
         miss_mod.MissReport.of(&.{ .work_budget_exhausted = true }),
         gen,
     ));
     // A clean miss already at the depth maximum.
     try std.testing.expectEqual(@as(?miss_mod.Retry, null), miss_mod.retryFor(
-        miss_mod.MissReport.of(&.{ .gen_last_phase = 5, .gen_core_depth_done = 64 }),
+        miss_mod.MissReport.of(&.{ .core_ran = true, .core_end = .depth_limit, .gen_last_depth = 64 }),
         .{ .max_depth = tunables.max_depth_value },
     ));
     // Only forward saturation was cut short, and no auto? parameter
     // bounds it.
     try std.testing.expectEqual(@as(?miss_mod.Retry, null), miss_mod.retryFor(
-        miss_mod.MissReport.of(&.{ .forward_saturation_exhausted = true, .gen_last_phase = 5 }),
+        miss_mod.MissReport.of(&.{ .forward_saturation_exhausted = true, .core_ran = true }),
         gen,
     ));
 }
 
 test "miss retry leaves an uncapped budget uncapped" {
     const retry = miss_mod.retryFor(
-        miss_mod.MissReport.of(&.{ .gen_node_capped_passes = 1, .gen_last_phase = 5 }),
+        miss_mod.MissReport.of(&.{ .gen_node_capped_passes = 1, .core_ran = true }),
         .{ .global_budget = null },
     ) orelse return error.MissingRetry;
     try std.testing.expectEqual(miss_mod.Retry{ .nodes = 512 }, retry);
@@ -535,7 +397,7 @@ test "a search core miss that ran out of alternatives gets no retry" {
         \\----
         \\l1: $ S $ by auto?
     , .{
-        .generate = .{ .enabled = true, .ladder = false },
+        .generate = .{ .enabled = true },
         .status_detail = true,
         .counters = &counters,
     });
@@ -559,7 +421,7 @@ test "a search core miss at the call's depth limit suggests more depth" {
         \\----
         \\l1: $ R $ by auto? (depth: 1)
     , .{
-        .generate = .{ .enabled = true, .ladder = false },
+        .generate = .{ .enabled = true },
         .status_detail = true,
         .counters = &counters,
     });
@@ -583,7 +445,7 @@ test "the search core's stack guard is reported, with no retry" {
         \\----
         \\l1: $ R $ by auto?
     , .{
-        .generate = .{ .enabled = true, .ladder = false, .stack_guard_bytes = 1 },
+        .generate = .{ .enabled = true, .stack_guard_bytes = 1 },
         .status_detail = true,
         .counters = &counters,
     });
@@ -591,25 +453,25 @@ test "the search core's stack guard is reported, with no retry" {
     try std.testing.expectEqual(types.SearchStatus.budget_exhausted, stopped.status);
     try std.testing.expectEqual(@as(?types.CoreEnd, .stack), counters.core_end);
     const detail = stopped.status_detail orelse return error.MissingStatusDetail;
-    try std.testing.expect(std.mem.indexOf(u8, detail, "stopped by the call-stack guard during the search core at depth 1:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "stopped by the call-stack guard at depth 1:") != null);
     try std.testing.expectEqual(@as(?types.SourceSuggestion, null), stopped.retry);
 }
 
 test "the search core's budget stop at the depth limit suggests more depth" {
     const at_limit = try budgetDetail(.{
         .work_budget_exhausted = true,
-        .gen_last_phase = generate.search_core_phase,
+        .core_ran = true,
         .gen_last_depth = 6,
         .core_end = .budget,
     });
     defer std.testing.allocator.free(at_limit);
-    try std.testing.expect(std.mem.indexOf(u8, at_limit, "ran out during the search core at depth 6 of 6") != null);
+    try std.testing.expect(std.mem.indexOf(u8, at_limit, "ran out at depth 6 of 6") != null);
     try std.testing.expect(std.mem.indexOf(u8, at_limit, "Every depth below 6 was searched") != null);
     try std.testing.expect(std.mem.indexOf(u8, at_limit, "try 'auto? (depth: 8, budget: 12)'") != null);
 
     const before = try budgetDetail(.{
         .work_budget_exhausted = true,
-        .gen_last_phase = generate.search_core_phase,
+        .core_ran = true,
         .gen_last_depth = 5,
         .core_end = .budget,
     });

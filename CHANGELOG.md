@@ -138,9 +138,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   gone: two eliminations in a row from a hypothesis with no `@auto forward`
   (`x ⊢ c` from `x ⊢ a ∧ (b ∧ c)`), which `@auto forward` reaches, and a step under an
   idempotent context that keeps the formula it takes apart beside its parts
-  (`g , a ∧ b ⊢ c` from `g , a ∧ b , a , b ⊢ c`). `abc search` and the search
-  bench take `--ladder` to run the generation search after the core, until
-  it is removed.
+  (`g , a ∧ b ⊢ c` from `g , a ∧ b , a , b ⊢ c`). The generation search is
+  removed, and with it `abc search`'s `--ladder` and `--no-core`, the
+  `phase`, `phase_name` and `rules` fields of `--json`, and the rules `-vv`
+  listed as tried most.
 - A search stops after about 3 seconds at the default budget, down from about
   22. The work budget now also counts the search core's matching, comparing
   and term walks, which it used to miss, and its default is 2.3 units instead
