@@ -245,9 +245,6 @@ pub const SearchCounters = struct {
     /// depth it found the proof at, or the last depth it started on a miss.
     core_ran: bool = false,
     gen_last_depth: usize = 0,
-    /// Ladder cells (one depth pass of one phase) in which the `max_nodes`
-    /// cap stopped the search from expanding a subgoal.
-    gen_node_capped_passes: usize = 0,
     /// The search core (`core/`): goals it
     /// expanded, and finished proofs the checker rejected at close-out.
     core_nodes: usize = 0,
@@ -278,10 +275,6 @@ pub const SearchCounters = struct {
     conclusion_probes: usize = 0,
     ref_pool_size: usize = 0,
     full_try_candidate_calls: usize = 0,
-    /// Set when a ladder phase ran out of its own fuel and was retired. A
-    /// stop on the shared global budget sets `work_budget_exhausted` instead.
-    /// Read by `miss.MissReport`.
-    phase_fuel_exhausted: bool = false,
     /// The last `@vars` pool fill that found no variable it could use: every
     /// pool name was already taken by the instance or rejected for the meta.
     /// No limit reaches a branch that dies there, so the miss report names
@@ -577,7 +570,7 @@ pub const SearchStatus = enum {
     /// The search ran its candidate set to completion without a result: no
     /// proof exists within the configured search space.
     miss,
-    /// A budget (per-call global budget, recursive fuel floor, or forward-
+    /// A budget (the per-call global budget, the stack guard, or a forward-
     /// saturation bound) truncated the search before it completed — an empty
     /// result is inconclusive, a proof may still exist.
     budget_exhausted,
@@ -637,26 +630,6 @@ pub const GenerateOptions = struct {
     /// A budget of `null` needs a finite limit, since a goal with no proof
     /// would otherwise deepen for ever (`coreDepth`).
     max_depth: ?usize = null,
-    /// Budget of *distinct* generated-node solves per ladder cell (one
-    /// depth pass of one phase), reset at each cell; subgoals the path
-    /// guard or a failure memo skip cost nothing. Once a cell reaches it,
-    /// the cell expands no further subgoals, and the miss report counts the
-    /// cell as truncated (`SearchCounters.gen_node_capped_passes`). Sized so
-    /// the deepest additive_fol proofs regenerate fully from an empty pool:
-    /// the two-branch `*_dist_*` proofs touch ~76 distinct sub-targets,
-    /// `forall_mono` ~170, and `drinker` (the `@vars`-pool witness case)
-    /// needs the full 256 (at 192 it stalls at frontier 1/5). Raising it can
-    /// change which proofs are found either way (#299): a wider cell reaches
-    /// top-level alternatives the first alternative's subtree starved, but
-    /// it also spends more of the shared `global_budget`, which can starve
-    /// the tail phases of proofs they found before.
-    max_nodes: usize = 256,
-    /// Per-phase `tryCandidate` budget. Each ladder phase draws from its own
-    /// pool across all its depths. A phase that runs dry is retired for the rest of the
-    /// ladder while the other phases continue; a retired core phase also
-    /// skips the remaining tail cells. Sized generously so ordinary proofs never hit it.
-    /// Lowered in tests to assert clean budget-exhausted behaviour.
-    fuel: usize = 4096,
     /// Forward-saturation bounds. Saturation only runs at all when
     /// the theory declares `@auto forward` rules.
     forward: ForwardOptions = .{},

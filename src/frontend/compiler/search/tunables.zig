@@ -1,5 +1,5 @@
 //! Per-call search tunables: the `name: INTEGER` parameters a proof author
-//! can put on an `auto?` placeholder (`auto? (depth: 8, fuel: 8192)`) to
+//! can put on an `auto?` placeholder (`auto? (depth: 8, budget: 6)`) to
 //! widen ONE search without touching the engine defaults. The defaults stay
 //! the bench-anchored global operating point; a per-call override scopes the
 //! extra cost to the one goal the author is actively working on.
@@ -30,7 +30,7 @@ pub const ParamContext = enum { exact, apply, auto, conversion };
 /// per the `GlobalBudget` calibration, one unit ≈ 1 second of search work.
 pub const ticks_per_budget_unit: u64 = 1_000_000_000;
 
-const ParamKind = enum { depth, nodes, fuel, budget, iters };
+const ParamKind = enum { depth, nodes, budget, iters };
 
 const ParamSpec = struct {
     name: []const u8,
@@ -49,14 +49,11 @@ const ParamSpec = struct {
 /// to values validation will accept.
 pub const max_depth_value: u64 = 64;
 pub const max_nodes_value: u64 = 1_000_000;
-pub const max_fuel_value: u64 = 100_000_000;
 pub const max_budget_value: u64 = 100_000;
 pub const max_iters_value: u64 = 10_000;
 
 const auto_specs = [_]ParamSpec{
     .{ .name = "depth", .kind = .depth, .min = 1, .max = max_depth_value },
-    .{ .name = "nodes", .kind = .nodes, .min = 1, .max = max_nodes_value },
-    .{ .name = "fuel", .kind = .fuel, .min = 1, .max = max_fuel_value },
     .{ .name = "budget", .kind = .budget, .min = 0, .max = max_budget_value },
 };
 
@@ -66,7 +63,7 @@ const conversion_specs = [_]ParamSpec{
 };
 
 /// For diagnostics: the accepted parameter names, comma-separated.
-pub const known_param_names = "depth, nodes, fuel, budget";
+pub const known_param_names = "depth, budget";
 pub const known_conversion_param_names = "iters, nodes";
 
 fn specsFor(context: ParamContext) []const ParamSpec {
@@ -104,15 +101,13 @@ pub fn applySearchParams(
         if (param.value < spec.min or param.value > spec.max) continue;
         switch (spec.kind) {
             .depth => options.max_depth = @as(usize, @intCast(param.value)),
-            .nodes => options.max_nodes = @intCast(param.value),
-            .fuel => options.fuel = @intCast(param.value),
             .budget => options.global_budget = if (param.value == 0)
                 null
             else
                 param.value * ticks_per_budget_unit,
-            // `iters` is a conversion?-only parameter; it never appears in
-            // `auto_specs`.
-            .iters => {},
+            // `iters` and `nodes` are conversion?-only parameters; they never
+            // appear in `auto_specs`.
+            .iters, .nodes => {},
         }
     }
 }

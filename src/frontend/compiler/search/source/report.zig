@@ -353,25 +353,6 @@ fn writeStatusDetail(
                         );
                     }
                 }
-                if (report.nodes) {
-                    if (!first) try w.writeAll("; ");
-                    first = false;
-                    const passes = counters.gen_node_capped_passes;
-                    try w.print(
-                        "the limit of {d} subgoals per pass was reached in " ++
-                            "{d} pass{s}",
-                        .{ gen.max_nodes, passes, if (passes == 1) "" else "es" },
-                    );
-                }
-                if (report.fuel) {
-                    if (!first) try w.writeAll("; ");
-                    first = false;
-                    try w.print(
-                        "a search phase ran out of fuel ({d} candidate " ++
-                            "validations per phase)",
-                        .{gen.fuel},
-                    );
-                }
                 if (report.forward) {
                     if (!first) try w.writeAll("; ");
                     first = false;
@@ -419,7 +400,7 @@ fn writeStatusDetail(
     }
 }
 
-/// " Try 'auto? (nodes: 512, budget: 6)'." — on a cut-short miss, with
+/// " Try 'auto? (depth: 8, budget: 6)'." — on a cut-short miss, with
 /// the reason to raise the limits together and what to try if that fails.
 fn writeRetryAdvice(
     w: anytype,

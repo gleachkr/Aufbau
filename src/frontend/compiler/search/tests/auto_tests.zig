@@ -314,9 +314,7 @@ test "auto keeps a redex the checker cannot convert in a generated premise" {
 // Forward saturation derives `?G , p ⊢ q` from `⊨ p → q` and `p ⊢ p`: the
 // context `?G` of `valid_elim`'s conclusion is fixed by no premise. That fact
 // proves the goal `p ⊢ q` only with `?G := ∅`, which a positional match of
-// `?G , p` against `p` cannot find. A fuel of 1 leaves no room for the
-// backward route (`imp_elim` over a generated `valid_elim` child), so only the
-// derived fact's direct use can offer the proof.
+// `?G , p` against `p` cannot find.
 test "auto closes a goal with a forward-derived fact modulo ACUI on its context meta" {
     const mm0_src =
         \\delimiter $ ( ) , $;
@@ -380,7 +378,7 @@ test "auto closes a goal with a forward-derived fact modulo ACUI on its context 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
-        .generate = .{ .enabled = true, .fuel = 1 },
+        .generate = .{ .enabled = true },
     });
     defer suggestions.deinit();
 
@@ -597,7 +595,7 @@ test "auto depth cap stops escalation" {
     try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
 }
 
-test "auto global budget stop is not reported as a phase fuel-out" {
+test "auto global budget stop raises the budget" {
     const proof_src =
         \\t
         \\----
@@ -606,8 +604,7 @@ test "auto global budget stop is not reported as a phase fuel-out" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    // A one-tick budget runs out at the first candidate, with every phase's
-    // fuel still left.
+    // A one-tick budget runs out at the first candidate.
     const gen = types.GenerateOptions{ .enabled = true, .global_budget = 1 };
     var suggestions = try suggestionsAtNeedle(
         &arena,
@@ -619,12 +616,9 @@ test "auto global budget stop is not reported as a phase fuel-out" {
     defer suggestions.deinit();
     try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
     try std.testing.expect(counters.work_budget_exhausted);
-    try std.testing.expect(!counters.phase_fuel_exhausted);
-    // The retry raises the budget, not the fuel nothing ran out of.
     const retry = helpers.miss.retryFor(helpers.miss.MissReport.of(&counters), gen) orelse
         return error.MissingRetry;
     try std.testing.expect(retry.budget != null);
-    try std.testing.expectEqual(@as(?u64, null), retry.fuel);
 }
 
 /// The drinker on nd_fol with its `@vars` line replaced by `vars`.

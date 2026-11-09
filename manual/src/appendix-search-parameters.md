@@ -29,8 +29,8 @@ INTEGER` entries (a plain colon, rather than `:=` for bindings). The two
 kinds can be mixed:
 
 ```
-l1: $ c $ by auto? (depth: 8, fuel: 8192)
-l2: $ c $ by rule1 [auto? (t := $ k $, nodes: 400)]
+l1: $ c $ by auto? (depth: 8, budget: 6)
+l2: $ c $ by rule1 [auto? (t := $ k $, depth: 4)]
 ```
 
 Unknown names and out-of-range values are reported and skipped. If a name is
@@ -41,12 +41,7 @@ repeated, the last occurrence wins.
 | Parameter | Default | Range | Meaning |
 |---|---|---|---|
 | `depth` | none | 1–64 | Iterative-deepening limit: maximum nesting of *generated* proof steps. `@auto eager` steps are exempt. Deepening stops at the shallowest depth that closes the goal. With no limit, the search core deepens until it closes the goal, the work budget runs out, or a pass leaves nothing unsearched. With `budget: 0` and no limit, it stops at depth 6. |
-| `nodes` | 256 | 1–1 000 000 | Budget of distinct generated sub-goal solves per pass (one depth of one search phase), reset at each pass. |
-| `fuel` | 4096 | 1–100 000 000 | Candidate-validation budget per search phase, refilled for each retry of the whole ladder. |
 | `budget` | ≈2.3 | 0–100 000 | Whole-call cap on cost-weighted work, in units of roughly one second of search effort (the default is 2.3 units). `budget: 0` is legal and disables the cap entirely. |
-
-`auto?` searches with the search core, which `depth` and `budget` bound.
-`nodes` and `fuel` bound only the generation search, which no longer runs.
 
 When `auto?` fails, the failure report indicates which limits it hit and 
 suggests a retry that raises them together with the budget, e.g.
@@ -65,9 +60,6 @@ out.
 |---|---|---|---|
 | `iters` | 16 | 1–10 000 | Saturation rounds (match → instantiate → rebuild). Saturation stops early the moment the goal joins a reference's class, so a hit does not pay the full count. |
 | `nodes` | 10 000 | 1–1 000 000 | Cap on distinct term shapes the e-graph may hold. |
-
-`nodes` has command-specific units: sub-goals for `auto?`, and e-graph nodes
-for `conversion?`.
 
 ## `exact?` and `apply?`
 

@@ -23,8 +23,6 @@ pub const FrontierGuard = struct {
     // Depth mode: cut at most this many lines; the guard then requires the
     // frontier to reach this cap rather than the whole proof.
     max_k: ?usize = null,
-    gen_nodes: ?usize = null,
-    gen_fuel: ?usize = null,
     global_budget: ?u64 = null,
     // Per-guard forward-saturation budget overrides (null = bench default).
     // Same rationale as the generation budgets: a guard for a genuinely deep
@@ -185,24 +183,16 @@ pub const guards = [_]FrontierGuard{
     },
     // Depth guards for convergent proofs. `branch_converge` and `fan_in` are
     // the convergent (DAG-shaped) additive proofs whose shared subgoals a
-    // success memo collapses, commuted-context subgoals included.
-    // They are genuinely deep (proof depth ≥ 9). These guards raise the
-    // limits *only* for these two lines, pinning them
-    // FULL as the memo's regression check (breadth finds them through the pool
-    // and never exercises deep generation). The budgets are pinned just above
-    // each theorem's measured floor (2026-06-24) so a budget regression trips
-    // the guard: `branch_converge` is fuel-bound (FULL ≥ f=2048, n≤64);
-    // `fan_in` is node-bound (FULL ≥ n=124, f≥512). These are far below the
-    // pre-tightening 384/10000 — the witness-unification/eigenvariable-ordering
-    // work since the memo landed dropped the floors substantially.
+    // success memo collapses, commuted-context subgoals included. They are
+    // genuinely deep (proof depth ≥ 9), so these guards raise the depth limit
+    // only for these two lines (breadth finds them through the pool and never
+    // exercises deep search).
     .{
         .filter = "branch_converge",
         .files = "tests/search_bench_cases/additive_fol.mm0:" ++
             "tests/search_bench_cases/additive_fol.auf",
         .mode = "depth",
         .max_depth = 10,
-        .gen_nodes = 128,
-        .gen_fuel = 3072,
     },
     .{
         .filter = "fan_in",
@@ -210,8 +200,6 @@ pub const guards = [_]FrontierGuard{
             "tests/search_bench_cases/additive_fol.auf",
         .mode = "depth",
         .max_depth = 10,
-        .gen_nodes = 192,
-        .gen_fuel = 1024,
     },
     // Backward hyp-ordering depth guard (branchfactor + relation-transport
     // screen, `exact.zig` `hypSlotCost` / `isRelationTransport`). `eq_euclid`
@@ -579,14 +567,12 @@ pub const guards = [_]FrontierGuard{
     // five compound-witness probes); each total trips (exit 1) if its
     // budget union is reduced below floor.
     .{
-        // #1 additive sequent calculus (backward generation): branch_converge
-        // is fuel-bound (3072), fan_in node-bound (192); both need depth 10.
+        // #1 additive sequent calculus: branch_converge and fan_in need
+        // depth 10.
         .files = "tests/search_bench_cases/additive_fol.mm0:" ++
             "tests/search_bench_cases/additive_fol.auf",
         .mode = "depth",
         .max_depth = 10,
-        .gen_nodes = 192,
-        .gen_fuel = 3072,
     },
     .{
         // #2 transitive closure (forward saturation): reach24/reach32 need the

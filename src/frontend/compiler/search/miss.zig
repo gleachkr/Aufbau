@@ -18,10 +18,6 @@ pub const Stop = enum { none, budget, stack };
 
 pub const MissReport = struct {
     stop: Stop,
-    /// A phase ran out of its own fuel and was retired.
-    fuel: bool,
-    /// A pass reached the subgoal limit and left subgoals unexpanded.
-    nodes: bool,
     /// Forward saturation stopped at its bounds before a fixpoint.
     forward: bool,
     /// The search core ran (an `exact?`, or an `auto?` the core abstained
@@ -42,8 +38,6 @@ pub const MissReport = struct {
                 .budget
             else
                 .none,
-            .fuel = counters.phase_fuel_exhausted,
-            .nodes = counters.gen_node_capped_passes > 0,
             .forward = counters.forward_saturation_exhausted,
             .core_ran = counters.core_ran,
             .exhausted = core_end == .exhausted,
@@ -59,7 +53,7 @@ pub const MissReport = struct {
 
     /// A limit cut the search short, so an empty result is inconclusive.
     pub fn truncated(self: MissReport) bool {
-        return self.stop != .none or self.fuel or self.nodes or self.forward;
+        return self.stop != .none or self.forward;
     }
 
     /// The search core searched every depth below `max_depth` in full, so
@@ -72,8 +66,6 @@ pub const MissReport = struct {
 /// The `auto?` parameters for one retry; null leaves a parameter as it is.
 pub const Retry = struct {
     depth: ?u64 = null,
-    nodes: ?u64 = null,
-    fuel: ?u64 = null,
     budget: ?u64 = null,
 
     /// True when the retry sets the parameter called `name`.
@@ -103,10 +95,10 @@ pub const Retry = struct {
 /// ran or exhausted its space, or every limit that was hit is
 /// already at its maximum.
 ///
-/// Each limit that was hit is doubled. Depth grows by 2 after a miss nothing
-/// cut short, and after one that searched every depth below a limit the call
-/// set in full; with none, the search core goes deeper by itself. The budget
-/// doubles whenever anything else grows, since the other limits spend it.
+/// Depth grows by 2 after a miss nothing cut short, and after one that
+/// searched every depth below a limit the call set in full; with none, the
+/// search core goes deeper by itself. The budget doubles when the budget ran
+/// out or the depth grows, since a deeper search spends more of it.
 pub fn retryFor(report: MissReport, gen: types.GenerateOptions) ?Retry {
     if (report.stop == .stack or !report.core_ran or report.exhausted) return null;
     var retry = Retry{};
@@ -114,14 +106,7 @@ pub fn retryFor(report: MissReport, gen: types.GenerateOptions) ?Retry {
     if (!report.truncated() or (gen.max_depth != null and report.searchedBelowDepthLimit(depth))) {
         retry.depth = raised(depth + 2, depth, tunables.max_depth_value);
     }
-    if (report.nodes) {
-        retry.nodes = raised(gen.max_nodes * 2, gen.max_nodes, tunables.max_nodes_value);
-    }
-    if (report.fuel) {
-        retry.fuel = raised(gen.fuel * 2, gen.fuel, tunables.max_fuel_value);
-    }
-    const grows = retry.depth != null or retry.nodes != null or retry.fuel != null;
-    if (grows or report.stop == .budget) {
+    if (retry.depth != null or report.stop == .budget) {
         // No budget (`budget: 0`) stays uncapped.
         if (gen.global_budget) |limit| {
             const units = std.math.divCeil(u64, limit, tunables.ticks_per_budget_unit) catch unreachable;

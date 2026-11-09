@@ -29,7 +29,6 @@ Flags (after `--`):
 | `--exclude=TEXT[,TEXT...]` | Frontier mode: skip theorems whose name contains any listed TEXT (a fixture's supporting lemmas). |
 | `--marker=TEXT`   | Frontier search marker (`auto?` default; `exact?`/`apply?` disable generation). |
 | `--max-depth=N`   | Frontier `auto?` generation depth (default 6). |
-| `--gen-nodes=N`, `--gen-fuel=N` | Override `max_nodes` and `fuel` (0 = the `GenerateOptions` default). |
 | `--global-budget=TICKS` | Override the per-call work budget in weighted ticks; `0` disables it. |
 | `--fwd-facts=N`, `--fwd-layers=N`, `--fwd-attempts=N`, `--fwd-tuples=N` | Override the forward-saturation bounds (0 = the `ForwardOptions` default). |
 | `--slow-ms=N`     | Breadth lines slower than this (warm search) are flagged SLOW (default 2). |
@@ -80,9 +79,7 @@ and takes minutes.
   | `stack` | The call-stack guard tripped. |
   | `budget-deep` | The per-call budget ran out after the search core had searched every depth below the limit, so the proof may need more depth. |
   | `budget-shallow` | The per-call budget ran out before that. |
-  | `fuel` | A phase ran out of its own fuel. |
   | `forward` | Forward saturation stopped before a fixpoint. |
-  | `node-cap` | Some pass hit the per-pass node cap (`max_nodes`). |
   | `no-gen` | Generation never ran. |
   | `exhausted` | None of the above: every depth ran in full. |
 

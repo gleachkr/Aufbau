@@ -18,7 +18,7 @@ pub const ArgBinding = struct {
 };
 
 /// One `name: INTEGER` entry in a search placeholder's argument list
-/// (`auto? (depth: 8, fuel: 8192)`). Purely syntactic here: which names are
+/// (`auto? (depth: 8, budget: 6)`). Purely syntactic here: which names are
 /// meaningful, and what their values mean, is the search layer's business
 /// (`search/tunables.zig`). Only placeholder applications accept this form;
 /// real rule applications keep the strict `name := $ math $` grammar.

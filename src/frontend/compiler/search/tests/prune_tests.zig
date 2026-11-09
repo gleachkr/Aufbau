@@ -772,10 +772,9 @@ const loop_theory =
     \\  $ g , (∀ x p) , [x/t] p ⊢ c $ > $ g , (∀ x p) ⊢ c $;
 ;
 
-test "path guard catches an open goal repeated with a duplicate member" {
-    // At 16 nodes the search only fits once the open path guard keys targets
-    // by their ACUI-canonical form: `raa` re-adds `¬ P C` to an open context
-    // that already holds it, and the copy is the same goal.
+test "auto proves a goal whose search repeats an open goal with a duplicate member" {
+    // `raa` re-adds `¬ P C` to an open context that already holds it, and the
+    // copy is the same goal.
     const mm0_src = loop_theory ++
         \\
         \\theorem peirce_instance {x: obj}: $ ∀ x ((P x → Q x) → P x) ⊢ P C $;
@@ -783,7 +782,7 @@ test "path guard catches an open goal repeated with a duplicate member" {
     const proof_src =
         \\peirce_instance
         \\---------------
-        \\l1: $ ∀ x ((P x → Q x) → P x) ⊢ P C $ by auto? (nodes: 16)
+        \\l1: $ ∀ x ((P x → Q x) → P x) ⊢ P C $ by auto?
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -799,10 +798,7 @@ test "path guard catches an open goal repeated with a duplicate member" {
     try std.testing.expect(suggestions.items.len > 0);
 }
 
-test "a path prune of a repeated goal only blocks the failure memos below the repeat" {
-    // At 8 nodes the search only fits when solves strictly inside a loop keep
-    // their failure memos: a prune that hits a descendant of a solve says
-    // nothing about the solve itself.
+test "auto proves a goal whose search loops through a repeated goal" {
     const mm0_src = loop_theory ++
         \\
         \\theorem chain {x: obj}: $ ∀ x (P x → Q x) , ∀ x (Q x → ¬ P x) , P C ⊢ ⊥ $;
@@ -810,7 +806,7 @@ test "a path prune of a repeated goal only blocks the failure memos below the re
     const proof_src =
         \\chain
         \\-----
-        \\l1: $ ∀ x (P x → Q x) , ∀ x (Q x → ¬ P x) , P C ⊢ ⊥ $ by auto? (nodes: 8)
+        \\l1: $ ∀ x (P x → Q x) , ∀ x (Q x → ¬ P x) , P C ⊢ ⊥ $ by auto?
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

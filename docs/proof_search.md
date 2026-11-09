@@ -367,17 +367,13 @@ distinguishes the cases, because they call for different responses:
   report names every limit that was hit, and usually there are several:
   - *the per-call work budget (~Ns of work) ran out during `<phase>` at
     depth D*, with *of N* when a limit applies: the whole call stopped there;
-  - *the limit of N subgoals per pass was reached in K passes*: those
-    passes stopped expanding new subgoals;
-  - *a search phase ran out of fuel*: that phase was retired early;
   - *forward saturation stopped before reaching a fixpoint*: the
     theory's `@auto forward` rules left the derived-fact pool incomplete.
 
-  If the call set a depth limit and the main phases searched every depth
+  If the call set a depth limit and the search core searched every depth
   below it in full, the report adds "Every depth below N was searched", and
-  the retry raises depth too. The report then suggests raising every limit
-  that was hit, together with the budget, e.g.
-  `try 'auto? (nodes: 512, fuel: 8192, budget: 6)'`.
+  the retry raises depth too. The report then suggests the retry, e.g.
+  `try 'auto? (depth: 8, budget: 6)'`.
 - **"stopped by the call-stack guard …"**: one branch recursed deep
   enough to risk the process stack. No parameter raises this guard; try
   a smaller goal or prove an intermediate lemma first.
@@ -420,12 +416,9 @@ bindings):
 l1: $ hard goal $ by auto? (depth: 8, budget: 6)
 ```
 
-The parameters (`depth`, `nodes`, `fuel` and `budget` for `auto?`;
-`iters` and `nodes` for `conversion?`), their defaults and their ranges are
-listed in the manual's
+The parameters (`depth` and `budget` for `auto?`; `iters` and `nodes` for
+`conversion?`), their defaults and their ranges are listed in the manual's
 [search parameters appendix](../manual/src/appendix-search-parameters.md).
-`depth` and `budget` bound the search core; `nodes` and `fuel` bound only
-the generation search, which no longer runs.
 
 The parameters scope to **that one placeholder** — the engine defaults
 never move. This is deliberate: the defaults are tuned so that the
@@ -778,9 +771,9 @@ An eager rule (which is implicitly `@auto backward` too) gets three things:
 3. **Depth exemption.** Eager applications don't consume the `max_depth`
    budget. A proof that is a tall deterministic decomposition ladder plus
    one real choice point costs one depth level, not fifteen — which is
-   what lets such theories run at the default depth. Node, fuel, and
-   global-tick budgets still apply, so a wrong annotation can waste time
-   but can never diverge.
+   what lets such theories run at the default depth. The global tick
+   budget still applies, so a wrong annotation can waste time but can
+   never diverge.
 
 Because the engine cannot check invertibility, the keyword names the
 *scheduling behavior you are requesting*, not a verified property, and

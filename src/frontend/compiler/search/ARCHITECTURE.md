@@ -156,8 +156,6 @@ it. A miss is *truncated* when a limit cut it short: the global budget, the
 stack guard (`CoreEnd.stack`), or forward saturation stopping at its bounds
 (`SearchCounters.forward_saturation_exhausted`). A truncated miss reports
 `budget_exhausted` status; only an untruncated one reads as a miss.
-(`MissReport.fuel` and `.nodes`, and the `nodes:`/`fuel:` parameters they
-answer, no longer affect search: nothing sets their counters.)
 
 `core_depth_done` is derived from `core_end`: the last depth started when the
 core stopped at its depth limit, one less otherwise. When the call set a

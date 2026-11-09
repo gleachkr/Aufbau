@@ -35,10 +35,6 @@ const BenchOptions = struct {
     marker: []const u8 = "auto?",
     /// `max_depth` for frontier `auto?` generation (`GenerateOptions.max_depth`).
     max_depth: ?usize = null,
-    /// Optional overrides for the generation budget (diagnostic; 0 = use the
-    /// `GenerateOptions` defaults).
-    gen_nodes: usize = 0,
-    gen_fuel: usize = 0,
     /// Cost-weighted per-call cap in weighted work ticks. Null = keep the
     /// `GenerateOptions` default; 0 = disable the cap (uncapped calibration
     /// runs); N = override.
@@ -198,8 +194,7 @@ const default_frontier_corpus = [_]FixturePair{
     },
     .{
         // Dynamic logic with Hoare rules, with the example's own `@auto`
-        // annotations unchanged. Its misses hit the budget, fuel and node
-        // limits.
+        // annotations unchanged. Its misses hit the budget.
         .name = "hoare",
         .mm0_path = "tests/search_bench_cases/hoare_frontier.mm0",
         .proof_path = "tests/search_bench_cases/hoare_frontier.auf",
@@ -339,14 +334,6 @@ fn parseOptions(
             );
             continue;
         }
-        if (std.mem.startsWith(u8, arg, "--gen-nodes=")) {
-            options.gen_nodes = try std.fmt.parseInt(usize, arg["--gen-nodes=".len..], 10);
-            continue;
-        }
-        if (std.mem.startsWith(u8, arg, "--gen-fuel=")) {
-            options.gen_fuel = try std.fmt.parseInt(usize, arg["--gen-fuel=".len..], 10);
-            continue;
-        }
         if (std.mem.startsWith(u8, arg, "--max-k=")) {
             options.max_k = try std.fmt.parseInt(usize, arg["--max-k=".len..], 10);
             continue;
@@ -432,7 +419,7 @@ fn printUsage() !void {
             "       [--marker=auto?|exact?|apply?] [--max-depth=N]\n" ++
             "       [--slow-ms=N] [--verbose|-v] [--counters] [--track-sites]\n" ++
             "       [--require-no-miss] [--retry-misses] [--max-k=N]\n" ++
-            "       [--no-shape-cache] [--gen-nodes=N] [--gen-fuel=N]\n" ++
+            "       [--no-shape-cache]\n" ++
             "       [--global-budget=TICKS] [--alloc-trap=MIB]\n" ++
             "       [--fwd-facts=N] [--fwd-layers=N] [--fwd-attempts=N]\n" ++
             "       [--fwd-tuples=N]\n" ++
@@ -675,8 +662,6 @@ fn frontierGenerateOptions(options: BenchOptions) Search.GenerateOptions {
     if (std.mem.eql(u8, options.marker, "auto?")) {
         var gen = Search.GenerateOptions{ .enabled = true, .max_depth = options.max_depth };
         gen.shape_cache = options.shape_cache;
-        if (options.gen_nodes != 0) gen.max_nodes = options.gen_nodes;
-        if (options.gen_fuel != 0) gen.fuel = options.gen_fuel;
         if (options.global_budget) |budget| {
             gen.global_budget = if (budget == 0) null else budget;
         }
@@ -1118,7 +1103,7 @@ const BreadthStats = struct {
 const DepthRunStatus = enum { found, miss, err };
 
 /// Which bound ended a MISS: the first limit `Search.miss.MissReport` shows,
-/// in the precedence stack guard, budget, fuel, forward saturation, node cap.
+/// in the precedence stack guard, budget, forward saturation.
 /// A budget truncation is split by how far the core got: `budget_deep`
 /// when the core got through every depth below `max_depth` (the proof may
 /// need more depth, not only more budget), `budget_shallow` otherwise.
@@ -1126,10 +1111,8 @@ const MissCause = enum {
     exhausted,
     budget_deep,
     budget_shallow,
-    fuel,
     stack,
     forward,
-    node_cap,
     no_generation,
 
     fn of(counters: *const Search.SearchCounters, max_depth: usize) MissCause {
@@ -1142,9 +1125,7 @@ const MissCause = enum {
                 .budget_shallow,
             .none => {},
         }
-        if (report.fuel) return .fuel;
         if (report.forward) return .forward;
-        if (report.nodes) return .node_cap;
         if (!report.core_ran) return .no_generation;
         return .exhausted;
     }
@@ -1154,10 +1135,8 @@ const MissCause = enum {
             .exhausted => "exhausted",
             .budget_deep => "budget-deep",
             .budget_shallow => "budget-shallow",
-            .fuel => "fuel",
             .stack => "stack",
             .forward => "forward",
-            .node_cap => "node-cap",
             .no_generation => "no-gen",
         };
     }
@@ -2030,8 +2009,6 @@ fn retryMissNote(
     try w.print(" [retry {f}", .{retry});
     var retried = options;
     if (retry.depth) |v| retried.max_depth = @as(usize, @intCast(v));
-    if (retry.nodes) |v| retried.gen_nodes = @intCast(v);
-    if (retry.fuel) |v| retried.gen_fuel = @intCast(v);
     if (retry.budget) |v| retried.global_budget = v * Search.tunables.ticks_per_budget_unit;
     const run = runFrontierSearch(allocator, arena, mm0_src, spliced, human, retried);
     try w.print(" {s} t={d:.0}M]", .{

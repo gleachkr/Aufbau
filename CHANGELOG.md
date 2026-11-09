@@ -100,8 +100,7 @@ This file records notable user-facing changes to Aufbau. The project follows
   budget the generation search needed. The
   `nd_fol` rows cost 97% fewer ticks and the `additive_fol` rows 29%
   fewer, and the Pelletier battery goes from 36 to 47 of 48 problems
-  found. The per-call `nodes` and `fuel` parameters bound only the
-  generation search.
+  found.
 - `@auto focus $ PRINCIPAL $ : CONTINUATION...`: focused proof search. The
   annotation names the formula a rule decomposes and, per hypothesis, the
   formula that stays in focus there (`_` releases it). Applying a focus rule
@@ -133,13 +132,14 @@ This file records notable user-facing changes to Aufbau. The project follows
 - `auto?` runs the search core alone: the generation search no longer takes
   over a goal the core misses or does not take. On the bench corpus this
   loses no proof. A goal the core does not take, one with an idempotent but
-  not commutative `@acui` combiner, is not searched, and `nodes` and `fuel`
-  bound nothing now. Two kinds of proof only the generation search found are
+  not commutative `@acui` combiner, is not searched. Two kinds of proof only the generation search found are
   gone: two eliminations in a row from a hypothesis with no `@auto forward`
   (`x ⊢ c` from `x ⊢ a ∧ (b ∧ c)`), which `@auto forward` reaches, and a step under an
   idempotent context that keeps the formula it takes apart beside its parts
   (`g , a ∧ b ⊢ c` from `g , a ∧ b , a , b ⊢ c`). The generation search is
-  removed, and with it `abc search`'s `--ladder` and `--no-core`, the
+  removed, and with it the `nodes:` and `fuel:` parameters of `auto?`, which
+  bounded only it (`nodes:` on `conversion?` stays), `abc search`'s
+  `--ladder` and `--no-core`, the
   `phase`, `phase_name` and `rules` fields of `--json`, and the rules `-vv`
   listed as tried most.
 - A search stops after about 3 seconds at the default budget, down from about
