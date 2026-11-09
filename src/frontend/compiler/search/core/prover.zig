@@ -2166,8 +2166,10 @@ pub const Prover = struct {
     /// part of the bag (`Terms` `pairBags`), such as the rest of a share a
     /// rule's conclusion took members of (`Terms` `growShare`), and is
     /// settled like a share. Under a set law shares may overlap, so it is
-    /// no part the others leave.
-    fn openParts(self: *Prover, split: *const Split, out: *std.ArrayListUnmanaged(u32)) Error!void {
+    /// no part the others leave. Kept out of line, as are `remainder` and
+    /// `left`, so their member bags are not part of the frames that stay
+    /// live while the proof goes on (`expand`, `settle`).
+    noinline fn openParts(self: *Prover, split: *const Split, out: *std.ArrayListUnmanaged(u32)) Error!void {
         for (split.shares) |idx| {
             if (self.wvars.vars.items[idx].value == null) try out.append(self.allocator, idx);
         }
@@ -2236,7 +2238,7 @@ pub const Prover = struct {
     /// own members took nor a bound share holds, as one expression; null
     /// when there are none and the bag has no unit, or a bound share holds
     /// more than the bag has.
-    fn remainder(self: *Prover, split: *const Split) Error!?ExprId {
+    noinline fn remainder(self: *Prover, split: *const Split) Error!?ExprId {
         var members: AcuiBag.ExprBag = .{};
         if (!try self.left(split, &members)) return null;
         return split.bag.combiner.build(self.terms.theorem, members.slice());
@@ -2244,10 +2246,10 @@ pub const Prover = struct {
 
     /// The members of `split`'s bag, resolved, that neither the template's
     /// own members took nor a bound share holds, into `out`, counted: each
-    /// member a share holds takes one copy, or under a set law any. False
+    /// member a share holds takes one copy, or under a set law every copy. False
     /// when a share holds a bag member of which no copy is left without a
     /// set law. A share's member that is no bag member is left to `settle`.
-    fn left(self: *Prover, split: *const Split, out: *AcuiBag.ExprBag) Error!bool {
+    noinline fn left(self: *Prover, split: *const Split, out: *AcuiBag.ExprBag) Error!bool {
         const bag = split.bag;
         var all: AcuiBag.ExprBag = .{};
         var used: u64 = bag.taken;
@@ -2265,6 +2267,10 @@ pub const Prover = struct {
                     if (candidate != member) continue;
                     known = true;
                     const bit = @as(u64, 1) << @intCast(at);
+                    if (idempotent) {
+                        used |= bit;
+                        continue;
+                    }
                     if (used & bit != 0) continue;
                     used |= bit;
                     continue :held;
@@ -2276,6 +2282,13 @@ pub const Prover = struct {
             if (used & (@as(u64, 1) << @intCast(at)) == 0) _ = out.append(member);
         }
         return true;
+    }
+
+    /// Whether the shares hold every member of `split`'s bag the template's
+    /// own members did not take (`left` leaves none).
+    noinline fn holdsRest(self: *Prover, split: *const Split) Error!bool {
+        var unheld: AcuiBag.ExprBag = .{};
+        return try self.left(split, &unheld) and unheld.len == 0;
     }
 
     /// Whether every bound share holds only members of its bag, as far as
@@ -2352,8 +2365,7 @@ pub const Prover = struct {
     fn placeStrays(self: *Prover, split: *const Split, strays: []const ExprId, next: ?*const Agenda) Error!Outcome {
         const bag = split.bag;
         if (strays.len == 0) {
-            var unheld: AcuiBag.ExprBag = .{};
-            if (!try self.left(split, &unheld) or unheld.len != 0) return .failed;
+            if (!try self.holdsRest(split)) return .failed;
             return self.run(next);
         }
         // An earlier placement may have made it a member already.

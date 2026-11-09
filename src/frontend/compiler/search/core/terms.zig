@@ -1085,13 +1085,22 @@ const BagState = struct {
     goal: []const ExprId,
     used: u64 = 0,
     index: usize = 0,
-    rest: ?usize = null,
-    shared: bool = false,
     /// The unbound rest binders, as a mask over the rule's arguments.
     rests: u64 = 0,
     /// The share the bag node faces (`Matcher.growShare`), whose
     /// available members are `goal`.
     grow: ?u32 = null,
+
+    /// The one unbound rest binder, which takes what the template's
+    /// members leave.
+    fn rest(self: BagState) ?usize {
+        return if (@popCount(self.rests) == 1) @ctz(self.rests) else null;
+    }
+
+    /// Several unbound rest binders share what the members leave (`split`).
+    fn shared(self: BagState) bool {
+        return @popCount(self.rests) > 1;
+    }
 };
 
 /// Two bags being unified member by member: each of `a`'s members against
@@ -1278,10 +1287,7 @@ fn Matcher(comptime Sink: type) type {
                         // A node facing a share takes members the share may
                         // still take, as a bag of its parts (`growShare`).
                         if (@hasDecl(Sink, "shareMembers")) {
-                            var members: AcuiBag.ExprBag = .{};
-                            if (try self.sink.shareMembers(idx, &members)) |combiner| {
-                                return self.startShareBag(combiner, template, idx, members.slice(), next);
-                            }
+                            if (try @call(.never_inline, startShareBag, .{ self, template, idx, next })) return;
                         }
                         return self.postpone(template, target, true, next);
                     }
@@ -1570,12 +1576,10 @@ fn Matcher(comptime Sink: type) type {
             // Bound rest binders and structured members first, the unbound
             // rest binder last: it takes what the others leave. Several
             // distinct unbound ones share it.
-            var rest: ?usize = null;
             var rests: u64 = 0;
             var kept: usize = 0;
             for (parts.slice()) |part| {
                 if (self.isRestBinder(combiner, part) and self.bindings[part.binder] == null) {
-                    rest = part.binder;
                     rests |= @as(u64, 1) << @intCast(part.binder);
                 } else {
                     kept += 1;
@@ -1594,34 +1598,37 @@ fn Matcher(comptime Sink: type) type {
                 .combiner = combiner,
                 .template = ordered,
                 .goal = try allocator.dupe(ExprId, members),
-                .rest = if (@popCount(rests) > 1) null else rest,
-                .shared = @popCount(rests) > 1,
                 .rests = rests,
             };
         }
 
+        /// The bag node `template` against the unbound share `share`, as
+        /// `prepareBag` against a goal bag, with the members the share may
+        /// hold as the goal's; null when the share stays closed to it.
+        fn prepareShareBag(self: *Self, template: TemplateExpr, share: u32) MatchError!?BagState {
+            var members: AcuiBag.ExprBag = .{};
+            const combiner = (try self.sink.shareMembers(share, &members)) orelse return null;
+            var state = try self.prepareParts(combiner, template, members.slice());
+            state.grow = share;
+            return state;
+        }
+
         /// Match the bag node `template` against the unbound share `share`
-        /// whose available members are `members`: its member parts take
-        /// distinct ones, as against a goal bag, but the members they leave
-        /// stay with the share's split, and each unbound rest binder
-        /// becomes a part of that split (`growShare`).
-        fn startShareBag(
-            self: *Self,
-            combiner: AcuiBag.Combiner,
-            template: TemplateExpr,
-            share: u32,
-            members: []const ExprId,
-            next: ?*const Pending,
-        ) MatchError!void {
-            var state = try @call(.never_inline, prepareParts, .{ self, combiner, template, members });
+        /// (`prepareShareBag`), or return false when the share stays closed
+        /// to it: its member parts take distinct members, as against a goal
+        /// bag, but the members they leave stay with the share's split, and
+        /// each unbound rest binder becomes a part of that split
+        /// (`growShare`). Kept out of line so `term`'s frame does not hold
+        /// the bag's state.
+        fn startShareBag(self: *Self, template: TemplateExpr, share: u32, next: ?*const Pending) MatchError!bool {
+            const state = (try @call(.never_inline, prepareShareBag, .{ self, template, share })) orelse return false;
             defer self.terms.allocator.free(state.template);
             defer self.terms.allocator.free(state.goal);
             // A node of rest binders alone (`t_weak`'s `g , d`) would only
             // split the open share into open parts: the share already
             // stands for any part of the bag.
-            if (state.template.len == 0 and state.rests != 0) return;
-            state.grow = share;
-            try self.bag(state, next);
+            if (state.template.len != 0 or state.rests == 0) try self.bag(state, next);
+            return true;
         }
 
         /// The bag node of `state` has taken its members out of those its
@@ -1631,10 +1638,6 @@ fn Matcher(comptime Sink: type) type {
         fn growShare(self: *Self, state: BagState, share: u32, next: ?*const Pending) MatchError!void {
             const rule = self.rule orelse return;
             const wvars = self.terms.wvars;
-            var value: AcuiBag.ExprBag = .{};
-            for (state.goal, 0..) |member, at| {
-                if (state.used & (@as(u64, 1) << @intCast(at)) != 0) _ = value.append(member);
-            }
             const start = wvars.mark();
             var minted: u64 = 0;
             defer {
@@ -1650,14 +1653,27 @@ fn Matcher(comptime Sink: type) type {
                 const wvar = try wvars.mint(rule.args[idx].sort_name, &.{}, false);
                 self.bindings[idx] = wvar;
                 minted |= @as(u64, 1) << @intCast(idx);
-                if (!value.append(wvar)) return error.Unsupported;
             }
-            // A node of no members (the unit) leaves the share the unit.
-            const built = if (value.len == 0)
-                (try state.combiner.build(self.terms.theorem, &.{})) orelse return
-            else
-                try self.terms.buildBag(state.combiner, &value);
+            const built = (try @call(.never_inline, shareValue, .{ self, state, minted })) orelse return;
             if (try wvars.bind(share, built)) try self.run(next);
+        }
+
+        /// The share's value: the members the bag node took, then the wvars
+        /// `minted` for its rest binders. A node of no members (the unit)
+        /// leaves the share the unit. Kept out of line, as `prepareBag` is,
+        /// so the bag of members is not on the stack for the rest of the
+        /// proof.
+        fn shareValue(self: *Self, state: BagState, minted: u64) Error!?ExprId {
+            var value: AcuiBag.ExprBag = .{};
+            for (state.goal, 0..) |member, at| {
+                if (state.used & (@as(u64, 1) << @intCast(at)) != 0) _ = value.append(member);
+            }
+            var rest = minted;
+            while (rest != 0) : (rest &= rest - 1) {
+                if (!value.append(self.bindings[@ctz(rest)].?)) return error.Unsupported;
+            }
+            if (value.len == 0) return try state.combiner.build(self.terms.theorem, &.{});
+            return try self.terms.buildBag(state.combiner, &value);
         }
 
         fn bag(self: *Self, state: BagState, next: ?*const Pending) MatchError!void {
@@ -1715,13 +1731,13 @@ fn Matcher(comptime Sink: type) type {
 
         fn finishBag(self: *Self, state: BagState, next: ?*const Pending) MatchError!void {
             if (state.grow) |share| return self.growShare(state, share, next);
-            if (state.shared) {
+            if (state.shared()) {
                 const outer = self.terms.split;
                 self.terms.split = .{ .combiner = state.combiner, .members = state.goal, .taken = state.used };
                 defer self.terms.split = outer;
                 return self.run(next);
             }
-            const rest = state.rest orelse {
+            const rest = state.rest() orelse {
                 if (@popCount(state.used) == state.goal.len) try self.run(next);
                 return;
             };
