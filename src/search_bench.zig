@@ -184,10 +184,8 @@ const default_frontier_corpus = [_]FixturePair{
         .proof_path = "tests/search_bench_cases/zermelo_hilbert_frontier.auf",
     },
     .{
-        // System F. `@auto backward` on the intros `t_lam`/`t_tlam` only:
-        // 8→13 FULL of 22. Adding `t_app`/`t_tapp` forward gained no FULL
-        // theorem. Its misses are `exhausted`, and several survive
-        // --max-depth=12.
+        // System F. Adding `t_app`/`t_tapp` forward gained no FULL theorem.
+        // Its misses are `exhausted`, and several survive --max-depth=12.
         .name = "reynolds",
         .mm0_path = "tests/search_bench_cases/reynolds_frontier.mm0",
         .proof_path = "tests/search_bench_cases/reynolds_frontier.auf",

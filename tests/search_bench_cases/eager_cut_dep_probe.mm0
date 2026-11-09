@@ -227,9 +227,7 @@ axiom and_intro (g: ctx) (a b: wff):
 axiom and_elim_l (g: ctx) (a b: wff): $ g ⊢ a ∧ b $ > $ g ⊢ a $;
 axiom and_elim_r (g: ctx) (a b: wff): $ g ⊢ a ∧ b $ > $ g ⊢ b $;
 
---| @auto backward
 axiom or_intro_l (g: ctx) (a b: wff): $ g ⊢ a $ > $ g ⊢ a ∨ b $;
---| @auto backward
 axiom or_intro_r (g: ctx) (a b: wff): $ g ⊢ b $ > $ g ⊢ a ∨ b $;
 axiom or_elim (g: ctx) (a b c: wff):
   $ g ⊢ a ∨ b $ > $ g , a ⊢ c $ > $ g , b ⊢ c $ > $ g ⊢ c $;
@@ -245,7 +243,6 @@ axiom bi_elim_l (g: ctx) (a b: wff): $ g ⊢ a ↔ b $ > $ g ⊢ a $ > $ g ⊢ b
 axiom bi_elim_r (g: ctx) (a b: wff): $ g ⊢ a ↔ b $ > $ g ⊢ b $ > $ g ⊢ a $;
 
 -- Classical reductio, the only classical principle.
---| @auto backward
 axiom raa (g: ctx) (a: wff): $ g , ¬ a ⊢ ⊥ $ > $ g ⊢ a $;
 
 -- Eigenvariable: `g: ctx` cannot depend on `x`, which is the side condition.
@@ -260,7 +257,6 @@ axiom all_elim {x: obj} (g: ctx x) (p: wff x) (t: obj):
 
 --| @view {x: obj} (g: ctx x) (t: obj x) (p: wff x) (q: wff): $ g ⊢ q $ > $ g ⊢ ∃ x p $
 --| @recover t q p x
---| @auto backward
 axiom ex_intro {x: obj} (g: ctx x) (p: wff x) (t: obj):
   $ g ⊢ [x/t] p $ > $ g ⊢ ∃ x p $;
 
@@ -302,7 +298,6 @@ theorem or_right (g: ctx) (a b: wff):
 theorem bi_left (g: ctx) (a b c: wff):
   $ g , (a → b) , (b → a) ⊢ c $ > $ g , (a ↔ b) ⊢ c $;
 
---| @auto backward
 theorem imp_left (g: ctx) (a b c: wff):
   $ g , (a → b) ⊢ a $ > $ g , (a → b) , b ⊢ c $ > $ g , (a → b) ⊢ c $;
 
@@ -312,7 +307,6 @@ theorem not_left (g: ctx) (a: wff): $ g , ¬ a ⊢ a $ > $ g , ¬ a ⊢ ⊥ $;
 --| @view {x: obj} (g: ctx x) (t: obj x) (p: wff x) (q c: wff): $ g , (∀ x p) , q ⊢ c $ > $ g , (∀ x p) ⊢ c $
 --| @recover t q p x
 --| @freshen c x
---| @auto backward
 theorem all_left {x: obj} (g: ctx x) (p: wff x) (t: obj) (c: wff):
   $ g , (∀ x p) , [x/t] p ⊢ c $ > $ g , (∀ x p) ⊢ c $;
 

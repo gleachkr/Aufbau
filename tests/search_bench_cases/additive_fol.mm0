@@ -281,7 +281,6 @@ axiom rall (g d: ctx) {x: obj} (p: wff x):
 --       no renaming.
 --| @view {x: obj} (g d: ctx x) (t: obj x) (p: wff x) (q: wff): $ g , (∀ x p) , q ⊢ d $ > $ g , (∀ x p) ⊢ d $
 --| @recover t q p x
---| @auto backward
 axiom lall {x: obj} (g d: ctx x) (p: wff x) (t: obj x):
   $ g , (∀ x p) , [x/t] p ⊢ d $ > $ g , (∀ x p) ⊢ d $;
 
@@ -297,7 +296,6 @@ axiom lex (g d: ctx) {x: obj} (p: wff x):
 --       formula `q` and `@recover` reconstructs `t` from it.
 --| @view {x: obj} (g d: ctx x) (t: obj x) (p: wff x) (q: wff): $ g ⊢ q , (∃ x p) , d $ > $ g ⊢ (∃ x p) , d $
 --| @recover t q p x
---| @auto backward
 axiom rex {x: obj} (g d: ctx x) (p: wff x) (t: obj x):
   $ g ⊢ [x/t] p , (∃ x p) , d $ > $ g ⊢ (∃ x p) , d $;
 

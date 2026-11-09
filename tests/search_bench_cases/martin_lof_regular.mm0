@@ -297,13 +297,11 @@ axiom lam_alpha {x y: tm} (A: ty) (t: tm x):
 -- Π, λ, and application are grouped with their formation, introduction,
 -- elimination, and computation rules. This is the pattern later sections
 -- should follow for every constructor family.
---| @auto backward
 axiom pi_form (g: ctx) (A: ty) {x: tm} (B: ty x):
   $ g ⊢ Ty A $
   > $ g , x : A ⊢ Ty B $
   > $ g ⊢ Ty (Π x : A. B) $;
 
---| @auto backward
 axiom lam_intro (g: ctx) (A: ty) {x: tm} (B: ty x) (t: tm x):
   $ g ⊢ Ty A $
   > $ g , x : A ⊢ Ty B $
@@ -497,7 +495,6 @@ axiom sb_tm_nat_rec {x: tm} (u: tm x) (A: ty x) (z s n: tm x):
 
 axiom nat_form (g: ctx): $ g ⊢ Ty Nat $;
 axiom zero_intro (g: ctx): $ g ⊢ zero : Nat $;
---| @auto backward
 axiom suc_intro (g: ctx) (n: tm):
   $ g ⊢ n : Nat $
   > $ g ⊢ suc n : Nat $;
@@ -702,13 +699,11 @@ axiom sb_tm_J {w x y q: tm} (u: tm w) (A: ty w) (C: ty w x y q)
       ≈ J x y q ([w/u] A) ([w/u] C) (⟦ w / u ⟧ r)
           (⟦ w / u ⟧ s) (⟦ w / u ⟧ t) (⟦ w / u ⟧ p) $;
 
---| @auto backward
 axiom Id_form (g: ctx) (A: ty) (s t: tm):
   $ g ⊢ s : A $
   > $ g ⊢ t : A $
   > $ g ⊢ Ty (Id A s t) $;
 
---| @auto backward
 axiom refl_intro (g: ctx) (A: ty) (s: tm):
   $ g ⊢ s : A $
   > $ g ⊢ refl A s : Id A s s $;

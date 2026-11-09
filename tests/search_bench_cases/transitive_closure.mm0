@@ -5,9 +5,8 @@
 -- goal. `trans` combines path×path, so a chain's full closure is the O(n^2) set
 -- of all sub-paths (heavy fact growth + dedupe), reachable in log-depth layers.
 -- Backward search alone cannot do it: applying `trans` backward to `path a z`
--- needs an open middle vertex `?y` (an existential subgoal), which is the
--- @auto-backward / open-meta path, not enabled here. So forward saturation is
--- the load-bearing mechanism.
+-- needs an open middle vertex `?y` (an existential subgoal). So forward
+-- saturation is the load-bearing mechanism.
 --
 -- Depth-frontier behaviour at the DEFAULT forward bounds (layers=3, facts=64,
 -- attempts=1024, tuples=2048): reach2..reach16 regenerate FULL from edges

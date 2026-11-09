@@ -1,9 +1,9 @@
 # Powering search
 
 [Proof search](proof-search.md) introduced `auto?` and `conversion?`. This
-chapter describes the `@auto` annotations that control `auto?`. Unannotated
-rules remain searchable; annotations opt particular rules into additional,
-more expensive strategies.
+chapter describes the `@auto` annotations that control `auto?`. Every rule
+is searchable without an annotation; annotations change how search uses
+particular rules.
 
 ## What the search does on its own
 
@@ -29,52 +29,28 @@ The suggestion is `and_intro [and_elim_r [#1], and_elim_l [#1]]`.
 - `#1` concludes `_ ⊢ a ∧ b`: it fits the pattern, and matching determines
   `?t := a`.
 
-Ordinary search prefers applications whose bindings it can determine
-immediately. If those candidates fail, it may leave a binder unresolved
-while searching for a premise. A *metavariable*, such as `?t`, represents
-that unknown expression. The annotations below control when search uses this
-strategy.
+A binder that matching does not determine, such as `?t` here, is a
+*metavariable*: it stands for a still-unknown expression, and a later match
+determines it.
 
-## `@auto backward`: witnesses as metavariables
+### Witnesses as metavariables
 
-Ordinary search handles rules such as ∃-introduction poorly. The witness may
-be determined several steps below the introduction, so search must carry it as
-a metavariable. Because unannotated search defers that strategy, earlier
-attempts may consume the work budget first. Mark rules that normally require
-such witnesses with `@auto backward`:
+Search applies ∃-introduction without any annotation, although the goal
+does not determine its witness:
 
 ```mm0
---| @auto backward
 axiom ex_intro {x: obj} (g: ctx) (t: obj x) (p: wff x):
   $ g ⊢ [x := t] p $ > $ g ⊢ ∃ x p $;
 ```
 
-For an annotated rule, metavariable propagation becomes an ordinary search
-step rather than a last resort. Several metavariables may coexist, and any
-still undetermined after a proof is found receive witnesses from the `@vars`
-pool. The latter case occurs when a witness is introduced and eliminated
-entirely within the proof.
+The witness `t` becomes a metavariable that the rest of the proof
+determines. Several metavariables may coexist, and any still undetermined
+after a proof is found receive witnesses from the `@vars` pool. The latter
+case occurs when a witness is introduced and eliminated entirely within the
+proof.
 
-### Scheduling
-
-Search runs in phases that use increasingly expensive strategies. Every phase
-first searches at depth 1. The less expensive phases then deepen together,
-searching each depth before moving to the next. The other phases become
-particularly costly at greater depths, so they are applied to depths past the
-first only after the earlier phases have missed at every allowed depth. For
-unannotated rules, introducing metavariables is a last resort, available only
-in a late phase.
-
-`@auto backward` makes metavariable introduction available in earlier
-phases. At each depth, search still tries cheaper candidates first:
-unannotated rules, then annotated rules whose conclusions determine all
-their binders, then annotated rules with unresolved binders. Within each
-group, rules whose conclusions match more of the goal go first.
-
-### Nested deferrals
-
-Backward searches with metavariables may nest. Two `@auto backward` rules can
-occur on one path while both metavariables remain open in the sub-goal pattern.
+Metavariables may nest. Two `ex_intro` steps can occur on one path while
+both metavariables remain open in the sub-goal pattern.
 
 ```aufbau-proof prelude=nd-base,nd-rules,fol-base,fol-rules
 @@mm0
@@ -102,10 +78,6 @@ The outer `ex_intro` creates a metavariable `?s` and the subgoal `_ ⊢ ∃ y (P
 determines `?s := c`, and matching `#2` determines `?t := d`. Search uses
 these values to complete both `ex_intro` applications.
 
-Opening `?t` with `?s` unsolved required `@auto backward`. Without the
-annotation the proof hits the search limit, trying rules other than `ex_intro`
-for the inner search.
-
 ### Choosing an arbitrary witness
 
 Sometimes the proof does not determine a witness because any variable will
@@ -120,30 +92,15 @@ l1: $ _ ⊢ ∃ x (P x → P x) $ by auto?
 The suggestion is
 
 ```
-ex_intro (t := $ u $) [imp_intro [ax []]]
+ex_intro [imp_intro [ax (g := $ _ $, a := $ P u $) []]]
 ```
 
-The search created a metavariable `?t`, proved the tautology `P ?t → P ?t`, and
-took the pool variable `u` as the witness for `?t`. Without the annotation, the
-same search fails:
+The search created a metavariable `?t`, proved the tautology `P ?t → P ?t`,
+and took the pool variable `u` as the witness for `?t`.
 
-```
-auto? search failed: the search was cut short: the limit of 256 subgoals per
-pass was reached in 1 pass. 153 applications validated (55 accepted). Every
-depth below 6 was searched, so the proof may also be deeper. These limits share
-one work budget, so raise them together: try 'auto? (depth: 8, nodes: 512,
-budget: 6)'. A larger search finds only some of the proofs a smaller one
-misses; if it fails too, try proving an intermediate lemma first. Most-tried
-rules: ax (81 tried, 2 accepted), not_intro (42 tried, 42 accepted), all_intro
-(19 tried, 0 accepted).
-```
+### Rules that leave a formula open
 
-Use `@auto backward` for **introduction and witness** rules that build a goal
-from sub-goals while leaving part of a hypothesis undetermined. Existential
-introduction and similar generalization rules with a `@view` are typical.
-
-Using `@auto backward` on a rule that matches very broadly can be harmful,
-especially if the conclusion of that rule leaves its premises undetermined.
+A metavariable for a formula, rather than a witness, is more constrained.
 Consider
 
 ```mm0
@@ -152,9 +109,11 @@ axiom or_elim (g h i: ctx) (a b c: wff):
 ```
 
 Any sequent goal can match `… ⊢ c`, but the goal does not determine `a` or
-`b`. Applying this rule backward can create three poorly constrained
-subgoals. Exploring them may use the budget before search reaches rules
-better suited to the goal.
+`b`. Search does not guess them: while a goal holds such a metavariable, only
+a hypothesis, an axiom, or a rule whose conclusion determines it may prove
+that goal. So `or_elim` splits on a disjunction already at hand. Only when
+that search has run out of alternatives at every depth does search try once
+more without this restriction.
 
 ## `@auto forward`: enrich the pool first
 
@@ -219,13 +178,11 @@ axiom sb_imp {x: obj} (t: obj x) (p q: wff x):
 --| @recover t q p x
 axiom all_elim {x: obj} (t: obj x) (p: wff x): $ ∀ x p $ > $ [x := t] p $;
 
---| @auto backward
 --| @view {x: obj} (t: obj x) (p: wff x) (q: wff): $ q $ > $ ∃ x p $
 --| @recover t q p x
 axiom ex_intro {x: obj} (t: obj x) (p: wff x): $ [x := t] p $ > $ ∃ x p $;
 
 --| @auto forward
---| @auto backward
 axiom mp (a b: wff): $ a → b $ > $ a $ > $ b $;
 @@auf
 lemma anchor {x y: obj}:
@@ -236,17 +193,18 @@ l1: $ ∃ y (R y) $ by auto?
 
 The useful route to the existential goal is to derive `R c` from the two
 universal facts and `P c`. Forward saturation finds that route: `all_elim`
-turns `#1` into the family `P ?t → Q ?t`, and `mp` (enrolled forward as well
-as backward) joins the family with `P c`, instantiating `t := c`. The derived
-`Q c` joins `#2`'s family the same way, giving `R c`, which determines the
-metavariable introduced by backward `ex_intro`. Search suggests:
+turns `#1` into the family `P ?t → Q ?t`, and `mp` (enrolled forward, and
+applied backward like every rule) joins the family with `P c`, instantiating
+`t := c`. The derived `Q c` joins `#2`'s family the same way, giving `R c`,
+which determines the metavariable introduced by backward `ex_intro`. Search
+suggests:
 
 ```
-ex_intro [mp (a := $ Q c $, b := $ R c $) [all_elim [#2], mp [all_elim [#1], #3]]]
+ex_intro [mp (a := $ Q c $, b := $ R c $) [all_elim (t := $ c $) [#2], mp (a := $ P c $, b := $ Q c $) [all_elim (t := $ c $) [#1], #3]]]
 ```
 
-If you delete the two `@auto forward` lines, the same search runs out of
-subgoals at every depth, though the proof is only five applications deep.
+If you delete the two `@auto forward` lines, the same search uses up its
+work budget by depth 11, though the proof is only five applications deep.
 Backward search reaches `mp` with two unresolved premises, `?a → R ?t` and
 `?a`. These patterns do not constrain the search enough to find `t := c`. 
 Forward search instead matches each derived implication family against a known 
@@ -279,8 +237,7 @@ axiom rand (d: ctx) (a b: wff):
   $ ⊢ a , d $ > $ ⊢ b , d $ > $ ⊢ (a ∧ b) , d $;
 ```
 
-An eager rule also has the effect of `@auto backward`. It is tried before
-other registered rules, in priority order. Priority 1 is the default and
+An eager rule is tried before the other rules, in priority order. Priority 1 is the default and
 runs first. One ordering comes before priority: a rule that splits the
 context between its premises, eager or not, is tried after every rule
 that does not.
@@ -321,38 +278,6 @@ hypothesis. A proof that must forget a context member *before* applying a
 rule with a bound binder (one that the member mentions) can no longer be
 found through a bridge rule; such proofs are rare, and the bench shows
 the trade.
-
-## `@auto focus`: chain the rules that decompose one formula
-
-The left rules for `∀` and `→` and the right rule for `∃` are where search
-makes real choices, and a proof often applies several of them in a row to
-one formula. Each of those steps normally costs a depth level, although
-only the first, picking the formula, was a choice. `@auto focus` declares
-which formula a rule decomposes and what each premise continues with:
-
-```mm0
---| @auto focus $ ∀ x p $ : $ [x/t] p $
-theorem all_left {x: obj} (g: ctx x) (p: wff x) (t: obj x) (c: wff x):
-  $ g , (∀ x p) , [x/t] p ⊢ c $ > $ g , (∀ x p) ⊢ c $;
-
---| @auto focus $ a → b $ : $ a $ $ b $
-theorem imp_left (g: ctx) (a b c: wff):
-  $ g , (a → b) ⊢ a $ > $ g , (a → b) , b ⊢ c $ > $ g , (a → b) ⊢ c $;
-```
-
-The formula before the `:` is the principal, found in the conclusion. Each
-formula after it belongs to one hypothesis, in order, and `_` stands for a
-hypothesis that does not continue. Applying a focus rule to an unfocused
-goal costs a depth level, as any step does, and leaves each continuing
-premise focused on its formula. A focused goal admits only focus rules that
-decompose that formula, plus premise-free rules such as `ax`, and those
-steps are free. Focus ends when a continuation is a formula no focus rule
-decomposes in that position.
-
-The chain is bounded by the formula's structure, so free steps cannot run
-away. Like `eager`, the annotation is trusted: it suits the non-invertible
-rules of a sequent calculus whose invertible rules are `eager`, and a
-misplaced one can make search miss proofs.
 
 ## `@auto trigger`: seed leaf facts
 

@@ -756,18 +756,14 @@ const loop_theory =
     \\axiom sb_f_Q {x: obj} (t: obj x) (a: obj x):
     \\  $ [x/t] (Q a) ↔ Q (subst x / t a) $;
     \\axiom ax (g: ctx) (a: wff): $ g , a ⊢ a $;
-    \\--| @auto backward
     \\axiom imp_intro (g: ctx) (a b: wff): $ g , a ⊢ b $ > $ g ⊢ a → b $;
-    \\--| @auto backward
     \\axiom raa (g: ctx) (a: wff): $ g , ¬ a ⊢ ⊥ $ > $ g ⊢ a $;
     \\--| @auto eager
     \\axiom not_left (g: ctx) (a: wff): $ g , ¬ a ⊢ a $ > $ g , ¬ a ⊢ ⊥ $;
-    \\--| @auto backward
     \\axiom imp_left (g: ctx) (a b c: wff):
     \\  $ g , (a → b) ⊢ a $ > $ g , (a → b) , b ⊢ c $ > $ g , (a → b) ⊢ c $;
     \\--| @view {x: obj} (g: ctx x) (t: obj x) (p: wff x) (q c: wff): $ g , (∀ x p) , q ⊢ c $ > $ g , (∀ x p) ⊢ c $
     \\--| @recover t q p x
-    \\--| @auto backward
     \\axiom all_left {x: obj} (g: ctx x) (p: wff x) (t: obj x) (c: wff x):
     \\  $ g , (∀ x p) , [x/t] p ⊢ c $ > $ g , (∀ x p) ⊢ c $;
 ;
@@ -1039,12 +1035,10 @@ test "auto proves a goal that needs two instances of one universal" {
         \\axiom sb_f_Q {x: obj} (t: obj x) (a: obj x):
         \\  $ [x/t] (Q a) ↔ Q (subst x / t a) $;
         \\axiom ax (g: ctx) (a: wff): $ g , a ⊢ a $;
-        \\--| @auto backward
         \\axiom imp_left (g: ctx) (a b c: wff):
         \\  $ g , (a → b) ⊢ a $ > $ g , (a → b) , b ⊢ c $ > $ g , (a → b) ⊢ c $;
         \\--| @view {x: obj} (g: ctx x) (t: obj x) (p: wff x) (q c: wff): $ g , (∀ x p) , q ⊢ c $ > $ g , (∀ x p) ⊢ c $
         \\--| @recover t q p x
-        \\--| @auto backward
         \\axiom all_left {x: obj} (g: ctx x) (p: wff x) (t: obj x) (c: wff x):
         \\  $ g , (∀ x p) , [x/t] p ⊢ c $ > $ g , (∀ x p) ⊢ c $;
         \\theorem two_instances {x: obj}:

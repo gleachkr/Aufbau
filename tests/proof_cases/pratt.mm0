@@ -300,7 +300,6 @@ axiom star_ind (g: ctx) (w: world) (a: prog) (p: form):
 -- Eigenworld again: valid means "at a state you know nothing about".
 axiom valid_intro {w: world} (p: form):
   $ ∅ ⊢ w : p $ > $ ⊨ p $;
---| @auto backward
 axiom valid_elim (g: ctx) (w: world) (p: form):
   $ ⊨ p $ > $ g ⊢ w : p $;
 

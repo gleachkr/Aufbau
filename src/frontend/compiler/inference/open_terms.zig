@@ -301,7 +301,7 @@ pub const OpenInstantiateOptions = struct {
     /// conclusion. Such a binder is *determined* by matching the conclusion
     /// against the goal, so it must be pinned before instantiation — never
     /// deferred as a fresh meta (per-binder or via the whole-context collapse).
-    /// Only binders absent from the conclusion are genuine `@auto backward`
+    /// Only binders absent from the conclusion are genuine
     /// witnesses (e.g. `rex`'s `t`, which appears only in the hypothesis) and
     /// may be deferred. An unresolved conclusion binder fails the walk, exactly
     /// like a bound-class or recover-owned one, so an over-general application
@@ -315,14 +315,6 @@ pub const OpenInstantiateOptions = struct {
     /// (recover-owned binders); this is a mask the caller derives from the
     /// conclusion template. Different provenance, different representation.
     conclusion_binders: u64 = 0,
-    /// When set, an openable (bound-class / subterm-conclusion) binder inside an
-    /// ACUI structural combiner is opened *in place* — preserving the combiner
-    /// structure for the open-path readback — instead of hard-blocking the walk.
-    /// Set only on the constrained-MP / non-`@auto`-backward path (eliminators
-    /// like `nat_ind_elim`, whose step context `join(join(g,k:Nat),ih:C)` must
-    /// open `ih`). Left false on the `@auto`-backward witness path, which
-    /// resolves such binders through force-first / enumeration instead.
-    open_bound_in_combiner: bool = false,
     arg_infos: []const ArgInfo,
 };
 
@@ -422,33 +414,19 @@ fn instantiateTemplateOpenInner(
                     options,
                 )) break :blk null;
                 // An *openable* binder (bound-class, or a conclusion binder in
-                // this subterm position) inside the combiner. When
-                // `open_bound_in_combiner` is set (the constrained-MP /
-                // non-`@auto`-backward path that reaches an eliminator like
-                // `nat_ind_elim`), open it in place — minted as a
-                // `.bound_choice`/meta leaf by the `.binder` arm below — so the
-                // combiner structure (e.g. the step's context
-                // `join(join(g, k:Nat), ih:C)`) is preserved for the open-path
-                // readback. Otherwise (the `@auto`-backward witness path, e.g.
-                // `drinker`/`fan_in`) keep the prior hard-block: those rules
-                // resolve their witnesses through the force-first / enumeration
-                // machinery, which the block routes to, and opening in place
-                // would derail it.
-                const openable = templateHasOpenableUnresolvedBinder(
+                // this subterm position) inside the combiner hard-fails too.
+                if (templateHasOpenableUnresolvedBinder(
                     template,
                     binders,
                     options,
-                );
-                if (openable and !options.open_bound_in_combiner) break :blk null;
-                // Only when every unresolved binder is a plain context-split
-                // binder do we collapse the whole subtree to one context meta (a
-                // per-binder split there would make later context splitting
-                // ambiguous).
-                if (!openable) break :blk try options.factory.make(
+                )) break :blk null;
+                // Every unresolved binder is a plain context-split binder:
+                // collapse the whole subtree to one context meta (a per-binder
+                // split there would make later context splitting ambiguous).
+                break :blk try options.factory.make(
                     theorem,
                     env.terms.items[app.term_id].ret_sort_name,
                 );
-                // else (openable and allowed): fall through to open in place.
             }
             const args = try theorem.allocator.alloc(ExprId, app.args.len);
             errdefer theorem.allocator.free(args);

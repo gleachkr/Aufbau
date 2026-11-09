@@ -185,13 +185,11 @@ axiom ne_def (a b: nat): $ a ≠ b ↔ ¬ a = b $;
 -- a phase-6 harvest + re-ladder) — euclid's misses are existential/
 -- equational, not elimination-pin-shaped, so the analytic seeds buy nothing.
 axiom ax (g: ctx) (a: wff): $ g , a ⊢ a $;
---| @auto backward
 axiom imp_intro (g: ctx) (a b: wff):
   $ g , a ⊢ b $ > $ g ⊢ a → b $;
 --| @auto forward
 axiom imp_elim (g h: ctx) (a b: wff):
   $ g ⊢ a → b $ > $ h ⊢ a $ > $ g , h ⊢ b $;
---| @auto backward
 axiom and_intro (g h: ctx) (a b: wff):
   $ g ⊢ a $ > $ h ⊢ b $ > $ g , h ⊢ a ∧ b $;
 --| @auto forward
@@ -200,24 +198,19 @@ axiom and_elim_l (g: ctx) (a b: wff):
 --| @auto forward
 axiom and_elim_r (g: ctx) (a b: wff):
   $ g ⊢ a ∧ b $ > $ g ⊢ b $;
---| @auto backward
 axiom or_intro_l (g: ctx) (a b: wff):
   $ g ⊢ a $ > $ g ⊢ a ∨ b $;
---| @auto backward
 axiom or_intro_r (g: ctx) (a b: wff):
   $ g ⊢ b $ > $ g ⊢ a ∨ b $;
 axiom or_elim (g h k: ctx) (a b c: wff):
   $ g ⊢ a ∨ b $ > $ h , a ⊢ c $ > $ k , b ⊢ c $ >
   $ g , h , k ⊢ c $;
---| @auto backward
 axiom not_intro (g: ctx) (a: wff):
   $ g , a ⊢ ⊥ $ > $ g ⊢ ¬ a $;
 --| @auto forward
 axiom not_elim (g h: ctx) (a: wff):
   $ g ⊢ ¬ a $ > $ h ⊢ a $ > $ g , h ⊢ ⊥ $;
---| @auto backward
 axiom bot_elim (g: ctx) (a: wff): $ g ⊢ ⊥ $ > $ g ⊢ a $;
---| @auto backward
 axiom bi_intro (g h: ctx) (a b: wff):
   $ g , a ⊢ b $ > $ h , b ⊢ a $ > $ g , h ⊢ a ↔ b $;
 --| @auto forward
@@ -247,7 +240,6 @@ axiom all_intro_sub {x u: nat} (g: ctx x) (p: wff x):
 --     already names the eigenvariable differently from the ∀ binder.
 --| @freshen g x
 --| @fallback all_intro_sub
---| @auto backward
 axiom all_intro (g: ctx) {x: nat} (p: wff x):
   $ g ⊢ p $ > $ g ⊢ ∀ x p $;
 
@@ -259,7 +251,6 @@ axiom all_elim {x: nat} (g: ctx x) (t: nat x) (p: wff x):
 
 --| @view {x: nat} (g: ctx x) (t: nat x) (p: wff x) (q: wff): $ g ⊢ q $ > $ g ⊢ ∃ x p $
 --| @recover t q p x
---| @auto backward
 axiom ex_intro {x: nat} (g: ctx x) (t: nat x) (p: wff x):
   $ g ⊢ [x/t] p $ > $ g ⊢ ∃ x p $;
 

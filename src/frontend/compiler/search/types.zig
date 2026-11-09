@@ -702,10 +702,10 @@ pub const SourceSuggestionOptions = struct {
     counters: ?*SearchCounters = null,
     generate: GenerateOptions = .{},
     /// Build a human-readable `status_detail` string for failed searches
-    /// (see `SourceSuggestions.status_detail`) and enable the per-rule
-    /// attempt tallies feeding it (`SearchCounters.collect` on the local
-    /// counters block, when the caller supplies none). Off by default so
-    /// the bench and programmatic callers pay nothing.
+    /// (see `SourceSuggestions.status_detail`) and enable the candidate
+    /// timers (`SearchCounters.collect` on the local counters block, when
+    /// the caller supplies none). Off by default so the bench and
+    /// programmatic callers pay nothing.
     status_detail: bool = false,
     /// Backs the search's working memory, which it frees as it goes; null
     /// uses the caller's allocator. A caller whose allocator is an arena (the

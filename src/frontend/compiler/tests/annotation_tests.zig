@@ -131,7 +131,7 @@ test "compiler warns on annotations dropped before notation declarations" {
         \\provable sort wff;
         \\term top: wff;
         \\term top_note (p: wff): wff;
-        \\--| @auto backward
+        \\--| @auto forward
         \\prefix top_note: $!!$ prec 40;
         \\axiom top_i: $ top $;
     ;
@@ -145,7 +145,7 @@ test "compiler warns on annotations dropped before notation declarations" {
     try std.testing.expect(warnings[0].name == null);
     const span = warnings[0].span orelse return error.ExpectedDiagnosticSpan;
     try std.testing.expectEqualStrings(
-        "@auto backward",
+        "@auto forward",
         mm0_src[span.start..span.end],
     );
 }
@@ -254,35 +254,7 @@ test "compiler stores auto forward annotations" {
     );
 }
 
-test "compiler stores auto backward annotations" {
-    const mm0_src =
-        \\provable sort wff;
-        \\term top: wff;
-        \\--| @auto backward
-        \\axiom top_i: $ top $;
-    ;
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
-    const rule_id = metadata.env.getRuleId("top_i") orelse {
-        return error.MissingRule;
-    };
-    try std.testing.expect(metadata.registry.isAutoBackwardRule(rule_id));
-    try std.testing.expectEqual(
-        @as(usize, 1),
-        metadata.registry.autoBackwardRuleCount(),
-    );
-    // forward and backward are independent enrollments.
-    try std.testing.expect(!metadata.registry.isAutoForwardRule(rule_id));
-    try std.testing.expectEqual(
-        @as(usize, 0),
-        metadata.registry.autoForwardRuleCount(),
-    );
-}
-
-test "compiler stores auto eager annotations (default priority, implies backward)" {
+test "compiler stores auto eager annotations (default priority)" {
     const mm0_src =
         \\provable sort wff;
         \\term top: wff;
@@ -305,82 +277,6 @@ test "compiler stores auto eager annotations (default priority, implies backward
     try std.testing.expectEqual(
         @as(usize, 1),
         metadata.registry.autoEagerRuleCount(),
-    );
-    // Eager implies backward enrollment.
-    try std.testing.expect(metadata.registry.isAutoBackwardRule(rule_id));
-    // ... but eager rules never defer a witness, so an eager-only theory
-    // must not trigger witness-pool setup.
-    try std.testing.expect(
-        !metadata.registry.hasWitnessBackwardRules(&metadata.env),
-    );
-}
-
-test "hasWitnessBackwardRules: premise-only binder flips it on" {
-    // `mp`'s cut formula `a` occurs only in the hypotheses: enrolling it
-    // backward makes it a witness-deferring rule.
-    const mm0_src =
-        \\provable sort wff;
-        \\term imp (p q: wff): wff;
-        \\--| @auto backward
-        \\axiom mp (a b: wff) (h1: $ imp a b $) (h2: $ a $): $ b $;
-    ;
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
-    const rule_id = metadata.env.getRuleId("mp") orelse {
-        return error.MissingRule;
-    };
-    try std.testing.expect(metadata.registry.isAutoBackwardRule(rule_id));
-    try std.testing.expect(
-        metadata.registry.hasWitnessBackwardRules(&metadata.env),
-    );
-}
-
-test "hasWitnessBackwardRules: conclusion-determined backward rule stays off" {
-    const mm0_src =
-        \\provable sort wff;
-        \\term and (p q: wff): wff;
-        \\--| @auto backward
-        \\axiom and_i (a b: wff) (h1: $ a $) (h2: $ b $): $ and a b $;
-    ;
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
-    const rule_id = metadata.env.getRuleId("and_i") orelse {
-        return error.MissingRule;
-    };
-    try std.testing.expect(metadata.registry.isAutoBackwardRule(rule_id));
-    try std.testing.expect(
-        !metadata.registry.hasWitnessBackwardRules(&metadata.env),
-    );
-}
-
-test "hasWitnessBackwardRules: bound binder counts as a pool consumer" {
-    // `ax_gen`-style generalization: every binder occurs in the conclusion
-    // (no deferred witness), but the bound `{x}` needs a concrete variable
-    // name from the pool when applied backward.
-    const mm0_src =
-        \\provable sort wff;
-        \\sort nat;
-        \\term all {x: nat} (p: wff x): wff;
-        \\--| @auto backward
-        \\axiom gen {x: nat} (p: wff x) (h: $ p $): $ all x p $;
-    ;
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
-    const rule_id = metadata.env.getRuleId("gen") orelse {
-        return error.MissingRule;
-    };
-    try std.testing.expect(metadata.registry.isAutoBackwardRule(rule_id));
-    try std.testing.expect(
-        metadata.registry.hasWitnessBackwardRules(&metadata.env),
     );
 }
 
@@ -462,7 +358,6 @@ test "compiler accepts auto bridge on a rule with a hypothesis" {
     var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
     const rule_id = metadata.env.getRuleId("mp") orelse return error.MissingRule;
     try std.testing.expect(metadata.registry.isAutoBridgeRule(rule_id));
-    try std.testing.expect(!metadata.registry.isAutoBackwardRule(rule_id));
 }
 
 test "compiler rejects auto bridge on a hypothesis-free rule" {
@@ -476,139 +371,6 @@ test "compiler rejects auto bridge on a hypothesis-free rule" {
     defer arena.deinit();
     try std.testing.expectError(
         error.BridgeRuleHasNoHypotheses,
-        processAnnotatedMetadata(arena.allocator(), mm0_src),
-    );
-}
-
-// Shared prelude for the `@auto focus` annotation tests: a sequent judgment
-// over an ACUI context of `hyp` members.
-const focus_mm0_prelude =
-    \\delimiter $ ( ) $;
-    \\provable sort wff;
-    \\sort ctx;
-    \\term im (p q: wff): wff;
-    \\term emp: ctx;
-    \\--| @acui ctx_assoc ctx_comm emp
-    \\term join (G H: ctx): ctx;
-    \\term hyp (p: wff): ctx;
-    \\term nd (G: ctx) (p: wff): wff;
-    \\
-;
-
-const focus_imp_left =
-    \\axiom imp_left (G: ctx) (a b c: wff):
-    \\  $ nd (join G (hyp (im a b))) a $ >
-    \\  $ nd (join (join G (hyp (im a b))) (hyp b)) c $ >
-    \\  $ nd (join G (hyp (im a b))) c $;
-;
-
-fn expectSteps(expected: []const mm0.FocusRules.Step, site: mm0.FocusRules.Site) !void {
-    try std.testing.expectEqual(expected.len, site.steps.len);
-    for (expected, site.steps) |want, got| try std.testing.expectEqual(want, got);
-}
-
-test "compiler parses auto focus annotations" {
-    const mm0_src = focus_mm0_prelude ++
-        "--| @auto focus $ im a b $ : $ a $ $ b $\n" ++ focus_imp_left;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
-    const rule_id = metadata.env.getRuleId("imp_left") orelse return error.MissingRule;
-    const join = metadata.env.term_names.get("join") orelse return error.MissingTerm;
-    const decl = metadata.registry.focusDecl(rule_id) orelse return error.MissingFocus;
-    try std.testing.expect(metadata.registry.isAutoBackwardRule(rule_id));
-    // The principal is a context member; the first continuation is the goal,
-    // the second the member the premise adds (not the `b` inside `a → b`).
-    try expectSteps(&.{ .{ .arg = 0 }, .{ .member = join }, .{ .arg = 0 } }, decl.principal_site);
-    try std.testing.expectEqual(@as(usize, 2), decl.continuations.len);
-    try expectSteps(&.{.{ .arg = 1 }}, decl.continuations[0].?);
-    try expectSteps(&.{ .{ .arg = 0 }, .{ .member = join }, .{ .arg = 0 } }, decl.continuations[1].?);
-}
-
-test "compiler reads `_` in auto focus as a premise that releases focus" {
-    const mm0_src = focus_mm0_prelude ++
-        "--| @auto focus $ im a b $ : _ $ b $\n" ++ focus_imp_left;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
-    const rule_id = metadata.env.getRuleId("imp_left") orelse return error.MissingRule;
-    const decl = metadata.registry.focusDecl(rule_id) orelse return error.MissingFocus;
-    try std.testing.expect(decl.continuations[0] == null);
-    try std.testing.expect(decl.continuations[1] != null);
-}
-
-test "compiler rejects malformed auto focus annotations" {
-    const cases = [_]struct { ann: []const u8, err: anyerror }{
-        // One continuation per hypothesis.
-        .{ .ann = "$ im a b $ : $ a $", .err = error.InvalidFocusAnnotation },
-        .{ .ann = "$ im a b $ : $ a $ $ b $ $ c $", .err = error.InvalidFocusAnnotation },
-        .{ .ann = "$ im a b $ $ a $ $ b $", .err = error.InvalidFocusAnnotation },
-        // A bare binder decomposes nothing.
-        .{ .ann = "$ c $ : $ a $ $ b $", .err = error.InvalidFocusAnnotation },
-        .{ .ann = "$ im b a $ : $ a $ $ b $", .err = error.FocusFormulaNotFound },
-        // `a → b` is in the premise only as the member it shares with the
-        // conclusion.
-        .{ .ann = "$ im a b $ : $ a $ $ im a b $", .err = error.FocusFormulaNotFound },
-        // `_x` is a misspelled name, not a release.
-        .{ .ann = "$ im a b $ : _x $ b $", .err = error.InvalidFocusAnnotation },
-    };
-    for (cases) |case| {
-        const mm0_src = try std.mem.concat(std.testing.allocator, u8, &.{
-            focus_mm0_prelude, "--| @auto focus ", case.ann, "\n", focus_imp_left,
-        });
-        defer std.testing.allocator.free(mm0_src);
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-        defer arena.deinit();
-        try std.testing.expectError(case.err, processAnnotatedMetadata(arena.allocator(), mm0_src));
-    }
-}
-
-test "compiler reads auto focus tokens without spaces between them" {
-    const mm0_src = focus_mm0_prelude ++
-        "--| @auto focus $ im a b $:$ a $_\n" ++ focus_imp_left;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
-    const rule_id = metadata.env.getRuleId("imp_left") orelse return error.MissingRule;
-    const decl = metadata.registry.focusDecl(rule_id) orelse return error.MissingFocus;
-    try std.testing.expect(decl.continuations[0] != null);
-    try std.testing.expect(decl.continuations[1] == null);
-}
-
-test "compiler rejects a rule that is both auto focus and auto eager" {
-    const mm0_src = focus_mm0_prelude ++
-        "--| @auto focus $ im a b $ : $ a $ $ b $\n" ++
-        "--| @auto eager\n" ++ focus_imp_left;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectError(
-        error.FocusRuleIsEager,
-        processAnnotatedMetadata(arena.allocator(), mm0_src),
-    );
-}
-
-test "compiler rejects an auto focus principal that occurs twice" {
-    const mm0_src = focus_mm0_prelude ++
-        \\--| @auto focus $ im a b $ : $ b $
-        \\axiom dup (G: ctx) (a b: wff):
-        \\  $ nd (join G (hyp b)) a $ > $ nd (join G (hyp (im a b))) (im a b) $;
-    ;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectError(
-        error.FocusFormulaAmbiguous,
-        processAnnotatedMetadata(arena.allocator(), mm0_src),
-    );
-}
-
-test "compiler rejects a second auto focus annotation on one rule" {
-    const mm0_src = focus_mm0_prelude ++
-        "--| @auto focus $ im a b $ : $ a $ $ b $\n" ++
-        "--| @auto focus $ im a b $ : _ _\n" ++ focus_imp_left;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectError(
-        error.InvalidFocusAnnotation,
         processAnnotatedMetadata(arena.allocator(), mm0_src),
     );
 }
@@ -651,9 +413,8 @@ test "compiler rejects malformed auto annotations" {
     try std.testing.expectEqual(mm0.CompilerDiagnosticSource.mm0, diag.source);
     try std.testing.expectEqualStrings("top_i", diag.name.?);
     try std.testing.expectEqualStrings(
-        "@auto expects one mode: forward, backward, " ++
-            "eager [PRIORITY >= 1], bridge, focus $ PRINCIPAL $ : ..., " ++
-            "or trigger PATTERN",
+        "@auto expects one mode: forward, eager [PRIORITY >= 1], " ++
+            "bridge, or trigger PATTERN",
         mm0.compilerDiagnosticSummary(diag),
     );
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;
@@ -1514,7 +1275,6 @@ fn registerEveryFamily(
     });
     try registry.fallbacks.put(key, key);
     try registry.auto_forward_rules.put(key, {});
-    try registry.auto_backward_rules.put(key, {});
     try registry.auto_eager_rules.put(key, 1);
     try registry.acui_by_head.put(key, .{
         .unit_term_name = "unit",
@@ -1548,7 +1308,6 @@ fn expectEveryFamilyCount(
     try expectEqual(expected, registry.congr_by_head.count());
     try expectEqual(expected, registry.fallbacks.count());
     try expectEqual(expected, registry.auto_forward_rules.count());
-    try expectEqual(expected, registry.auto_backward_rules.count());
     try expectEqual(expected, registry.auto_eager_rules.count());
     try expectEqual(expected, registry.acui_by_head.count());
     try expectEqual(expected, registry.trigger_by_rule.get(7).?.items.len);

@@ -104,8 +104,8 @@ l1: $ g , (∃ x p) ⊢ ∃ x p $ by ax
 l2: $ g , (∃ x p) ⊢ c $ by ex_elim [l1, #1]
 
 
-focus_chain_probe
------------------
+left_chain_probe
+----------------
 l1: $ (p_f u v) , (p_f v w) , (∀ x (∀ y (((p_f x y) ∨ (p_g x y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h x z)))))) , (∀ y (((p_f u y) ∨ (p_g u y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h u z))))) , (((p_f u v) ∨ (p_g u v)) → (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z)))) , (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z))) , (((p_f v w) ∨ (p_g v w)) → (p_h u w)) , ¬ (p_g v w) ⊢ p_f v w $ by ax
 l2: $ (p_f u v) , (p_f v w) , (∀ x (∀ y (((p_f x y) ∨ (p_g x y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h x z)))))) , (∀ y (((p_f u y) ∨ (p_g u y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h u z))))) , (((p_f u v) ∨ (p_g u v)) → (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z)))) , (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z))) , (((p_f v w) ∨ (p_g v w)) → (p_h u w)) ⊢ (p_f v w) ∨ (p_g v w) $ by or_right [l1]
 l3: $ (p_f u v) , (p_f v w) , (∀ x (∀ y (((p_f x y) ∨ (p_g x y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h x z)))))) , (∀ y (((p_f u y) ∨ (p_g u y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h u z))))) , (((p_f u v) ∨ (p_g u v)) → (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z)))) , (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z))) , (((p_f v w) ∨ (p_g v w)) → (p_h u w)) , (p_h u w) ⊢ p_h u w $ by ax

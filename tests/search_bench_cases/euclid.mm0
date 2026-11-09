@@ -243,7 +243,6 @@ axiom all_elim {x: nat} (g: ctx x) (t: nat x) (p: wff x):
 
 --| @view {x: nat} (g: ctx x) (t: nat x) (p: wff x) (q: wff): $ g ⊢ q $ > $ g ⊢ ∃ x p $
 --| @recover t q p x
---| @auto backward
 axiom ex_intro {x: nat} (g: ctx x) (t: nat x) (p: wff x):
   $ g ⊢ [x/t] p $ > $ g ⊢ ∃ x p $;
 

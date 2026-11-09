@@ -65,9 +65,8 @@ pub fn suggestionsAtSourceOffset(
     var local_counters = types.SearchCounters{};
     var options = caller_options;
     if (options.counters == null) {
-        // The per-rule attempt tallies feed the failure report's
-        // "most-tried rules" line; they are only recorded under `collect`,
-        // which stays off unless the caller asked for the detail string.
+        // `collect` times candidates, which only the detail string reports;
+        // it stays off unless the caller asked for it.
         local_counters.collect = options.status_detail;
         options.counters = &local_counters;
     }

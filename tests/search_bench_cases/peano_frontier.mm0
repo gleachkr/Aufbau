@@ -199,7 +199,6 @@ axiom all_congr {x: nat} (p q: wff x):
   $ p ↔ q $ > $ ∀ x p ↔ ∀ x q $;
 
 -- Generalization: from |- p, derive |- ∀ x p.
---| @auto backward
 axiom ax_gen {x: nat} (p: wff x): $ p $ > $ ∀ x p $;
 
 -- Distribution of ∀ over implication.

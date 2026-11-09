@@ -101,7 +101,6 @@ axiom sb_f_congr {x: set} (t u: set x) (p q: wff x):
 --| @auto trigger (im p _)
 axiom ax (G: ctx) (p: wff): $ G , p ⊢ p $;
 
---| @auto backward
 axiom imp_intro (G: ctx) (p q: wff):
   $ G , p ⊢ q $ > $ G ⊢ p → q $;
 
@@ -110,7 +109,6 @@ axiom imp_elim (G H: ctx) (p q: wff):
   $ G ⊢ p → q $ > $ H ⊢ p $ > $ G , H ⊢ q $;
 
 --| @freshen G x
---| @auto backward
 axiom all_intro (G: ctx) {x: set} (p: wff x):
   $ G ⊢ p $ > $ G ⊢ ∀ x p $;
 

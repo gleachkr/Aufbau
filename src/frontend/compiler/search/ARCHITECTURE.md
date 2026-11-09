@@ -274,8 +274,7 @@ Exactly one mode is required (`error.InvalidAutoAnnotation` otherwise; `eager`
 takes an optional priority ≥ 1). Parsing lands in
 `RewriteRegistry.processAuto` (`rewrite_registry.zig`); the search queries
 `isAutoForwardRule` / `eagerPriority` / `isAutoBridgeRule` /
-`autoForwardRuleCount` / `triggerRuleCount`. `@auto backward` and
-`@auto focus` still parse but no longer affect search. Annotating a rule never
+`autoForwardRuleCount` / `triggerRuleCount`. Annotating a rule never
 changes *validity* (every proof still re-validates through the checker); it
 only changes the *search*, and `@auto eager` narrows it under the user's
 invertibility declaration, which the search trusts.

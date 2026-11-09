@@ -82,7 +82,6 @@ axiom nd_congr (G H: ctx) (p q: wff):
 --| @auto trigger (or _ p)
 axiom ax (G: ctx) (p: wff): $ G , p ⊢ p $;
 
---| @auto backward
 axiom imp_intro (G: ctx) (p q: wff):
   $ G , p ⊢ q $ > $ G ⊢ p → q $;
 
@@ -90,11 +89,9 @@ axiom imp_intro (G: ctx) (p q: wff):
 axiom imp_elim (G H: ctx) (p q: wff):
   $ G ⊢ p → q $ > $ H ⊢ p $ > $ G , H ⊢ q $;
 
---| @auto backward
 axiom or_intro_l (G: ctx) (p q: wff):
   $ G ⊢ p $ > $ G ⊢ p ∨ q $;
 
---| @auto backward
 axiom or_intro_r (G: ctx) (p q: wff):
   $ G ⊢ q $ > $ G ⊢ p ∨ q $;
 

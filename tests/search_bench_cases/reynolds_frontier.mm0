@@ -182,7 +182,6 @@ axiom t_var (g: ctx) {x: tm} (A: ty): $ g , x : A ⊢ x : A $;
 
 axiom t_weak (g d: ctx) (J: jdg): $ g ⊢ J $ > $ g , d ⊢ J $;
 
---| @auto backward
 axiom t_lam (g: ctx) (A B: ty) {x: tm} (t: tm x):
   $ g , x : A ⊢ t : B $
   > $ g ⊢ (λ x : A. t) : A → B $;
@@ -192,7 +191,6 @@ axiom t_app (g: ctx) (A B: ty) (f u: tm):
   > $ g ⊢ u : A $
   > $ g ⊢ f · u : B $;
 
---| @auto backward
 axiom t_tlam (g: ctx) {a: ty} (t: tm a) (B: ty a):
   $ g ⊢ t : B $
   > $ g ⊢ (Λ a. t) : ∀ a. B $;

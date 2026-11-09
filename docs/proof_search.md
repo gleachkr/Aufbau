@@ -348,10 +348,9 @@ two sections.
 A failed `auto?` is not one thing. The placeholder diagnostic
 distinguishes the cases, because they call for different responses:
 
-- **"no proof found within depth N. The search space was exhausted
-  (… validated: … accepted, … rejected) …"**: the search ran every
-  candidate it had, to completion, up to its depth limit. Nothing it can
-  build within that depth closes the goal. That does not prove the goal
+- **"no proof found within depth N (… goals expanded) …"**: the search
+  ran every candidate it had, to completion, up to the call's depth
+  limit. Nothing it can build within that depth closes the goal. That does not prove the goal
   unprovable, since the search does not try every possible proof. The
   report suggests a deeper retry, e.g. `Try 'auto? (depth: 8, budget: 6)'`;
   the budget grows with the depth because a deeper search spends more.
@@ -365,8 +364,8 @@ distinguishes the cases, because they call for different responses:
 - **"the search was cut short: …"**: one or more limits stopped the
   search before it finished, so the empty result is *inconclusive*. The
   report names every limit that was hit, and usually there are several:
-  - *the per-call work budget (~Ns of work) ran out during `<phase>` at
-    depth D*, with *of N* when a limit applies: the whole call stopped there;
+  - *the per-call work budget (~Ns of work) ran out at depth D*, with
+    *of N* when a limit applies: the whole call stopped there;
   - *forward saturation stopped before reaching a fixpoint*: the
     theory's `@auto forward` rules left the derived-fact pool incomplete.
 
@@ -392,14 +391,6 @@ takes it from the sort's `@vars` pool, and dies when every name is
 already used; no limit reaches it. A deep search can use up any pool in
 some branch, so this is not always the cause of the miss, but if the
 proof needs more distinct variables than the pool has, declare more.
-
-Failure reports end with a **"Most-tried rules"** list — each entry
-shows how many times a rule was *tried* against how many attempts were
-*accepted*. A rule tried hundreds of times with zero accepts is a
-reject-flood: the search is burning its budget disproving that rule over
-and over. That is your cue to look at the rule's annotations (should it
-really be enrolled backward?) or at the goal shape that keeps attracting
-it.
 
 `exact?` and `apply?` misses are simpler — they are single-shot. An
 `exact?` miss reports how many pool references were in reach and reminds
@@ -520,46 +511,36 @@ are printed, but the searches still run.
 
 ## The `@auto` rule annotations
 
-Left alone, the search only ever chains rules against *concrete* goals
-and *concrete* facts. That is enough for a great deal, but some proofs
-need the engine to run a rule **forward** (deriving new facts before it
-even looks at the goal) or **backward** through an existential (guessing a
-witness). A theory opts specific rules into that richer behavior with an
-`@auto` annotation — a `--|` doc-comment placed immediately before the
-rule's declaration in the `.mm0` file:
+Left alone, the search applies every rule backward, leaving a binder the
+goal does not fix as an unknown for a later step to fill in (see the
+search core under `auto?` above). Some proofs also need the engine to run
+a rule **forward** (deriving new facts before it even looks at the goal),
+to take a step without considering alternatives, or to keep from
+searching through a rule at all. A theory opts specific rules into that
+with an `@auto` annotation — a `--|` doc-comment placed immediately
+before the rule's declaration in the `.mm0` file:
 
 ```mm0
 --| @auto forward
 term all_elim ...          -- run this rule forward, before backward search
 
---| @auto backward
-term ex_intro ...          -- open an existential sub-goal for this rule
+--| @auto eager
+axiom rim ...              -- an invertible step, taken without alternatives
 
 --| @auto trigger (hyp p)
 axiom ax ...               -- seed ground instances from the goal's subterms
 ```
 
-Each `@auto` line names exactly one mode — `forward`, `backward`,
-`eager` (with an optional priority), `bridge`, `focus …`, or `trigger …`;
-anything else on that line is a compile error. The modes are
-*per line*, not per rule, though: a rule may carry several `@auto` lines,
-and the modes are stored independently with no mutual exclusion. So
-in principle you can stack them — `--| @auto forward` and `--| @auto
-backward` on the same rule enrolls it for both, and multiple `--| @auto
-trigger` lines on one axiom are an ordinary pattern (each contributes
-another seed pattern). (`eager` and `focus` are the exception to "no
-mutual exclusion": each *implies* `backward`, so annotating a rule
-`@auto eager` or `@auto focus` also enrolls it backward automatically.) In practice a rule is usually one mode,
-since a rule that reads well forward reads badly backward (see the
-discipline below), and `trigger` only applies to hypothesis-free rules,
-which have nothing for `forward`/`backward` to chew on — but nothing in
-the compiler forbids the combination.
+Each `@auto` line names exactly one mode — `forward`, `eager` (with an
+optional priority), `bridge`, or `trigger …`; anything else on that line
+is a compile error. The modes are *per line*, not per rule: a rule may
+carry several `@auto` lines, and multiple `--| @auto trigger` lines on one
+axiom are an ordinary pattern (each contributes another seed pattern).
 
 Enrollment is **entirely manual** — there is no automatic classifier that
-guesses which rules to promote. A rule you don't annotate stays
-concrete-only, which is exactly what keeps a plain theory's search results
-unchanged. Annotating a rule never affects *validity* (every proposed line
-is still re-checked); it only widens *what the search will try*.
+guesses which rules to promote. Annotating a rule never affects
+*validity* (every proposed line is still re-checked); it only changes
+*what the search will try*.
 
 ### `@auto forward` — enrich the fact pool first
 
@@ -601,132 +582,44 @@ otherwise have to invent from nothing. A forward rule that never joins
 anything is simply inert — it wastes a little budget, it does not corrupt
 anything.
 
-### `@auto backward` — open existential sub-goals
+### Rules the goal does not determine
 
-Reducing a goal to sub-goals is not what `@auto backward` adds — plain
-`auto?` already does that for *any* rule: when the reference pool can't
-discharge a hypothesis, the search tries to *prove* that hypothesis as a
-sub-goal (this is the "`auto?` is `exact?` plus a hook" behavior from
-earlier). That works as long as the goal determines all of the rule's
-binders.
-
-What `@auto backward` adds is the ability to apply a rule *even when the
-goal doesn't determine all of the rule's binders*. The sharpest case is a
-premise that names a **witness** appearing nowhere in the goal — the `t` in
-existential introduction (below). More broadly, put it on the
-**introduction / witness** rules that build a goal up from sub-goals:
-existential introduction and instantiation (the genuine witness cases),
-disjunction and conjunction introduction, and `@view`/`@recover` rules that
-carry a witness.
-
-**The unknown is an existential metavariable.** This is the mirror image of
-the forward case. Where a forward rule leaves an undetermined binder as a
-*universal* metavariable — a family standing for *every* instance, solved
-later by whoever joins against it — a backward rule leaves it as an
-**existential** metavariable: a witness hole standing for *some* value the
-proof has yet to pin down. That ∀-vs-∃ split is exactly why forward suits
-elimination rules (they emit universally-quantified families) and backward
-suits introduction rules (they demand an existential witness).
-
-Backward does a bit more than "leave the hole blank and guess", though.
-Rather than solving the meta passively at use time the way a join does, it
-actively tries to *determine* the witness, in descending order of
-confidence:
-
-1. **force it from the goal** — if the goal's context already contains the
-   instance the rule needs, the witness is read off that member directly;
-2. **read it back from the sub-proof** — otherwise, solve the premise
-   sub-goal and recover the witness from the proof that closed it (this is
-   what `@view`/`@recover` are for);
-3. **invent it, last** — only for a witness *nothing* else determines, and
-   only if the theory offers a pool of candidate variables (`@vars`) to
-   draw from.
-
-**Exactly what enrolling a rule `@auto backward` switches on.** To be
-precise, the annotation gates four things, all in service of that
-existential witness:
-
-1. **Existential opening as standing policy.** The rule may be applied with
-   the binders the goal doesn't determine opened as existential
-   metavariables — in the main phases, at every depth, with the meta
-   carried into nested sub-goals — which the commitment ladder above then
-   solves. (Un-enrolled rules get only a constrained form of opening, as a
-   last-resort retry after the ordinary candidates miss: the child proof
-   must fully determine the unknown by read-back, nothing carries into
-   nested openings, and nothing is invented.)
-2. **The `@vars` witness pool.** The theory's `@vars` dummies are prepared
-   as invention candidates for step 3 of that ladder. (This setup happens
-   only when some enrolled rule can actually consume the pool: a rule that
-   defers a premise-only witness, or a generalization-style rule whose
-   bound `{x}` binder needs a concrete variable name for its premise.)
-3. **Candidate ordering.** A backward (witness-deferring) rule is tried
-   *after* the non-generating structural and eigenvariable rules, so a
-   fresh eigenvariable is already in scope before a witness rule has to
-   commit — which is precisely what lets step 1 of the ladder read a
-   witness off an in-scope member.
-4. **Witness-aware splitting.** When a context split leaves a witness
-   binder open, the backward path re-enters the split with the witness
-   deferred as a metavariable.
-
-Two nearby mechanisms are *not* backward-gated. Plain context *splitting* —
-partitioning a sequent context between a rule's premises — is applied to
-multiplicative rules whether or not they are `@auto backward`; (4) is only
-the witness-aware refinement of it. And *principal enumeration* — trying
-each concrete goal member that could be an ambiguous rule's principal
-formula — is purely structural: it enumerates existing members, introduces
-no metavariable, and runs for any rule as a final split fallback, exactly
-like its seed-time counterpart.
-
-**Which rules — three cases.** The rule of thumb is *backward ⟺
-introduction, forward ⟺ elimination*. Three rules from a natural-deduction
-theory show why the boundary sits there.
-
-*Good — an introduction rule.* Existential introduction is the textbook
-backward rule:
+No annotation is needed to apply a rule whose conclusion leaves some of
+its binders open. The witness `t` of existential introduction appears
+only in the premise:
 
 ```mm0
---| @auto backward
 axiom ex_intro {x: nat} (g: ctx x) (t: nat x) (p: wff x):
   $ g ⊢ [x/t] p $ > $ g ⊢ ∃ x p $;
 ```
 
-Goal `g ⊢ ∃ x p`. Nothing fixes the witness `t`, so backward opens it,
-sets the sub-goal `g ⊢ [x/t] p`, and reads `t` back from whatever proof
-closes it. Proving the child determines the parent — exactly the shape the
-search wants.
+Backward from `g ⊢ ∃ x p`, the search leaves `t` as an **existential**
+unknown in the sub-goal `g ⊢ [x/t] p` and fills it in when a later step
+needs a particular term: a hypothesis, or the conclusion of the rule that
+closes the sub-goal. A witness the finished proof still leaves open is
+named from the sort's `@vars` pool. This is the mirror image of the
+forward case: a forward rule leaves an undetermined binder as a
+*universal* metavariable, a family standing for every instance; a
+backward rule leaves it as an existential one, standing for some value
+the proof has yet to pin down.
 
-*Bad — a multiplicative elimination rule.* Disjunction elimination is the
-trap:
+A premise binder that is not a quantifier witness (the middle formula of
+a transitivity rule, the antecedent of modus ponens, `or_elim`'s
+disjunction) is an unknown too, but a goal holding it unchosen may be
+proved only by a hypothesis, an axiom, or a rule whose conclusion fixes
+it. The search invents no formula for it, so a rule like
 
 ```mm0
--- (deliberately left unannotated)
 axiom or_elim (g h k: ctx) (a b c: wff):
   $ g ⊢ a ∨ b $ > $ h , a ⊢ c $ > $ k , b ⊢ c $ > $ g , h , k ⊢ c $;
 ```
 
-Read backward from a goal `… ⊢ c`, the disjunction `a ∨ b` appears *only*
-in a premise — neither `a` nor `b` occurs in the conclusion. So the engine
-would have to **invent** the cut formula out of nothing, and there are
-unboundedly many candidates: a fan-out that drains the budget for no gain.
-Leave rules like this concrete. The ordinary reference-discharge path
-already uses them the useful way — when you *have* a disjunction on hand
-and want to case-split on it. (`ax_mp` and `ex_elim` are the same story.)
+case-splits on a disjunction already in hand rather than on every formula
+it could guess. Only after that search has run out of proofs at every
+depth does the core search once more without the limit.
 
-*The exception — a safe elimination rule.* Ex-falso is an elimination rule
-too, yet it is safe to run backward, and theories that lean on backward
-search do annotate it:
-
-```mm0
---| @auto backward
-axiom bot_elim (g: ctx) (a: wff): $ g ⊢ ⊥ $ > $ g ⊢ a $;
-```
-
-Backward from `g ⊢ a` it just sets the sub-goal `g ⊢ ⊥`. Its single
-premise is a *fixed, closed* formula — there is nothing to invent and
-nothing to fan out over — so it is a clean narrowing, not an explosion.
-`bot_elim` is the one elimination rule you can mark `@auto backward`.
-
-The mirror mistake is `@auto forward` on an introduction rule: it just
+The rule of thumb for annotations is *forward ⟺ elimination*. The
+mistake to avoid is `@auto forward` on an introduction rule: it just
 manufactures family facts nothing will ever consume — inert, not harmful,
 but wasted budget.
 
@@ -749,15 +642,15 @@ axiom rand (d: ctx) (a b: wff):
   $ ⊢ a , d $ > $ ⊢ b , d $ > $ ⊢ (a ∧ b) , d $;
 ```
 
-An eager rule (which is implicitly `@auto backward` too) gets three things:
+An eager rule gets three things:
 
-1. **Scheduling.** Eager candidates are tried before all other enrolled
-   rules, ordered by the optional priority `N` (1 = earliest, the
-   default). The classic tableau discipline — close first, then
-   non-branching rules, then branching ones, then witness rules — is
-   spelled: closing rules unannotated (they already go first), the
-   non-branching ladder `@auto eager`, the branching rules
-   `@auto eager 2`, the witness rules plain `@auto backward`. Splitting
+1. **Scheduling.** Eager candidates are tried before the other rules,
+   ordered by the optional priority `N` (1 = earliest, the default). The
+   classic tableau discipline — close first, then non-branching rules,
+   then branching ones, then witness rules — is spelled: closing rules
+   unannotated (they already go first), the non-branching ladder
+   `@auto eager`, the branching rules `@auto eager 2`, the witness rules
+   unannotated. Splitting
    ranks above all of this: a rule whose conclusion splits the context
    between its premises (`g , h ⊢ …` with `g` and `h` bare) is tried after
    every rule that does not split it, eager or not.
@@ -828,80 +721,6 @@ occurrence, bound ones included), so a proof that must forget such a
 member *before* applying that rule needs weakening as a generating step,
 which a bridge rule no longer provides.
 
-### `@auto focus PRINCIPAL : CONTINUATION...` — chain synchronous rules
-
-The non-invertible rules of a sequent calculus — the left rules for `∀`
-and `→`, the right rule for `∃` — are where the search makes real
-choices, and a proof often applies several of them in a row to *one*
-formula: instantiate `∀ x ∀ y (A → ∀ z (B → C))` twice, discharge `A`,
-instantiate again, discharge `B`. Each of those steps costs a depth
-level, so a five-step chain needs depth five even though only the first
-step — picking the formula — was a choice. Focusing (Andreoli's
-discipline for sequent proof search) removes that cost: once a rule
-decomposes a formula, the search keeps working on what that formula
-became, and the rest of the chain is free.
-
-```mm0
---| @auto focus $ ∀ x p $ : $ [x/t] p $
-theorem all_left {x: obj} (g: ctx x) (p: wff x) (t: obj x) (c: wff x):
-  $ g , (∀ x p) , [x/t] p ⊢ c $ > $ g , (∀ x p) ⊢ c $;
-
---| @auto focus $ a → b $ : $ a $ $ b $
-theorem imp_left (g: ctx) (a b c: wff):
-  $ g , (a → b) ⊢ a $ > $ g , (a → b) , b ⊢ c $ > $ g , (a → b) ⊢ c $;
-
---| @auto focus $ ∃ x p $ : $ [x/t] p $
-axiom ex_intro {x: obj} (g: ctx x) (p: wff x) (t: obj x):
-  $ g ⊢ [x/t] p $ > $ g ⊢ ∃ x p $;
-```
-
-The first formula is the **principal**, the one an application
-decomposes; it must occur once in the conclusion. After the `:` comes one
-**continuation** per hypothesis, in order: the formula that stays in focus
-in that premise, or `_` for a premise that releases focus. A continuation
-must occur once in its premise outside the context members the premise
-shares with the conclusion (`imp_left`'s second premise names the new
-member `b`, not the `b` inside `a → b`). The positions are what count:
-`all_left`'s principal is a member of the context, `ex_intro`'s is the
-goal formula, and the continuation `[x/t] p` is the context member
-`all_left` adds, whatever formula the substitution turns it into.
-
-The search then distinguishes focused from unfocused goals:
-
-1. **Decide.** At an unfocused goal a focus rule is an ordinary step — it
-   costs one depth level — and each premise with a continuation becomes a
-   focused goal on the formula at the continuation's position.
-2. **Focused goals.** A focused goal admits only focus rules whose
-   principal sits at the focus's position (a context member, or the goal
-   formula) and *is* the focused formula, plus premise-free rules (`ax`).
-   Those steps keep the goal's depth, so the chain after a decide is
-   free, even at depth 0. No other rule applies, eager ones included.
-3. **Release.** When the continuation is not something any focus rule
-   decomposes at that position (`imp_left`'s `b` is an atom, or `a` is a
-   goal formula no right focus rule matches), or the premise says `_`, the
-   premise is an ordinary unfocused goal again.
-
-A chain is bounded by the focused formula's structure, which is what
-makes the free steps safe: every focused step decomposes the formula in
-hand, so there is no depth budget to run out but nothing to loop on
-either. Nodes, fuel, and the global tick budget still apply. A focused
-search differs from an unfocused one at the same depth, so a failed
-focused goal is remembered for its focus only: the same goal focused on
-the same formula is skipped, while the goal unfocused, or focused on
-another formula, is searched again. Found sub-proofs are shared as usual.
-
-The discipline comes from focused sequent calculi, where restricting
-search this way loses no proofs when the focused rules are exactly the
-non-invertible ones and the rest are invertible. The engine cannot check
-that a theory has this shape, so as with `eager` the annotation is
-trusted, and a misplaced `focus` can make `auto?` miss a proof; a
-theory's breadth and depth benchmarks are the check. A rule cannot be
-both `focus` and `eager` (`eager` declares it invertible). The win is largest on proofs that are
-long chains on one formula: in nd_fol, which focuses `all_left`,
-`imp_left`, and `ex_intro`, the `focus_chain_probe` bench fixture
-(Pelletier 36's inner step, a chain of five left rules on one formula)
-goes from a node-cap miss at depth 6 to a find at depth 2.
-
 ### `@auto trigger PATTERN` — seed ground facts from the goal
 
 Some proofs need a *leaf* fact that backward search can't reach from
@@ -924,7 +743,7 @@ the *goal's* subterms and mints a ground instance of the rule for every
 match. Those seeds join the references (and, in a theory with `@auto
 forward` rules, the facts forward saturation starts from) for the whole
 search, so an elimination whose premise is a context member can be closed
-in any phase. In effect the annotations let the author enumerate the
+at any depth. In effect the annotations let the author enumerate the
 *analytic leaf set* of the theory — the context members, implication
 antecedents, and disjuncts that its elimination rules move around — so the
 search has the raw material it needs. Harvesting is one pass over the goal,
@@ -974,9 +793,8 @@ l3: $ b $ by exact?      -- finds e.g.  ax_mp (a := $ a $, b := $ b $) [l1, l2]
 
 ## Where to go deeper
 
-The search implementation and its internal design (the seed/generate
-phases, ACUI context matching, the forward-saturation and open-generation
-machinery, the work-budget calibration) are documented for maintainers in
+The search implementation and its internal design (the search core, ACUI
+context matching, forward saturation, the work-budget calibration) are documented for maintainers in
 `src/frontend/compiler/search/ARCHITECTURE.md`. This user-facing document
 deliberately stops at the boundary of *how you use it*; that file picks up
 where it leaves off.

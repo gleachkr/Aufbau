@@ -289,7 +289,6 @@ axiom all_elim {x: obj} (g: ctx x) (t: obj x) (p: wff x):
 
 --| Existential introduction: a formula proved of a particular term `t`
 --| holds of something.
---| @auto backward
 --| @view {x: obj} (g: ctx) (t: obj x) (p: wff x) (q: wff): $ g ⊢ q $ > $ g ⊢ ∃ x p $
 --| @recover t q p x
 --| @freshen g x

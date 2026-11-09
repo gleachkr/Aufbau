@@ -35,7 +35,6 @@ term RcvOut: wff;
 -- Existential-like regular witness that appears only in a hypothesis. The
 -- target `P x` is open, so current generation cannot decide to use `P K`.
 axiom pred_K: $ P K $;
---| @auto backward
 axiom hyp_only_use (x: obj): $ P x $ > $ H $;
 theorem hyp_only_witness: $ H $;
 
@@ -44,9 +43,7 @@ theorem hyp_only_witness: $ H $;
 -- could solve and thereby force x := K. Current search never keeps that open
 -- parent/child constraint chain.
 axiom mark_K: $ M K $;
---| @auto backward
 axiom child_from_mark (x: obj): $ M x $ > $ N x $;
---| @auto backward
 axiom generated_child_parent (x: obj): $ N x $ > $ C $;
 theorem generated_child_pins_parent: $ C $;
 
@@ -55,7 +52,6 @@ theorem generated_child_pins_parent: $ C $;
 -- generated targets and rejects before either can bind x.
 axiom left_K: $ L K $;
 axiom right_K: $ R K $;
---| @auto backward
 axiom repeated_unknown_use (x: obj): $ L x $ > $ R x $ > $ D $;
 theorem repeated_unknown: $ D $;
 
@@ -63,7 +59,6 @@ theorem repeated_unknown: $ D $;
 -- no surface occurrence of its bound x; a future bound_choice should draw X/Y
 -- from the obj pool, then generate `P X` via `pred_any`.
 axiom pred_any {x: obj}: $ P x $;
---| @auto backward
 axiom bound_choice_use {x: obj}: $ P x $ > $ B $;
 theorem bound_vars_choice: $ B $;
 
@@ -72,7 +67,6 @@ theorem bound_vars_choice: $ B $;
 -- treating the two open targets as independent guesses.
 axiom bad_left_K: $ U K $;
 axiom bad_right_J: $ V J $;
---| @auto backward
 axiom inconsistent_repeated_use (x: obj): $ U x $ > $ V x $ > $ G $;
 theorem inconsistent_repeated_unknown: $ G $;
 
@@ -81,7 +75,6 @@ sort obj2;
 term P2 (x: obj2): wff;
 prefix P2: $P2$ prec 40;
 axiom pred2_any {x: obj2}: $ P2 x $;
---| @auto backward
 axiom bound_missing_use {x: obj2}: $ P2 x $ > $ B2 $;
 theorem missing_bound_vars_choice: $ B2 $;
 
@@ -89,14 +82,12 @@ theorem missing_bound_vars_choice: $ B2 $;
 term E: wff;
 term F: wff;
 
--- Unannotated twin of hyp_only_use: without @auto backward the open
--- backward path must never fire, so this stays a clean no-result.
+-- Twin of hyp_only_use, proved the same way.
 axiom plain_only_use (x: obj): $ P x $ > $ E $;
 theorem plain_hyp_only: $ E $;
 
--- Annotated, but the deferred hypothesis is a bare meta (`?p`): rejected by
+-- The deferred hypothesis is a bare meta (`?p`): rejected by
 -- the rigid-root (absorber) guard, so this also stays a clean no-result.
---| @auto backward
 axiom bare_meta_use (p: wff): $ p $ > $ F $;
 theorem bare_meta_target: $ F $;
 
@@ -105,7 +96,6 @@ theorem bare_meta_target: $ F $;
 -- fail the branch instead of falling back to generic deferral for q.
 --| @view (t: obj) (q p: wff) (x: obj): $ q $ > $ RcvOut $
 --| @recover t q p x
---| @auto backward
 axiom recover_cannot_fire (t: obj) (q p: wff) (x: obj):
   $ q $ > $ RcvOut $;
 theorem recover_owned_no_fallback: $ RcvOut $;

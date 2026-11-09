@@ -62,7 +62,6 @@ pub const DefOps = @import("./frontend/def_ops.zig");
 pub const Normalizer = @import("./frontend/normalizer.zig");
 pub const PrettyPrint = @import("./frontend/pretty_print.zig");
 pub const RewriteRegistry = @import("./frontend/rewrite_registry.zig");
-pub const FocusRules = @import("./frontend/focus_rules.zig");
 pub const CrossChecker = @import("./trusted/check.zig").CrossChecker;
 pub const Expr = @import("./trusted/expressions.zig").Expr;
 pub const Header = @import("./trusted/headers.zig").Header;

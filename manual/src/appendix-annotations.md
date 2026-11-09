@@ -16,7 +16,7 @@ mark code spans; other markdown is shown as written.
 ```text
 --| Existential introduction: a formula proved of a particular term
 --| `t` holds of something.
---| @auto backward
+--| @freshen g x
 axiom ex_intro {x: obj} (g: ctx) (t: obj x) (p: wff x):
   $ g ⊢ [x := t] p $ > $ g ⊢ ∃ x p $;
 ```
@@ -167,25 +167,20 @@ calculus](lambda-calculus.md).
 
 ```text
 --| @auto forward
---| @auto backward
 --| @auto eager      -- optionally: @auto eager N
 --| @auto bridge
---| @auto focus $ PRINCIPAL $ : $ FORMULA $ _ ...
 --| @auto trigger (TERM child ...)
 ```
 
-One mode per line; a rule may carry several lines. `forward` runs the rule
-over the reference pool before backward search (elimination rules);
-`backward` allows unresolved binders to remain as metavariables while search
-proves premises. If a successful proof still needs an arbitrary witness,
-search chooses one from the `@vars` pool.
+One mode per line; a rule may carry several lines. Search applies every
+rule backward without an annotation; `forward` also runs the rule over the
+reference pool before backward search (elimination rules).
 
 `eager` marks a rule as invertible. Search tries it first, commits to it
 once applied, and does not count its applications toward the depth limit.
 The optional priority `N` is at least 1, defaults to 1, and runs earlier
 when smaller. An eager rule that splits the context between its premises
-is still tried after every rule that does not. It implies `backward`. The
-compiler checks that premises use only binders present in the conclusion,
+is still tried after every rule that does not. The compiler checks that premises use only binders present in the conclusion,
 but cannot verify invertibility; a rule marked eager that is not invertible
 can make search miss proofs.
 
@@ -194,17 +189,6 @@ only from the reference pool and forward-derived facts, never by
 generating a sub-proof; weakening is the intended case, where a
 generating application would enumerate every subset of the context. The
 rule must have a hypothesis.
-
-`focus` marks a rule as synchronous for focused search. `PRINCIPAL` is the
-formula it decomposes, which must occur once in the conclusion; after the
-`:` comes, per hypothesis in order, the formula that stays in focus there or
-`_` to release focus. A continuation must occur once in its hypothesis,
-outside the context members the hypothesis shares with the conclusion.
-Applied at an unfocused goal, a focus rule costs one depth level; at a
-focused goal only focus rules that decompose the focused formula, and
-premise-free rules, apply, at no depth cost. It implies `backward` and
-excludes `eager`. As with `eager`, the compiler cannot verify that the rule
-is synchronous.
 
 `trigger` supplies a parenthesized prefix pattern over term names, rule
 binders, and `_`. Before searching, the engine matches it against subterms

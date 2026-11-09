@@ -1,6 +1,6 @@
 //! The text of a search's status report: the hover detail for a found or missed
 //! search, the `conversion?` detail, the retry advice and its replacement
-//! text, and the top rule attempts of a miss.
+//! text.
 
 const std = @import("std");
 const types = @import("../types.zig");

@@ -656,6 +656,12 @@ test "auto miss report names a @vars pool that ran out" {
     try std.testing.expect(found.items.len > 0);
 }
 
+/// The annotation line for `mode`, or none for the empty mode.
+fn autoLine(arena: *std.heap.ArenaAllocator, mode: []const u8) ![]const u8 {
+    if (mode.len == 0) return "";
+    return std.fmt.allocPrint(arena.allocator(), "--| @auto {s}", .{mode});
+}
+
 // `@auto eager` set-commit cut. `e1` reaches its subgoal `A` (via `aD`)
 // and fails; `n1` proves the goal through `bC`.
 fn eagerCutSuggestions(
@@ -667,18 +673,16 @@ fn eagerCutSuggestions(
         \\delimiter $ ( ) $;
         \\provable sort wff;
         \\term G: wff; term A: wff; term B: wff; term C: wff; term D: wff;
-        \\--| @auto backward
         \\axiom aD: $ D $ > $ A $;
-        \\--| @auto backward
         \\axiom bC: $ C $ > $ B $;
-        \\--| @auto E1
+        \\E1
         \\axiom e1: $ A $ > $ G $;
-        \\--| @auto N1
+        \\N1
         \\axiom n1: $ B $ > $ G $;
         \\theorem t (h: $ C $): $ G $;
     ;
-    var mm0 = try std.mem.replaceOwned(u8, arena.allocator(), mm0_template, "E1", e1);
-    mm0 = try std.mem.replaceOwned(u8, arena.allocator(), mm0, "N1", n1);
+    var mm0 = try std.mem.replaceOwned(u8, arena.allocator(), mm0_template, "E1", try autoLine(arena, e1));
+    mm0 = try std.mem.replaceOwned(u8, arena.allocator(), mm0, "N1", try autoLine(arena, n1));
     const proof_src =
         \\t
         \\---
@@ -694,12 +698,12 @@ test "an @auto eager step that reaches its subgoals skips the non-eager rules" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     // Without the cut, `n1` proves the goal.
-    var uncut = try eagerCutSuggestions(&arena, "backward", "backward");
+    var uncut = try eagerCutSuggestions(&arena, "", "");
     defer uncut.deinit();
     try expectOffered(uncut.items, &.{"n1 [bC [#1]]"});
     // `e1` is declared invertible, so once it applies, its failure is the
     // goal's: `n1` is not tried.
-    var cut = try eagerCutSuggestions(&arena, "eager", "backward");
+    var cut = try eagerCutSuggestions(&arena, "eager", "");
     defer cut.deinit();
     try std.testing.expectEqual(@as(usize, 0), cut.items.len);
 }
@@ -762,7 +766,6 @@ test "the @auto eager cut still tries an eager rule that splits the context" {
         \\axiom ror (d: ctx) (a b: wff): $ |- a , b , d $ > $ |- (a | b) , d $;
         \\--| @auto eager 3
         \\axiom mix (g h: ctx) (a b: wff): $ |- a , g $ > $ |- b , h $ > $ |- (a & b) , g , h $;
-        \\--| @auto backward
         \\axiom wk (d: ctx) (a: wff): $ |- d $ > $ |- a , d $;
         \\theorem split_after_cut (h1: $ |- R , (P | Q) $) (h2: $ |- S1 , S2 $): $ |- (P | Q) , (R & (S1 | S2)) $;
     ;
@@ -779,79 +782,6 @@ test "the @auto eager cut still tries an eager rule that splits the context" {
     });
     defer suggestions.deinit();
     try expectOffered(suggestions.items, &.{"mix [#1, ror [#2]]"});
-}
-
-test "an @auto focus failure does not cover the same goal unfocused" {
-    // `imp_left` on the first member leaves `… ⊢ A | B` focused, where only
-    // `or_r1`/`or_r2` apply and both fail. The second member's `&` releases
-    // focus, so `and_intro` reaches the same goal unfocused at the same
-    // depth, where `or_comm` proves it. A failure memo keyed without the
-    // focus would skip that goal and miss the proof.
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\sort ctx;
-        \\term or (a b: wff): wff;
-        \\infixr or: $|$ prec 30;
-        \\term an (a b: wff): wff;
-        \\infixr an: $&$ prec 35;
-        \\term im (a b: wff): wff;
-        \\infixr im: $->$ prec 25;
-        \\term A: wff; term B: wff; term C: wff;
-        \\term bi (a b: wff): wff;
-        \\infixl bi: $<->$ prec 20;
-        \\--| @relation wff bi biid bitr bisym mpbi
-        \\axiom biid (a: wff): $ a <-> a $;
-        \\axiom bitr (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
-        \\axiom bisym (a b: wff): $ a <-> b $ > $ b <-> a $;
-        \\axiom mpbi (a b: wff): $ a <-> b $ > $ a $ > $ b $;
-        \\term ctx_eq (g h: ctx): wff;
-        \\term emp: ctx;
-        \\--| @acui ctx_assoc ctx_comm emp ctx_idem
-        \\term join (g h: ctx): ctx;
-        \\infixl join: $,$ prec 5;
-        \\term hyp (a: wff): ctx;
-        \\coercion hyp: wff > ctx;
-        \\term nd (g: ctx) (a: wff): wff;
-        \\infixl nd: $|-$ prec 2;
-        \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
-        \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
-        \\axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
-        \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
-        \\axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
-        \\axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
-        \\axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
-        \\axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
-        \\--| @congr
-        \\axiom join_congr (g1 g2 h1 h2: ctx): $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
-        \\--| @congr
-        \\axiom nd_congr (e f: ctx) (a b: wff): $ ctx_eq e f $ > $ a <-> b $ > $ (e |- a) <-> (f |- b) $;
-        \\axiom ax (g: ctx) (a: wff): $ g , a |- a $;
-        \\--| @auto eager
-        \\axiom and_intro (g: ctx) (a b: wff): $ g |- a $ > $ g |- b $ > $ g |- a & b $;
-        \\--| @auto focus $ a | b $ : $ a $
-        \\axiom or_r1 (g: ctx) (a b: wff): $ g |- a $ > $ g |- a | b $;
-        \\--| @auto focus $ a | b $ : $ b $
-        \\axiom or_r2 (g: ctx) (a b: wff): $ g |- b $ > $ g |- a | b $;
-        \\--| @auto backward
-        \\axiom or_comm (g: ctx) (a b: wff): $ g |- b | a $ > $ g |- a | b $;
-        \\--| @auto focus $ a -> b $ : $ a $ $ b $
-        \\axiom imp_left (g: ctx) (a b c: wff):
-        \\  $ g , (a -> b) |- a $ > $ g , b |- c $ > $ g , (a -> b) |- c $;
-        \\theorem t: $ ((A | B) -> C) , (((A | B) & (A | B)) -> C) , (B | A) |- C $;
-    ;
-    const proof_src =
-        \\t
-        \\---
-        \\l1: $ ((A | B) -> C) , (((A | B) & (A | B)) -> C) , (B | A) |- C $ by auto?
-    ;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
-        .generate = .{ .enabled = true },
-    });
-    defer suggestions.deinit();
-    try std.testing.expect(suggestions.items.len > 0);
 }
 
 test "auto finds the chain without tripping the stack guard" {
@@ -1542,13 +1472,12 @@ fn bridgeSuggestions(
         \\axiom seq_congr (e f: ctx): $ ctx_eq e f $ > $ (|- e) <-> (|- f) $;
         \\--| @auto eager
         \\axiom rleft (d: ctx) (a b: wff): $ |- a , d $ > $ |- (a | b) , d $;
-        \\--| @auto backward
         \\axiom dbl (a: wff): $ |- a $ > $ |- a & a $;
-        \\--| @auto WK
+        \\WK
         \\axiom wk (d: ctx) (a: wff): $ |- d $ > $ |- a , d $;
         \\theorem t (h1: $ |- Q $): $ GOAL $;
     ;
-    var mm0 = try std.mem.replaceOwned(u8, arena.allocator(), mm0_template, "WK", wk_mode);
+    var mm0 = try std.mem.replaceOwned(u8, arena.allocator(), mm0_template, "WK", try autoLine(arena, wk_mode));
     mm0 = try std.mem.replaceOwned(u8, arena.allocator(), mm0, "GOAL", goal);
     const proof_template =
         \\t
@@ -1574,10 +1503,11 @@ test "an @auto bridge rule never generates its premise" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     // `dbl`'s conclusion carries no context, so only `wk` generating its
-    // premise reaches `dbl`: a backward `wk` finds it, a bridge `wk` does not.
-    var backward = try bridgeSuggestions(&arena, "backward", "|- (Q & Q) , R");
-    defer backward.deinit();
-    try expectOffered(backward.items, &.{"wk [dbl [#1]]"});
+    // premise reaches `dbl`: an unannotated `wk` finds it, a bridge `wk`
+    // does not.
+    var plain = try bridgeSuggestions(&arena, "", "|- (Q & Q) , R");
+    defer plain.deinit();
+    try expectOffered(plain.items, &.{"wk [dbl [#1]]"});
     var bridge = try bridgeSuggestions(&arena, "bridge", "|- (Q & Q) , R");
     defer bridge.deinit();
     try std.testing.expectEqual(@as(usize, 0), bridge.items.len);

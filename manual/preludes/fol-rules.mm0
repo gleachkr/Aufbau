@@ -8,7 +8,6 @@ axiom all_intro (g: ctx) {x: obj} (p: wff x):
 axiom all_elim {x: obj} (g: ctx x) (t: obj x) (p: wff x):
   $ g ⊢ ∀ x p $ > $ g ⊢ [x := t] p $;
 
---| @auto backward
 --| @view {x: obj} (g: ctx) (t: obj x) (p: wff x) (q: wff): $ g ⊢ q $ > $ g ⊢ ∃ x p $
 --| @recover t q p x
 --| @freshen g x

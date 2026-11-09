@@ -427,7 +427,7 @@ pub const scenarios = [_]Scenario{
     },
     .{
         // STAGE 5 real win (split + member witness — SUPPORTED). `union_intro`
-        // (`G,H ⊢ x∈union A`, now `@auto backward`) with an empty pool: the
+        // (`G,H ⊢ x∈union A`) with an empty pool: the
         // ACUI context split pins `G := x∈y`, the minor `G ⊢ x∈?y` defers the
         // hypothesis-only witness `y` as an existential meta, and Stage 5
         // member enumeration solves it from the split context's own member
@@ -740,16 +740,8 @@ pub const scenarios = [_]Scenario{
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
-        // PHASE 5 (constrained backward MP) reclassification. Before 256e05d a
-        // rule WITHOUT `@auto backward` never entered the open path, so this was
-        // a Stage-4-gate zero-result. Phase 5 relaxes the gate for ANY backward
-        // candidate whose hyp-only witness is pinned by a child conclusion (no
-        // invention): the open walk defers `plain_only_use`'s `x`, the child
-        // `pred_K` closes `P K`, and the match-back pins `x := K`. The
-        // `@auto backward` annotation is therefore no longer load-bearing for
-        // child-pinned open witnesses in the final retry phase. The search
-        // core, which takes `x` as a cut, proves it first with `pred_any`, so
-        // it is off here.
+        // A hyp-only witness pinned by a child conclusion: `plain_only_use`'s
+        // `x` is a cut, the child `pred_K` closes `P K`, and `x := K`.
         .name = "unannotated rule auto? (phase 5 constrained MP)",
         .mm0_path = "tests/search_bench_cases/metavariable_capabilities.mm0",
         .proof_path = "tests/search_bench_cases/meta_plain_hyp_only.auf",
@@ -758,7 +750,7 @@ pub const scenarios = [_]Scenario{
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
-        // STAGE 4 negative control: an annotated rule whose deferred
+        // STAGE 4 negative control: a rule whose deferred
         // hypothesis is a bare meta (`?p`) is rejected by the rigid-root
         // (absorber) guard — open targets need a useful concrete shape.
         .name = "bare-meta target auto? (no result, Stage 4 guard)",
@@ -793,10 +785,10 @@ pub const scenarios = [_]Scenario{
         .expected_replacement = "hyp_only_use [pred_K []]",
     },
     .{
-        // STAGE 4 negative control: `apply?` may suggest the annotated rule,
+        // STAGE 4 negative control: `apply?` may suggest the witness rule,
         // but it must remain a one-step application with a ref hole rather
         // than entering open backward generation.
-        .name = "auto backward apply? stays one-step (Stage 4)",
+        .name = "apply? stays one-step (Stage 4)",
         .mm0_path = "tests/search_bench_cases/metavariable_capabilities.mm0",
         .proof_path = "tests/search_bench_cases/meta_hyp_only_apply.auf",
         .marker = "apply?",
@@ -907,7 +899,7 @@ pub const scenarios = [_]Scenario{
         // STAGES 4+7 composition, Hilbert style (minor premise in the pool):
         // hypotheses `∀ x (P x → Q x)` and `P K`, goal `Q K`. The forward
         // layer derives the family fact `P ?t → Q ?t` (universal meta) from
-        // the ∀ hypothesis; backward `mp` (@auto backward) opens its major
+        // the ∀ hypothesis; backward `mp` opens its major
         // premise as the existential target `?a → Q K`, the derived fact
         // discharges it (the hint match solves ?t := K from the concrete
         // overlap `Q K` vs `Q ?t`), and the match-back pins ?a := P K — the

@@ -101,18 +101,6 @@ This file records notable user-facing changes to Aufbau. The project follows
   `nd_fol` rows cost 97% fewer ticks and the `additive_fol` rows 29%
   fewer, and the Pelletier battery goes from 36 to 47 of 48 problems
   found.
-- `@auto focus $ PRINCIPAL $ : CONTINUATION...`: focused proof search. The
-  annotation names the formula a rule decomposes and, per hypothesis, the
-  formula that stays in focus there (`_` releases it). Applying a focus rule
-  costs one depth level, and the rest of the chain on that formula is free:
-  a focused goal applies only the focus rules that decompose its formula
-  and premise-free rules. The `nd_fol` bench fixture focuses `all_left`,
-  `imp_left` and `ex_intro`; its bench rows are unchanged at 4% fewer
-  ticks, and a chain of five left rules on one formula (the new
-  `focus_chain_probe` fixture, Pelletier 36's inner step) is found at depth
-  2 instead of missed. A focused goal that fails is not searched again
-  under the same focus. Theories without the annotation search exactly as
-  before.
 - `@auto bridge`: a rule annotated this way stays a backward candidate for
   `auto?`, but search fills its premises only from the reference pool and
   forward-derived facts, never by generating a sub-proof. Weakening is the
@@ -142,6 +130,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   `--ladder` and `--no-core`, the
   `phase`, `phase_name` and `rules` fields of `--json`, and the rules `-vv`
   listed as tried most.
+- `@auto backward` is removed. The search core applies every rule, and
+  leaves a binder the goal does not fix as an unknown whether or not the
+  rule is annotated, so the annotation no longer changed anything. A
+  `--| @auto backward` line is now an error (`@auto` expects one mode:
+  forward, eager, bridge or trigger); delete it.
 - A search stops after about 3 seconds at the default budget, down from about
   22. The work budget now also counts the search core's matching, comparing
   and term walks, which it used to miss, and its default is 2.3 units instead

@@ -239,10 +239,8 @@ multi-layer forward saturation.
 | `stage5 unit context auto? (no result)` | Confirms the ACUI unit element is never a witness domain member. | 5 guard |
 | `inconsistent repeated unknown auto? (no result, Stage 4)` | Confirms repeated existential occurrences reject inconsistent child proofs. | 4 guard |
 | `missing @vars witness auto? (no result, Stage 4)` | Confirms hidden bound witnesses are not allocated without an explicit `@vars` pool entry. | 4 guard |
-| `unannotated rule auto? (no result, Stage 4 gate)` | Confirms the open backward path is opt-in via `@auto backward`. | 4 guard |
 | `bare-meta target auto? (no result, Stage 4 guard)` | Confirms a target with no rigid root is not explored. | 4 guard |
 | `recover-owned fallback auto? (no result, Stage 4)` | Confirms an unfired `@recover` law prevents generic fallback deferral. | 4 guard |
-| `auto backward exact? ignored (no result, Stage 4)` | Confirms `exact?` does not use open backward generation. | 4 guard |
 | `auto martin_lof add_comm capstone auto? (no result)` | Higher-order induction motive not pinned by the conclusion. | beyond Stage 7 |
 | `auto martin_lof id_sym_ty J_elim auto? (no result)` | Path-induction motive plus eigenvariables not conclusion-pinned. | beyond Stage 7 |
 | `auto zermelo_hilbert imp_id auto? (no result)` | Nothing conclusion-pinned, so the desirable behavior is cheap bounded failure. | termination / fuel guard |
@@ -252,8 +250,7 @@ Mode-boundary guards:
 
 | Scenario | What it checks |
 |----------|----------------|
-| `auto backward exact? ignored (no result, Stage 4)` | `exact?` has no generation hook, so open backward search is unavailable. |
-| `auto backward apply? stays one-step (Stage 4)` | `apply?` may list the annotated rule, but only as `hyp_only_use [ref1]`. |
+| `apply? stays one-step (Stage 4)` | `apply?` may list the witness rule, but only as `hyp_only_use [ref1]`. |
 
 Supported open-backward cases:
 

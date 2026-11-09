@@ -255,8 +255,8 @@ axiom ax (d: ctx) (a: wff): $ ⊢ a , (¬ a) , d $;
 -- enrolled `@auto eager`: tried first, committed to once applied, and exempt
 -- from the depth budget. Priority 1 = the non-branching (alpha) ladder,
 -- priority 2 = the branching (beta) rules `rand`/`rbi` — the classic tableau
--- discipline. `rex` (contraction, a genuine witness choice) stays plain
--- `@auto backward`; `ax`/`rall` stay un-enrolled (tried first anyway).
+-- discipline. `rex` (contraction, a genuine witness choice), `ax` and `rall`
+-- stay unannotated.
 
 -- Disjunction: ⊢ Γ, a, b  ⟹  ⊢ Γ, a ∨ b.
 --| @auto eager
@@ -292,7 +292,6 @@ axiom rall (d: ctx) {x: obj} (p: wff x):
 -- from it — the open-backward-generation path, exactly as euclid's `ex_intro`.
 --| @view {x: obj} (d: ctx x) (t: obj x) (p: wff x) (q: wff): $ ⊢ q , (∃ x p) , d $ > $ ⊢ (∃ x p) , d $
 --| @recover t q p x
---| @auto backward
 axiom rex {x: obj} (d: ctx x) (p: wff x) (t: obj x):
   $ ⊢ [x/t] p , (∃ x p) , d $ > $ ⊢ (∃ x p) , d $;
 

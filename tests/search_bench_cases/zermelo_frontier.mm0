@@ -131,7 +131,6 @@ axiom nd_congr (G H: ctx) (p q: wff):
 --| @auto trigger (or _ p)
 axiom ax (G: ctx) (p: wff): $ G , p ⊢ p $;
 
---| @auto backward
 axiom imp_intro (G: ctx) (p q: wff):
   $ G , p ⊢ q $ > $ G ⊢ p → q $;
 
@@ -139,7 +138,6 @@ axiom imp_intro (G: ctx) (p q: wff):
 axiom imp_elim (G H: ctx) (p q: wff):
   $ G ⊢ p → q $ > $ H ⊢ p $ > $ G , H ⊢ q $;
 
---| @auto backward
 axiom and_intro (G H: ctx) (p q: wff):
   $ G ⊢ p $ > $ H ⊢ q $ > $ G , H ⊢ p ∧ q $;
 
@@ -151,11 +149,9 @@ axiom and_elim_l (G: ctx) (p q: wff):
 axiom and_elim_r (G: ctx) (p q: wff):
   $ G ⊢ p ∧ q $ > $ G ⊢ q $;
 
---| @auto backward
 axiom or_intro_l (G: ctx) (p q: wff):
   $ G ⊢ p $ > $ G ⊢ p ∨ q $;
 
---| @auto backward
 axiom or_intro_r (G: ctx) (p q: wff):
   $ G ⊢ q $ > $ G ⊢ p ∨ q $;
 
@@ -164,7 +160,6 @@ axiom or_elim (G H K: ctx) (p q r: wff):
   $ G ⊢ p ∨ q $ > $ H , p ⊢ r $ > $ K , q ⊢ r $ >
   $ G , H , K ⊢ r $;
 
---| @auto backward
 axiom bi_intro (G H: ctx) (p q: wff):
   $ G ⊢ p → q $ > $ H ⊢ q → p $ > $ G , H ⊢ p ↔ q $;
 
@@ -176,7 +171,6 @@ axiom bi_elim_l (G H: ctx) (p q: wff):
 axiom bi_elim_r (G H: ctx) (p q: wff):
   $ G ⊢ p ↔ q $ > $ H ⊢ q $ > $ G , H ⊢ p $;
 
---| @auto backward
 axiom not_intro (G: ctx) (p: wff):
   $ G , p ⊢ ⊥ $ > $ G ⊢ ¬ p $;
 
@@ -184,7 +178,6 @@ axiom not_intro (G: ctx) (p: wff):
 axiom not_elim (G H: ctx) (p: wff):
   $ G ⊢ ¬ p $ > $ H ⊢ p $ > $ G , H ⊢ ⊥ $;
 
---| @auto backward
 axiom bot_elim (G: ctx) (p: wff):
   $ G ⊢ ⊥ $ > $ G ⊢ p $;
 
@@ -195,7 +188,6 @@ axiom excluded_middle_nd (G: ctx) (p: wff): $ G ⊢ p ∨ ¬ p $;
 -- --------------------------------------------------------------------------
 
 --| @freshen G x
---| @auto backward
 axiom all_intro (G: ctx) {x: set} (p: wff x):
   $ G ⊢ p $ > $ G ⊢ ∀ x p $;
 
@@ -208,7 +200,6 @@ axiom all_elim {x: set} (G: ctx x) (t: set x) (p: wff x):
 --| @view {x:set}(G:ctx)(t:set x)(p:wff x)(q:wff): $ G ⊢ q $ > $ G ⊢ ∃ x p $
 --| @recover t q p x
 --| @freshen G x
---| @auto backward
 axiom ex_intro {x: set} (G: ctx) (t: set x) (p: wff x):
   $ G ⊢ [x/t] p $ > $ G ⊢ ∃ x p $;
 
@@ -579,7 +570,6 @@ axiom pairset_intro_right (G: ctx) (x y: set):
 axiom pairset_elim (G: ctx) (x y z: set):
   $ G ⊢ x ∈ pairset y z $ > $ G ⊢ x = y ∨ x = z $;
 
---| @auto backward
 axiom union_intro (G H: ctx) (x y A: set):
   $ G ⊢ x ∈ y $ > $ H ⊢ y ∈ A $ > $ G , H ⊢ x ∈ union A $;
 

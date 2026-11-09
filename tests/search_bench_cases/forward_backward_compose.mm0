@@ -97,7 +97,6 @@ axiom all_elim {x: obj} (t: obj x) (p: wff x):
 
 -- Plain modus ponens, enrolled in open backward generation: its major
 -- premise may open as `?a → <goal>` when nothing pins `a` first.
---| @auto backward
 axiom mp (a b: wff): $ a → b $ > $ a $ > $ b $;
 
 -- Minor-premise fact for the generated variant below.

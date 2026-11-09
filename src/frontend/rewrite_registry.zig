@@ -5,11 +5,10 @@ const TemplateExpr = @import("./rules.zig").TemplateExpr;
 const hasPremiseOnlyBinder = @import("./rules.zig").hasPremiseOnlyBinder;
 const templateBinderMask = @import("./rules.zig").templateBinderMask;
 const Containers = @import("./containers.zig");
-const FocusDecl = @import("./focus_rules.zig").FocusDecl;
 
 /// True when a rule has a premise-only binder (see
-/// `rules.hasPremiseOnlyBinder`) — the binder a backward application would
-/// have to defer. `@auto eager` rejects such rules because their
+/// `rules.hasPremiseOnlyBinder`): an application would have to leave it as
+/// an open witness. `@auto eager` rejects such rules because their
 /// invertible-shape guarantee fails.
 fn ruleDefersWitness(rule: *const RuleDecl) bool {
     return hasPremiseOnlyBinder(rule.args, rule.concl, rule.hyps);
@@ -228,13 +227,9 @@ pub const RewriteRegistry = struct {
     fallbacks: std.AutoHashMap(u32, u32),
     /// Rules marked for `auto?` forward saturation.
     auto_forward_rules: std.AutoHashMap(u32, void),
-    /// Rules whose unresolved hypothesis binders may become existential
-    /// subgoal holes in `auto?` backward generation.
-    auto_backward_rules: std.AutoHashMap(u32, void),
     /// `@auto eager` rules by rule_id → intra-band priority (1 = tried
-    /// earliest). Eager implies backward enrollment and is validated at
-    /// annotation time to have every hypothesis binder conclusion-determined
-    /// (see `processEager`).
+    /// earliest). Validated at annotation time to have every hypothesis
+    /// binder conclusion-determined (see `processEager`).
     auto_eager_rules: std.AutoHashMap(u32, u8),
     /// `@auto bridge` rules by rule_id: a rule applied only with its
     /// premises already in hand (pool refs, forward-derived facts), never
@@ -243,10 +238,6 @@ pub const RewriteRegistry = struct {
     /// a generating step it would choose which goal members to forget (2^n
     /// child searches that prove nothing a child of the goal could not).
     auto_bridge_rules: std.AutoHashMap(u32, void),
-    /// `@auto focus` rules by rule_id: the formula an application decomposes
-    /// and where each premise keeps its focus (`focus_rules.zig`). Focus
-    /// implies backward enrollment.
-    auto_focus_rules: std.AutoHashMap(u32, FocusDecl),
     /// ACUI structural metadata by combiner head term_id.
     acui_by_head: std.AutoHashMap(u32, StructuralCombiner),
     /// `@auto trigger` patterns by rule_id (one list entry per annotation
@@ -284,10 +275,8 @@ pub const RewriteRegistry = struct {
             ),
             .fallbacks = std.AutoHashMap(u32, u32).init(allocator),
             .auto_forward_rules = std.AutoHashMap(u32, void).init(allocator),
-            .auto_backward_rules = std.AutoHashMap(u32, void).init(allocator),
             .auto_eager_rules = std.AutoHashMap(u32, u8).init(allocator),
             .auto_bridge_rules = std.AutoHashMap(u32, void).init(allocator),
-            .auto_focus_rules = std.AutoHashMap(u32, FocusDecl).init(allocator),
             .acui_by_head = std.AutoHashMap(u32, StructuralCombiner).init(
                 allocator,
             ),
@@ -322,10 +311,8 @@ pub const RewriteRegistry = struct {
         .{ "congr_by_head", .map },
         .{ "fallbacks", .map },
         .{ "auto_forward_rules", .map },
-        .{ "auto_backward_rules", .map },
         .{ "auto_eager_rules", .map },
         .{ "auto_bridge_rules", .map },
-        .{ "auto_focus_rules", .map },
         .{ "acui_by_head", .map },
         .{ "trigger_by_rule", .list_map },
         .{ "conversions", .list },
@@ -1111,15 +1098,10 @@ pub const RewriteRegistry = struct {
         if (std.mem.eql(u8, mode, "eager")) {
             return self.processEager(env, stmt_name, iter);
         }
-        // Its formulas need the math parser: `focus_rules.zig` reads it.
-        if (std.mem.eql(u8, mode, "focus")) return;
         if (iter.next() != null) return error.InvalidAutoAnnotation;
         if (std.mem.eql(u8, mode, "forward")) {
             const rule_id = env.getRuleId(stmt_name) orelse return;
             try self.auto_forward_rules.put(rule_id, {});
-        } else if (std.mem.eql(u8, mode, "backward")) {
-            const rule_id = env.getRuleId(stmt_name) orelse return;
-            try self.auto_backward_rules.put(rule_id, {});
         } else if (std.mem.eql(u8, mode, "bridge")) {
             const rule_id = env.getRuleId(stmt_name) orelse return;
             // A bridge links facts in hand to the goal; without a premise
@@ -1132,12 +1114,11 @@ pub const RewriteRegistry = struct {
     }
 
     /// Parse one `@auto eager [N]` annotation: the rule joins the eager band —
-    /// tried before other enrolled backward rules, committed to once an
-    /// application reaches its subgoals (the set-commit cut), and exempt from
-    /// the `max_depth` budget (a "don't-care" decomposition step; see
+    /// tried before the other rules, committed to once an application
+    /// reaches its subgoals (the set-commit cut), and exempt from the
+    /// `max_depth` budget (a "don't-care" decomposition step; see
     /// `docs/design_notes/eager_rule_scheduling.md`). `N` is the intra-band
-    /// priority (1 = earliest, the default). Eager implies `@auto backward`
-    /// enrollment.
+    /// priority (1 = earliest, the default).
     ///
     /// Validation: the rule must be invertible-shaped — every hypothesis
     /// binder determined by the conclusion. A premise-only witness binder (`rex`-style
@@ -1159,7 +1140,6 @@ pub const RewriteRegistry = struct {
         const rule_id = env.getRuleId(stmt_name) orelse return;
         const rule = &env.rules.items[rule_id];
         if (ruleDefersWitness(rule)) return error.EagerRuleDefersWitness;
-        try self.auto_backward_rules.put(rule_id, {});
         try self.auto_eager_rules.put(rule_id, priority);
     }
 
@@ -1351,42 +1331,6 @@ pub const RewriteRegistry = struct {
         return self.auto_forward_rules.count();
     }
 
-    pub fn isAutoBackwardRule(
-        self: *const RewriteRegistry,
-        rule_id: u32,
-    ) bool {
-        return self.auto_backward_rules.contains(rule_id);
-    }
-
-    pub fn autoBackwardRuleCount(self: *const RewriteRegistry) usize {
-        return self.auto_backward_rules.count();
-    }
-
-    /// True when some enrolled backward rule can consume the `@vars` witness
-    /// pool: it defers a hypothesis binder as an existential witness
-    /// (`rex`-style, premise-only binder) OR carries a bound binder
-    /// (`ax_gen`-style `{x}` — a backward generalization premise needs a
-    /// concrete variable name, enumerated from the pre-materialized pool).
-    /// `@auto eager` implies backward enrollment but rejects witness-deferring
-    /// rules, so an eager-only theory whose rules bind no `{x}` has enrolled
-    /// rules yet no pool consumer — this predicate (not
-    /// `autoBackwardRuleCount`) is the right gate for witness-pool setup.
-    pub fn hasWitnessBackwardRules(
-        self: *const RewriteRegistry,
-        env: *const GlobalEnv,
-    ) bool {
-        var iter = self.auto_backward_rules.keyIterator();
-        while (iter.next()) |rule_id| {
-            if (rule_id.* >= env.rules.items.len) continue;
-            const rule = &env.rules.items[rule_id.*];
-            if (ruleDefersWitness(rule)) return true;
-            for (rule.args) |arg| {
-                if (arg.bound) return true;
-            }
-        }
-        return false;
-    }
-
     /// Intra-eager-band priority for an `@auto eager` rule (1 = tried
     /// earliest), or null when the rule is not eager. Null-ness is the
     /// "is this rule eager?" predicate.
@@ -1396,11 +1340,6 @@ pub const RewriteRegistry = struct {
 
     pub fn autoEagerRuleCount(self: *const RewriteRegistry) usize {
         return self.auto_eager_rules.count();
-    }
-
-    /// The `@auto focus` declaration of a rule, or null when it has none.
-    pub fn focusDecl(self: *const RewriteRegistry, rule_id: u32) ?*const FocusDecl {
-        return self.auto_focus_rules.getPtr(rule_id);
     }
 
     /// True for an `@auto bridge` rule: backward search fills its premises

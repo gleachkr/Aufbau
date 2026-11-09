@@ -119,7 +119,6 @@ axiom imp_intro (G: ctx) (p q: wff):
 --| @view {x:set}(G:ctx)(t:set x)(p:wff x)(q:wff): $ G ⊢ q $ > $ G ⊢ ∃ x p $
 --| @recover t q p x
 --| @freshen G x
---| @auto backward
 axiom ex_intro {x: set} (G: ctx) (t: set x) (p: wff x):
   $ G ⊢ [x/t] p $ > $ G ⊢ ∃ x p $;
 

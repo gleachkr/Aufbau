@@ -65,10 +65,8 @@ const nd_rules =
     \\axiom not_intro (g: ctx) (a: wff): $ g , a ⊢ ⊥ $ > $ g ⊢ ¬ a $;
     \\--| @auto eager 2
     \\axiom and_intro (g: ctx) (a b: wff): $ g ⊢ a $ > $ g ⊢ b $ > $ g ⊢ a ∧ b $;
-    \\--| @auto backward
     \\axiom imp_left (g: ctx) (a b c: wff):
     \\  $ g , (a → b) ⊢ a $ > $ g , b ⊢ c $ > $ g , (a → b) ⊢ c $;
-    \\--| @auto backward
     \\axiom raa (g: ctx) (a: wff): $ g , ¬ a ⊢ ⊥ $ > $ g ⊢ a $;
     \\
 ;

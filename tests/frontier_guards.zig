@@ -689,13 +689,11 @@ pub const guards = [_]FrontierGuard{
             "tests/search_bench_cases/nd_fol.auf",
         .mode = "depth",
     },
-    // Focused search (`@auto focus`): Pelletier 36's inner step is one chain
-    // of left rules on a single formula, found at depth 2 because the chain
-    // pays for its decide only. Unfocused it runs out of nodes at depth 6.
+    // Pelletier 36's inner step: one chain of left rules on a single formula.
     .{
-        .filter = "focus_chain_probe",
-        .files = "tests/search_bench_cases/focus_chain_probe.mm0:" ++
-            "tests/search_bench_cases/focus_chain_probe.auf",
+        .filter = "left_chain_probe",
+        .files = "tests/search_bench_cases/left_chain_probe.mm0:" ++
+            "tests/search_bench_cases/left_chain_probe.auf",
         .mode = "depth",
     },
     // The anchored coupled sweep (`witness.collectAnchorShapes`): the

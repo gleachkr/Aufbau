@@ -133,12 +133,11 @@ axiom sb_f_R {x: obj} (t: obj x) (a b: obj x):
 axiom all_elim {x: obj} (t: obj x) (p: wff x):
   $ ∀ x p $ > $ [x/t] p $;
 
--- Existential introduction, the @auto backward rule (Stage 4/5). Its hypothesis
+-- Existential introduction (Stage 4/5). Its hypothesis
 -- `[x/t] p` (the witnessed instance `q`) goes open as `φ[x ↦ ?t]`; @recover
 -- reads the witness `t` off the discharging fact's surface.
 --| @view {x: obj} (t: obj x) (p: wff x) (q: wff): $ q $ > $ ∃ x p $
 --| @recover t q p x
---| @auto backward
 axiom ex_intro {x: obj} (t: obj x) (p: wff x):
   $ [x/t] p $ > $ ∃ x p $;
 
@@ -150,7 +149,6 @@ axiom ex_intro {x: obj} (t: obj x) (p: wff x):
 -- what the backward `ex_intro` then witnesses, so the ∀→∃ alternation closes
 -- without threading a live universal meta through a backward sibling slot.
 --| @auto forward
---| @auto backward
 axiom mp (a b: wff): $ a → b $ > $ a $ > $ b $;
 
 -- IMPORTANT ordering note: the *product* cells come FIRST, the pure-backward

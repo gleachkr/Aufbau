@@ -539,7 +539,6 @@ axiom pairset_intro_right (G: ctx) (x y: set):
 axiom pairset_elim (G: ctx) (x y z: set):
   $ G ⊢ x ∈ pairset y z $ > $ G ⊢ x = y ∨ x = z $;
 
---| @auto backward
 axiom union_intro (G H: ctx) (x y A: set):
   $ G ⊢ x ∈ y $ > $ H ⊢ y ∈ A $ > $ G , H ⊢ x ∈ union A $;
 
