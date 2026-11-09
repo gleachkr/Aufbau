@@ -11,9 +11,8 @@ This file is the map. `exact?` and `auto?` run the search core (`core/`);
 `apply?` probes rules one at a time; `conversion?` is a separate e-graph
 engine. The largest modules are `core/prover.zig`, `core/terms.zig`,
 `egraph.zig`, `egraph/explain.zig` and `conversion/lowerer.zig`. The core's
-files carry their design in their header comments
-(`docs/design_notes/shared_witness.md` revision 2 is the background); read
-those before changing it.
+files carry their design in their header comments; read those before
+changing it.
 
 Checker validation here means frontend elaboration, not trusted MM0/MMB
 verification. Complete generated proofs still need the trusted verifier;
@@ -527,7 +526,7 @@ Notes:
 | `session.zig` | `SearchSession`: lazy index + pool caching |
 | `types.zig` | `Goal`, `Context`, `ApplyCandidate`, options, counters, `GlobalBudget` and tick weights, `DerivedRef`/`DerivedPool` |
 | `entry.zig` | `auto?` and `exact?` entries (`generateTopLevel`, `exactTopLevel`): the `@vars` pool clone, trigger seeds, forward saturation, `runCore`/`endCore`, copying the proof out |
-| `core/root.zig` | the search core (`docs/design_notes/shared_witness.md` revision 2), in a discarded clone of the work theorem: entry, abstention, facts, the one-step pass and deepening, close-out (name leftover eigenvariables, then witnesses, from `@vars`, render every binding explicitly, one `probe`) |
+| `core/root.zig` | the search core, in a discarded clone of the work theorem: entry, abstention, facts, the one-step pass and deepening, close-out (name leftover eigenvariables, then witnesses, from `@vars`, render every binding explicitly, one `probe`) |
 | `core/catalog.zig` | the rules the core applies, by role (closer, bridge = `@auto bridge`, safe = `@auto eager`, unsafe), indexed by conclusion head; quantifier rules' witnesses (γ, δ) read off their `@view`/`@recover`; cuts, shares, abstractions |
 | `core/terms.zig` | canonical ACUI bags, conclusion matching and unification through witness variables (bag members as choice points), unfolding and normal forms, premise building, the view's leaf swap (none where the pattern holds a variable that depends on the hole, or while a premise is still to fix the pattern: the core then reads the witness off the closed premise with the checker's `@recover`) |
 | `core/wvars.zig` | witness variables (σ, one undo log) and eigenvariables, named only when a binding or the close-out needs one: level, capture and occurs checks at binding; the W5 signature of a goal's effect on older witnesses |
