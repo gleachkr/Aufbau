@@ -78,7 +78,17 @@ pub fn matchTemplate(
     template: TemplateExpr,
     actual: ExprId,
 ) !bool {
-    var comparison = try session.beginNormalizedComparison(template, actual);
+    // The mirror spends a dependency bit on each binder and hidden def dummy
+    // it has no value for yet, beside the bits of the theorem's own bound
+    // variables, so a def with many hidden dummies can exhaust it although
+    // the line, once its binders are known, needs no new variable. That is
+    // no match yet, not an error: a session retries the part after the
+    // others (`finishRuleMatchSession`). Only seeding the mirror is covered,
+    // since it leaves the session's bindings as they were.
+    var comparison = session.beginNormalizedComparison(template, actual) catch |err| {
+        if (err == error.DependencySlotExhausted) return false;
+        return err;
+    };
     defer comparison.deinit();
     return try finish(
         allocator,

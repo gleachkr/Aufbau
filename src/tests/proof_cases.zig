@@ -748,6 +748,9 @@ const proof_cases = [_]ProofCase{
     // Lean0 11-09: a premise's open binder may depend on `x`, so no vacuity
     // rewrite fixes it before the conclusion does.
     .{ .stem = "pass_open_binder_vacuity", .outcome = .pass },
+    // Lean0 11-09: a normalized comparison that runs out of dependency bits
+    // for a def's unknown hidden dummies is no match yet, not an error.
+    .{ .stem = "pass_view_def_many_hidden_dummies", .outcome = .pass },
     .{
         .stem = "fail_two_sort_eigen_smuggle",
         .outcome = .{ .fail = error.DepViolation },

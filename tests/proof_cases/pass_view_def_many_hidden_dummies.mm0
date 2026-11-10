@@ -1,0 +1,85 @@
+-- Lean0 11-09 (B5): the @view on `cab_intro` reads `x` and `p` off `big`,
+-- whose 27 hidden dummies stay unknown until the premise names them. The
+-- normalized comparison of the premise mirrors each unknown dummy with a
+-- dependency bit of its own, beside the bits of the theorem's 27 bound
+-- variables, and ran out of the 55 bits. That was a hard error, although
+-- the proof writes the dummies in the theorem's own variables and needs
+-- only one new one (`x`). Running out now means no match yet: the session
+-- tries the premise again after the conclusion, and it matches then.
+delimiter $ ( ) [ / ] { } | $;
+import "lib/ctx.mm0";
+
+--| @vars x
+sort nat;
+sort cls;
+
+term iff (p q: wff): wff;
+infixr iff: $↔$ prec 20;
+term and (p q: wff): wff;
+infixr and: $∧$ prec 35;
+term ex {x: nat} (p: wff x): wff;
+prefix ex: $∃$ prec 41;
+
+term R (s t: nat): wff;
+term mem (t: nat) (c: cls): wff;
+infixl mem: $∈$ prec 50;
+term cab {x: nat} (p: wff x): cls;
+notation cab {x: nat} (p: wff x): cls = (${$:max) x ($|$:0) p ($}$:0);
+
+term sb_t {x: nat} (t: nat x) (s: nat x): nat;
+notation sb_t {x: nat} (t: nat x) (s: nat x): nat =
+  ($subst$:41) x ($/$:0) t s;
+term sb_f {x: nat} (t: nat x) (p: wff x): wff;
+notation sb_f {x: nat} (t: nat x) (p: wff x): wff =
+  ($[$:41) x ($/$:0) t ($]$:0) p;
+
+term nd (g: ctx) (p: wff): wff;
+infixl nd: $⊢$ prec 0;
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (p: wff): $ p ↔ p $;
+axiom iff_trans (p q r: wff): $ p ↔ q $ > $ q ↔ r $ > $ p ↔ r $;
+axiom iff_sym (p q: wff): $ p ↔ q $ > $ q ↔ p $;
+axiom iff_mp (p q: wff): $ p ↔ q $ > $ p $ > $ q $;
+
+term eq (s t: nat): wff;
+--| @relation nat eq eq_refl eq_trans eq_sym _
+axiom eq_refl (s: nat): $ eq s s $;
+axiom eq_trans (s t v: nat): $ eq s t $ > $ eq t v $ > $ eq s v $;
+axiom eq_sym (s t: nat): $ eq s t $ > $ eq t s $;
+
+--| @congr
+axiom hyp_congr (p q: wff): $ p ↔ q $ > $ ctx_eq (hyp p) (hyp q) $;
+--| @congr
+axiom nd_congr (g h: ctx) (p q: wff):
+  $ ctx_eq g h $ > $ p ↔ q $ > $ (g ⊢ p) ↔ (h ⊢ q) $;
+--| @congr
+axiom and_congr (p q r s: wff): $ p ↔ q $ > $ r ↔ s $ > $ (p ∧ r) ↔ (q ∧ s) $;
+--| @congr
+axiom ex_congr {x: nat} (p q: wff x): $ p ↔ q $ > $ (∃ x p) ↔ (∃ x q) $;
+--| @congr
+axiom R_congr (s t u v: nat): $ eq s t $ > $ eq u v $ > $ R s u ↔ R t v $;
+
+--| @rewrite
+axiom sb_f_R {x: nat} (t: nat x) (s u: nat x):
+  $ [x/t] (R s u) ↔ R (subst x / t s) (subst x / t u) $;
+--| @rewrite
+axiom sb_f_and {x: nat} (t: nat x) (p q: wff x):
+  $ [x/t] (p ∧ q) ↔ ([x/t] p ∧ [x/t] q) $;
+--| @rewrite
+axiom sb_f_ex {x y: nat} (t: nat x) (p: wff x y):
+  $ [x/t] (∃ y p) ↔ ∃ y ([x/t] p) $;
+--| @rewrite
+axiom sb_t_var {x: nat} (t: nat x): $ eq (subst x / t x) t $;
+--| @rewrite
+axiom sb_t_irrel {x: nat} (t: nat x) (s: nat): $ eq (subst x / t s) s $;
+
+axiom ax (g: ctx) (p: wff): $ g , p ⊢ p $;
+
+--| @view {x: nat} (g: ctx) (t: nat) (p: wff x) (q: wff): $ g ⊢ q $ > $ g ⊢ t ∈ {x | p} $
+axiom cab_intro {x: nat} (g: ctx) (t: nat) (p: wff x):
+  $ g ⊢ [x/t] p $ > $ g ⊢ t ∈ {x | p} $;
+
+def big (.w .s1 .s2 .s3 .s4 .s5 .s6 .s7 .s8 .s9 .s10 .s11 .s12 .s13 .s14 .s15 .s16 .s17 .s18 .s19 .s20 .s21 .s22 .s23 .s24 .s25 .s26: nat): cls = $ {w | ∃ s1 ∃ s2 ∃ s3 ∃ s4 ∃ s5 ∃ s6 ∃ s7 ∃ s8 ∃ s9 ∃ s10 ∃ s11 ∃ s12 ∃ s13 ∃ s14 ∃ s15 ∃ s16 ∃ s17 ∃ s18 ∃ s19 ∃ s20 ∃ s21 ∃ s22 ∃ s23 ∃ s24 ∃ s25 ∃ s26 (R w s1 ∧ R s1 s2 ∧ R s2 s3 ∧ R s3 s4 ∧ R s4 s5 ∧ R s5 s6 ∧ R s6 s7 ∧ R s7 s8 ∧ R s8 s9 ∧ R s9 s10 ∧ R s10 s11 ∧ R s11 s12 ∧ R s12 s13 ∧ R s13 s14 ∧ R s14 s15 ∧ R s15 s16 ∧ R s16 s17 ∧ R s17 s18 ∧ R s18 s19 ∧ R s19 s20 ∧ R s20 s21 ∧ R s21 s22 ∧ R s22 s23 ∧ R s23 s24 ∧ R s24 s25 ∧ R s25 s26)} $;
+
+theorem t1 {z y1 y2 y3 y4 y5 y6 y7 y8 y9 y10 y11 y12 y13 y14 y15 y16 y17 y18 y19 y20 y21 y22 y23 y24 y25 y26: nat} (g: ctx): $ g ⊢ ∃ y1 ∃ y2 ∃ y3 ∃ y4 ∃ y5 ∃ y6 ∃ y7 ∃ y8 ∃ y9 ∃ y10 ∃ y11 ∃ y12 ∃ y13 ∃ y14 ∃ y15 ∃ y16 ∃ y17 ∃ y18 ∃ y19 ∃ y20 ∃ y21 ∃ y22 ∃ y23 ∃ y24 ∃ y25 ∃ y26 (R z y1 ∧ R y1 y2 ∧ R y2 y3 ∧ R y3 y4 ∧ R y4 y5 ∧ R y5 y6 ∧ R y6 y7 ∧ R y7 y8 ∧ R y8 y9 ∧ R y9 y10 ∧ R y10 y11 ∧ R y11 y12 ∧ R y12 y13 ∧ R y13 y14 ∧ R y14 y15 ∧ R y15 y16 ∧ R y16 y17 ∧ R y17 y18 ∧ R y18 y19 ∧ R y19 y20 ∧ R y20 y21 ∧ R y21 y22 ∧ R y22 y23 ∧ R y23 y24 ∧ R y24 y25 ∧ R y25 y26) $ > $ g ⊢ z ∈ big $;
