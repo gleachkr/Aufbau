@@ -92,6 +92,10 @@ const proof_cases = [_]ProofCase{
     // An inferred binding came back folded into a 0-ary def (`s z` as `n1`),
     // which an inline sub-proof's rule could not match (#586).
     .{ .stem = "pass_def_nullary_binding_unfolded", .outcome = .pass },
+    // The normalized comparison read a binding through its representative,
+    // which folded `s nz` into an unrelated `sn nz`, so `enc (s a)` could
+    // no longer rewrite (#619).
+    .{ .stem = "pass_def_binding_keeps_redex", .outcome = .pass },
     .{ .stem = "pass_keep", .outcome = .pass },
     .{ .stem = "pass_label", .outcome = .pass },
     .{ .stem = "pass_chained_alpha", .outcome = .pass },

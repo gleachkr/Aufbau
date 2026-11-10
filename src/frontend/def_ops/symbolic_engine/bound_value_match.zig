@@ -221,6 +221,18 @@ pub fn concreteBindingMatchExpr(
     state: *MatchSession,
 ) anyerror!?ExprId {
     if (concrete.mode == .exact) return concrete.raw;
+    // The matched expression in normal form, not its representative: def
+    // compression folds `s nz` into an unrelated `sn nz`, which hides the
+    // `s` a rewrite of the surrounding term needs (`enc (s a)`) and which
+    // an inline hint reading the value structurally cannot see through
+    // (#586). Placeholders still need the representative's witnesses.
+    if (self.shared.exprIsPlaceholderFree(concrete.raw)) {
+        const normal = if (self.shared.registry != null)
+            try self.shared.canonicalize(concrete.raw)
+        else
+            concrete.raw;
+        return try self.shared.keepMatchedOrder(concrete.raw, normal);
+    }
     return try materializeRepresentativeSymbolic(
         self,
         concrete.repr,

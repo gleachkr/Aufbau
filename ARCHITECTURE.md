@@ -943,6 +943,14 @@ That split matters because derived-binding logic such as `@recover` and
 paths still want representatives. Keeping those stages separate avoids
 leaking comparison-oriented canonicalization into structural recovery.
 
+For a binding read off the line, with no placeholders, the representative
+is only a key for deciding when two values are the same binding. The
+matchers and the normalized comparison get its matched expression,
+canonicalized. Folding its `s nz` into an unrelated `sn nz` would hide the
+`s` that a rewrite of the surrounding `enc (s nz)` needs. A value with
+placeholders still goes through its representative, which carries their
+witnesses.
+
 #### Finalization stays concrete
 
 The symbolic layer is strictly internal.
@@ -950,9 +958,8 @@ The symbolic layer is strictly internal.
 After a successful rule match, finalization returns an ordinary concrete
 `[]const ExprId` binding list. Only after that do the usual sort,
 boundness, and dependency checks run. A binding read off the line
-finalizes to the expression it was matched at, canonicalized, not to its
-representative: the representative also folds it into definitions, which
-the line may never mention.
+finalizes to the same value the matchers saw: the expression it was
+matched at, canonicalized.
 
 Hidden-dummy witnesses may materialize as main-theorem dummy vars at two
 proof-producing seams: rule-match finalization and conclusion normalization

@@ -1,0 +1,66 @@
+-- An unrelated def must not swallow part of a binding the normalized
+-- comparison rewrites: `A := enc (s nz)` stays `enc (s nz)`, so `enc_s`
+-- still applies to it, rather than becoming `enc (sn nz)`, which no rewrite
+-- reaches.
+delimiter $ ( ) $;
+sort fml;
+strict provable sort wff;
+sort set;
+strict sort class;
+sort hyps;
+term bi (p q: fml): fml;
+infixr bi: $<->$ prec 20;
+term all {x: set} (p: fml x): fml;
+prefix all: $A.$ prec 41;
+term cv (a: set): class;
+coercion cv: set > class;
+term welc (a: set) (A: class): fml;
+infixl welc: $ec$ prec 50;
+term emp: hyps;
+term nd (G: hyps) (p: fml): wff;
+infixl nd: $=>$ prec 0;
+term hyps_eq (G H: hyps): wff;
+--| @relation hyps hyps_eq hyps_refl hyps_trans hyps_sym _
+axiom hyps_refl (G: hyps): $ hyps_eq G G $;
+axiom hyps_trans (G H K: hyps): $ hyps_eq G H $ > $ hyps_eq H K $ > $ hyps_eq G K $;
+axiom hyps_sym (G H: hyps): $ hyps_eq G H $ > $ hyps_eq H G $;
+term seq_eq (s t: wff): wff;
+infixl seq_eq: $<==>$ prec 1;
+--| @relation wff seq_eq seq_refl seq_trans seq_sym seq_mp
+axiom seq_refl (s: wff): $ s <==> s $;
+axiom seq_trans (s t u: wff): $ s <==> t $ > $ t <==> u $ > $ s <==> u $;
+axiom seq_sym (s t: wff): $ s <==> t $ > $ t <==> s $;
+axiom seq_mp (s t: wff): $ s <==> t $ > $ s $ > $ t $;
+def iff (p q: fml): wff = $ emp => p <-> q $;
+infixr iff: $<=>$ prec 20;
+--| @relation fml iff iff_refl iff_trans iff_sym _
+axiom iff_refl (p: fml): $ p <=> p $;
+axiom iff_trans (p q r: fml): $ p <=> q $ > $ q <=> r $ > $ p <=> r $;
+axiom iff_sym (p q: fml): $ p <=> q $ > $ q <=> p $;
+--| @congr
+axiom nd_congr (G H: hyps) (p q: fml): $ hyps_eq G H $ > $ p <=> q $ > $ (G => p) <==> (H => q) $;
+def ceq (A B: class) (.x: set): fml = $ A. x (x ec A <-> x ec B) $;
+infixl ceq: $=$ prec 50;
+def ceqt (A B: class): wff = $ emp => A = B $;
+infixl ceqt: $==$ prec 50;
+--| @relation class ceqt ceqt_refl ceqt_trans ceqt_sym _
+axiom ceqt_refl (A: class): $ A == A $;
+axiom ceqt_trans (A B C: class): $ A == B $ > $ B == C $ > $ A == C $;
+axiom ceqt_sym (A B: class): $ A == B $ > $ B == A $;
+--| @congr
+axiom ceq_congr (A B C D: class): $ A == B $ > $ C == D $ > $ A = C <=> B = D $;
+axiom eq_refl (G: hyps) (A: class): $ G => A = A $;
+strict free sort nat;
+term nz: nat;
+term s: nat > nat;
+term ee: class;
+term enc: nat > class;
+term pp (A B: class): class;
+--| @congr
+axiom pp_congr (A B C D: class): $ A == B $ > $ C == D $ > $ pp A C == pp B D $;
+--| @rewrite
+axiom enc_nz: $ enc nz == pp ee ee $;
+--| @rewrite
+axiom enc_s (a: nat): $ enc (s a) == pp ee (enc a) $;
+def sn (a: nat): nat = $ s a $;
+theorem pass_def_binding_keeps_redex (G: hyps): $ G => enc (s nz) = pp ee (pp ee ee) $;

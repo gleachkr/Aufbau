@@ -1,0 +1,3 @@
+pass_def_binding_keeps_redex
+----------------------------
+l1: $ G => enc (s nz) = pp ee (pp ee ee) $ by eq_refl
