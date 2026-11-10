@@ -1,6 +1,7 @@
 delimiter $ ( ) [ / ] $;
 import "lib/iff.mm0";
 sort ctx;
+--| @vars c d
 sort obj;
 
 term imp (a b: wff): wff;
@@ -104,8 +105,15 @@ axiom ax (g: ctx) (a: wff): $ g , a |- a $;
 axiom imp_elim (g h: ctx) (a b: wff):
   $ g |- a -> b $ > $ h |- a $ > $ g , h |- b $;
 
+--| @alpha x y
+axiom all_alpha {x y: obj} (p: wff x): $ A. x p <-> A. y ([x/y] p) $;
+
+-- The context is written `A. a A. b ...`, so it mentions the variable an
+-- elimination binds: `x := b` (or `x := a`) is a dependency violation until
+-- `@freshen` renames that binder apart.
 --| @view (g: ctx) {x: obj} (t: obj x) (p: wff x) (q: wff): $ nd g (A. x p) $ > $ nd g q $
 --| @recover t q p x
+--| @freshen g x
 axiom all_elim (g: ctx) {x: obj} (t: obj x) (p: wff x):
   $ g |- A. x p $ > $ g |- [x/t] p $;
 

@@ -1416,61 +1416,17 @@ fn expectRepresentative(
     try std.testing.expectEqual(start_dummy_dep, theorem.next_dummy_dep);
 }
 
-test "compression preserves distinct hidden binders" {
+test "a representative never folds a value into a def" {
     const src =
         \\sort obj;
         \\provable sort wff;
         \\term shape {x y: obj} (a b: obj x y): wff;
-        \\def backward (.x .y: obj): wff = $ shape x y y x $;
+        \\term rel (a b: obj): wff;
         \\def forward (.x .y: obj): wff = $ shape x y x y $;
-        \\theorem host: $ forward $;
+        \\def same (a: obj): wff = $ rel a a $;
+        \\theorem host {x y: obj}: $ forward $;
     ;
+    try expectRepresentative(src, "shape x y x y", "shape x y x y");
+    try expectRepresentative(src, "rel y y", "rel y y");
     try expectRepresentative(src, "forward", "forward");
-    try expectRepresentative(src, "backward", "backward");
-}
-
-test "compression folds into a def with alpha-renamed hidden binders" {
-    const src =
-        \\sort obj;
-        \\provable sort wff;
-        \\term shape {x y: obj} (a b: obj x y): wff;
-        \\def forward (.x .y: obj): wff = $ shape x y x y $;
-        \\def renamed (.u .v: obj): wff = $ shape u v u v $;
-        \\theorem host {x y: obj}: $ renamed $;
-    ;
-    // A def-headed expression keeps its def rather than trading it for an
-    // alpha-equivalent one declared earlier (#586).
-    try expectRepresentative(src, "renamed", "renamed");
-    try expectRepresentative(src, "shape x y x y", "forward");
-}
-
-test "compression cannot assign sibling dummies the same concrete witness" {
-    const src =
-        \\delimiter $ ( ) $;
-        \\sort obj;
-        \\provable sort wff;
-        \\term rel (a b: obj): wff;
-        \\term q {x: obj} (p: wff x): wff;
-        \\def binary (.x .y: obj): wff = $ q x (q y (rel x y)) $;
-        \\theorem host {x y: obj}: $ binary $;
-    ;
-    try expectRepresentative(src, "q x (q y (rel x y))", "binary");
-    try expectRepresentative(
-        src,
-        "q x (q x (rel x x))",
-        "q x (q x (rel x x))",
-    );
-}
-
-test "compression cannot capture a def argument in a hidden binder" {
-    const src =
-        \\delimiter $ ( ) $;
-        \\sort obj;
-        \\provable sort wff;
-        \\term rel (a b: obj): wff;
-        \\term q {x: obj} (p: wff x): wff;
-        \\def d (a: obj) (.x: obj): wff = $ q x (rel a x) $;
-        \\theorem host {y: obj}: $ rel y y $;
-    ;
-    try expectRepresentative(src, "q y (rel y y)", "q y (rel y y)");
 }

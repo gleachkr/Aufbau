@@ -552,7 +552,7 @@ test "compiler reports missing congruence rules for normalization" {
     }
 }
 
-test "transparent def compression does not leak temp binders" {
+test "transparent def comparison does not leak temp binders" {
     const mm0_src =
         \\strict provable sort wff;
         \\delimiter $ ( @ [ / $ $ . : ; ) ] $;

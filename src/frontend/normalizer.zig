@@ -180,6 +180,17 @@ fn Engine(comptime mode: Mode) type {
             return try self.canonicalize(expr_id);
         }
 
+        /// `buildCommonTarget` with the step budget a fresh engine would have.
+        pub fn buildCommonTargetWithFreshBudget(
+            self: *Self,
+            lhs: ExprId,
+            rhs: ExprId,
+        ) anyerror!?CommonTargetResult {
+            self.step_count = 0;
+            self.last_rule_id = null;
+            return try self.buildCommonTarget(lhs, rhs);
+        }
+
         /// The canonical bag of `acui` at `expr_id`, its members as given.
         pub fn canonicalizeAcui(
             self: *Self,

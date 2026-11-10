@@ -1,0 +1,4 @@
+pass_recover_binding_keeps_redex_hidden_dummy
+---------------------------------------------
+
+l1: $ emp |- A. y ((a o w) o y ~ y) $ by all_elim [#1]

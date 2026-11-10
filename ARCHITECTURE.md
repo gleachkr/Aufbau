@@ -930,13 +930,16 @@ The important split is between two stages:
   the semantic representative for comparison
 
 For semantic bindings, the session therefore keeps access to both the raw
-matched expression and a chosen representative. Representative choice is
-deterministic and may use:
-
-- recursive representative rebuilding
-- canonicalization by the `Canonicalizer` (`normalizer.zig`)
-- compression back to a def-headed form when possible (an expression
-  already headed by a def keeps it)
+matched expression and a chosen representative. The representative is
+rebuilt from the representatives of its arguments, and a plain result is
+canonicalized by the `Canonicalizer` (`normalizer.zig`). It never folds a
+subterm into a def: a def the line does not mention would hide structure
+from the rewrites and readers of the value, as when a view's `p` bound to
+`k1 o (a o x) ~ f` reached its rule as `rr a x ~ f`, which no substitution
+rewrite enters. Two normal forms that meet only through a def are compared
+by the common-target search conversion uses
+(`SharedContext.meetThroughDefs`). A bag needs it even when its members are
+def-equal one by one: a def-headed member sorts apart from its unfolding.
 
 That split matters because derived-binding logic such as `@recover` and
 `@abstract` needs the materialized structure, while semantic comparison
@@ -946,10 +949,9 @@ leaking comparison-oriented canonicalization into structural recovery.
 For a binding read off the line, with no placeholders, the representative
 is only a key for deciding when two values are the same binding. The
 matchers and the normalized comparison get its matched expression,
-canonicalized. Folding its `s nz` into an unrelated `sn nz` would hide the
-`s` that a rewrite of the surrounding `enc (s nz)` needs. A value with
-placeholders still goes through its representative, which carries their
-witnesses.
+canonicalized, with its ACUI members in the order they were matched in. A
+value with placeholders still goes through its representative, which
+carries their witnesses.
 
 #### Finalization stays concrete
 

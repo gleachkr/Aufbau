@@ -6,7 +6,6 @@ const TheoremContext = @import("../expr.zig").TheoremContext;
 const PureReprKey = @import("../expr.zig").PureReprKey;
 const RewriteRegistry = @import("../rewrite_registry.zig").RewriteRegistry;
 const Canonicalizer = @import("../normalizer.zig").Canonicalizer;
-const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const Types = @import("./types.zig");
 const SymbolicExpr = Types.SymbolicExpr;
 
@@ -158,18 +157,6 @@ pub const SharedContext = struct {
     /// discipline as the intern table. Empty at construction, so the by-value
     /// copy in `Context.init` is safe (no self-pointers until first use).
     template_subst_memo: TemplateSubstMemoMap = .empty,
-    /// Lazy index of def term ids grouped by return sort, replacing the
-    /// all-terms linear scan in `representative.compressRepresentativeToDef`
-    /// (the hottest line cluster on the martin_lof def-eq profile). Buckets
-    /// keep ascending term-id order, so compression picks the same def the
-    /// linear scan did. Keys are env-owned sort-name slices (the env outlives
-    /// the context); the map and bucket arrays live on `allocator`. Empty at
-    /// construction, so the by-value copy in `Context.init` is safe (no
-    /// self-pointers until first use).
-    def_compression_index: std.StringHashMapUnmanaged(
-        std.ArrayListUnmanaged(u32),
-    ) = .empty,
-    def_compression_index_built: bool = false,
     /// A meta in an actual expression matches any template part and fixes
     /// nothing (`transparent_match.holeyActual`): for a holey proof line, and
     /// for a goal read for the hints it gives inline minors. Off everywhere
@@ -229,6 +216,26 @@ pub const SharedContext = struct {
         if (self.registry == null) return lhs == rhs;
         const canonicalizer = try self.sharedCanonicalizer();
         return try (try canonicalizer.support()).isRearrangement(lhs, rhs);
+    }
+
+    /// Whether two normal forms meet once defs are unfolded where they
+    /// differ: the common-target search conversion uses, without its proof.
+    /// Normal forms settle the ACUI laws and congruence, so two that differ
+    /// meet only through a def. A def-headed bag member also sorts apart
+    /// from its unfolding: `hyp (mono f) , hyp a` against
+    /// `hyp (A. x ...) , hyp a` pairs differently placed members.
+    /// Only for a context with a registry.
+    pub fn meetThroughDefs(
+        self: *SharedContext,
+        lhs: ExprId,
+        rhs: ExprId,
+    ) !bool {
+        const canonicalizer = try self.sharedCanonicalizer();
+        const support = try canonicalizer.support();
+        if (!support.isDefBearing(lhs) and !support.isDefBearing(rhs)) {
+            return false;
+        }
+        return (try canonicalizer.buildCommonTargetWithFreshBudget(lhs, rhs)) != null;
     }
 
     /// `matched` when `other` only reorders its ACUI members: a binder
@@ -356,54 +363,6 @@ pub const SharedContext = struct {
         try self.template_subst_memo.put(self.allocator, owned, result);
     }
 
-    /// Def term ids whose return sort is `sort_name`, in ascending term-id
-    /// order — the same candidates (in the same order) the old all-terms
-    /// scan in `compressRepresentativeToDef` visited. Built once per context
-    /// on first call; the env's term list does not grow within a context's
-    /// lifetime (contexts live inside a single statement's elaboration).
-    pub fn defCompressionCandidates(
-        self: *SharedContext,
-        sort_name: []const u8,
-    ) ![]const u32 {
-        if (!self.def_compression_index_built) {
-            for (self.env.terms.items, 0..) |term, term_id| {
-                if (!term.is_def or term.body == null) continue;
-                if (self.projectedArgument(term.body.?) != null) continue;
-                const gop = try self.def_compression_index.getOrPut(
-                    self.allocator,
-                    term.ret_sort_name,
-                );
-                if (!gop.found_existing) gop.value_ptr.* = .empty;
-                try gop.value_ptr.append(self.allocator, @intCast(term_id));
-            }
-            self.def_compression_index_built = true;
-        }
-        const bucket = self.def_compression_index.getPtr(sort_name) orelse
-            return &.{};
-        return bucket.items;
-    }
-
-    /// The argument a template reduces to by unfolding def heads alone, if
-    /// any. Folding into a def whose body projects an argument never
-    /// compresses: matching `x` against the unfolded body binds that
-    /// argument to `x` itself, so the fold only wraps `x`, and choosing the
-    /// argument's representative re-enters the same compression without end.
-    fn projectedArgument(self: *const SharedContext, template: TemplateExpr) ?usize {
-        return switch (template) {
-            .binder => |idx| idx,
-            .app => |app| blk: {
-                const term = &self.env.terms.items[app.term_id];
-                if (!term.is_def) break :blk null;
-                const body = term.body orelse break :blk null;
-                const idx = self.projectedArgument(body) orelse break :blk null;
-                // A body reducing to one of its own hidden dummies is not a
-                // projection of the caller's arguments.
-                if (idx >= app.args.len) break :blk null;
-                break :blk self.projectedArgument(app.args[idx]);
-            },
-        };
-    }
-
     /// Session-independent representative memo, kept on the theorem so it
     /// outlives this context: in the memo the theorem shares with its clones
     /// (`TheoremContext.SharedMemo`) when both ids resolve in the root of the
@@ -481,9 +440,6 @@ pub const SharedContext = struct {
     pub fn deinit(self: *SharedContext) void {
         self.symbolic_intern.deinit(self.allocator);
         self.template_subst_memo.deinit(self.allocator);
-        var index_it = self.def_compression_index.valueIterator();
-        while (index_it.next()) |bucket| bucket.deinit(self.allocator);
-        self.def_compression_index.deinit(self.allocator);
         if (self.canonicalizer) |canonicalizer| {
             canonicalizer.deinit();
             self.allocator.destroy(canonicalizer);

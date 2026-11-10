@@ -1599,8 +1599,10 @@ const NodeInference = struct {
         };
         errdefer allocator.free(bindings);
         // Inference may land on an ACUI rearrangement of the search's value,
-        // which states the same line. A rewritten value does not: the line
-        // may need a congruence the theory lacks to convert it.
+        // or on a def unfolded where the search kept it (`id_trans ...`
+        // read off a sub-proof as its body), which state the same line. A
+        // rewritten value does not: the line may need a congruence the
+        // theory lacks to convert it.
         var canonicalizer = Canonicalizer.init(
             allocator,
             n.theorem,
@@ -1614,8 +1616,10 @@ const NodeInference = struct {
             const expected = value orelse continue;
             if (idx < bindings.len) {
                 if (bindings[idx] == expected) continue;
-                if (try canonicalizer.canonicalize(bindings[idx]) ==
-                    try canonicalizer.canonicalize(expected)) continue;
+                const inferred = try canonicalizer.canonicalize(bindings[idx]);
+                const wanted = try canonicalizer.canonicalize(expected);
+                if (inferred == wanted) continue;
+                if ((try canonicalizer.buildCommonTarget(inferred, wanted)) != null) continue;
             }
             allocator.free(bindings);
             return null;

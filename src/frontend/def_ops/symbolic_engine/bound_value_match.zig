@@ -105,11 +105,13 @@ pub fn concreteExprsMatchMode(
         rhs_repr,
         state,
     )) orelse rhs;
-    return (try TransparentMatch.compareTransparent(
+    if ((try TransparentMatch.compareTransparent(
         self,
         lhs_compare,
         rhs_compare,
-    )) != null;
+    )) != null) return true;
+    if (self.shared.registry == null) return false;
+    return try self.shared.meetThroughDefs(lhs_compare, rhs_compare);
 }
 
 pub fn concreteBindingMatchesExpr(
@@ -221,11 +223,9 @@ pub fn concreteBindingMatchExpr(
     state: *MatchSession,
 ) anyerror!?ExprId {
     if (concrete.mode == .exact) return concrete.raw;
-    // The matched expression in normal form, not its representative: def
-    // compression folds `s nz` into an unrelated `sn nz`, which hides the
-    // `s` a rewrite of the surrounding term needs (`enc (s a)`) and which
-    // an inline hint reading the value structurally cannot see through
-    // (#586). Placeholders still need the representative's witnesses.
+    // The matched expression in normal form, its ACUI members in the order
+    // they were matched in (`keepMatchedOrder`). Placeholders still need
+    // the representative's witnesses.
     if (self.shared.exprIsPlaceholderFree(concrete.raw)) {
         const normal = if (self.shared.registry != null)
             try self.shared.canonicalize(concrete.raw)

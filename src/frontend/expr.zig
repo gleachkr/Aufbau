@@ -778,7 +778,7 @@ pub const TheoremContext = struct {
     ) !void {
         self.arg_infos = arg_infos;
         // Deps memoized under the previous arg_infos (if any) are stale now,
-        // and so are representatives, whose def compression reads deps.
+        // and so are the representatives memoized under them.
         self.expr_deps_cache.clearRetainingCapacity();
         self.pure_reprs.clearRetainingCapacity();
         // Clones made under the old args keep the old shared memo.

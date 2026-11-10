@@ -23,7 +23,6 @@ pub const chooseRepresentativeSymbolic =
     Representative.chooseRepresentativeSymbolic;
 pub const rebuildExprRepresentativeSymbolic =
     Representative.rebuildExprRepresentativeSymbolic;
-pub const compressRepresentativeToDef = Representative.compressRepresentativeToDef;
 pub const resymbolizePlaceholderExpr =
     Representative.resymbolizePlaceholderExpr;
 pub const symbolicSortName = SymbolicExpr.symbolicSortName;
@@ -43,7 +42,6 @@ pub const witnessRespectsDistinctness =
 pub const saveMatchSnapshot = MatchSnapshot.saveMatchSnapshot;
 pub const restoreMatchSnapshot = MatchSnapshot.restoreMatchSnapshot;
 pub const deinitMatchSnapshot = MatchSnapshot.deinitMatchSnapshot;
-pub const cloneRepresentativeState = MatchSnapshot.cloneRepresentativeState;
 pub const boundValueMatchesExpr = BoundValueMatch.boundValueMatchesExpr;
 pub const concreteExprsMatchMode = BoundValueMatch.concreteExprsMatchMode;
 pub const concreteBindingMatchesExpr = BoundValueMatch.concreteBindingMatchesExpr;

@@ -81,13 +81,13 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_symbolic_witness_repeated_premises", .outcome = .pass },
     .{ .stem = "pass_def_erased_arg_clash", .outcome = .pass },
     .{ .stem = "pass_def_erased_arg_concl", .outcome = .pass },
-    // Projection defs (body unfolds to a bare argument) are not def
-    // compression targets; folding into one used to recurse until the
-    // stack overflowed.
+    // Projection defs (body unfolds to a bare argument): folding a
+    // representative into one, before #626 removed folding, recursed until
+    // the stack overflowed.
     .{ .stem = "pass_def_projection", .outcome = .pass },
     // Def compression folded a def-headed context member into an earlier
     // alpha-equivalent def, and folding back needed a fresh @vars name the
-    // theorem had used up (#586).
+    // theorem had used up (#586; folding is gone since #626).
     .{ .stem = "pass_def_keeps_own_def", .outcome = .pass },
     // An inferred binding came back folded into a 0-ary def (`s z` as `n1`),
     // which an inline sub-proof's rule could not match (#586).
@@ -280,6 +280,13 @@ const proof_cases = [_]ProofCase{
     // descent and unfolding, so the folded line and the unfolded ref were
     // cut off at different points of a deep def chain (#620).
     .{ .stem = "pass_recover_deep_def_chain", .outcome = .pass },
+    // The view's bound `p` reached the rule through its representative,
+    // which folded the ref's `k1 o (a o x)` into an unrelated `rr a x` that
+    // no substitution rewrite pushes through (#626).
+    .{ .stem = "pass_recover_binding_keeps_redex", .outcome = .pass },
+    // The same with a def that has a hidden dummy: the representative folded
+    // the inner `A. y ((a o x) o y ~ y)` into an unrelated `dd (a o x)`.
+    .{ .stem = "pass_recover_binding_keeps_redex_hidden_dummy", .outcome = .pass },
     .{ .stem = "pass_def_unfold_then_acui_concl", .outcome = .pass },
     .{ .stem = "pass_def_unfold_then_acui_hyp", .outcome = .pass },
     .{

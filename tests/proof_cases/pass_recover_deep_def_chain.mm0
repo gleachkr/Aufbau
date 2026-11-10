@@ -107,8 +107,8 @@ def k17: mor = $ k16 o e $;
 def k18: mor = $ k17 o e $;
 def k19: mor = $ k18 o e $;
 def k20: mor = $ k19 o e $;
--- `pr` heads `rr`'s body, so def compression leaves the ref's copy as
--- written instead of folding it back into `rr`.
+-- `pr` heads `rr`'s body, so the ref's copy was never folded back into
+-- `rr` (#626) and the fixture tests the depth alone.
 def pr (a b: mor): mor = $ a o b $;
 --| @congr
 axiom pr_congr (a b c d: mor): $ a ~ b $ > $ c ~ d $ > $ pr a c ~ pr b d $;

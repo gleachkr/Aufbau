@@ -1,7 +1,4 @@
 const MatchState = @import("../match_state.zig");
-const Containers = @import("../../containers.zig");
-
-const cloneMap = Containers.cloneMap;
 
 const MatchSession = MatchState.MatchSession;
 const MatchSnapshot = MatchState.MatchSnapshot;
@@ -49,35 +46,4 @@ pub fn deinitMatchSnapshot(
 ) void {
     _ = self;
     _ = snapshot;
-}
-
-pub fn cloneRepresentativeState(
-    self: anytype,
-    source: *const MatchSession,
-    binding_len: usize,
-) anyerror!MatchSession {
-    var clone = try MatchSession.init(self.shared.allocator, binding_len);
-    errdefer clone.deinit(self.shared.allocator);
-
-    clone.witnesses = try cloneMap(self.shared.allocator, source.witnesses);
-    clone.materialized_witnesses =
-        try cloneMap(self.shared.allocator, source.materialized_witnesses);
-    clone.materialized_witness_slots =
-        try cloneMap(self.shared.allocator, source.materialized_witness_slots);
-    clone.dummy_aliases = try cloneMap(self.shared.allocator, source.dummy_aliases);
-    clone.provisional_witness_infos =
-        try cloneMap(
-            self.shared.allocator,
-            source.provisional_witness_infos,
-        );
-    clone.materialized_witness_infos =
-        try cloneMap(
-            self.shared.allocator,
-            source.materialized_witness_infos,
-        );
-    try clone.symbolic_dummy_infos.appendSlice(
-        self.shared.allocator,
-        source.symbolic_dummy_infos.items,
-    );
-    return clone;
 }

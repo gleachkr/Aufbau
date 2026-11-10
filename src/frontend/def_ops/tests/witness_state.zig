@@ -389,7 +389,7 @@ test "representative computation stays symbolic inside one session" {
         .transparent,
     );
     try std.testing.expectEqual(
-        fixture.actual,
+        fixture.raw,
         try ctx.chooseRepresentative(fixture.raw, .transparent),
     );
 

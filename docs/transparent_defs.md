@@ -54,8 +54,10 @@ way. Different subsystems ask for different strengths of comparison:
 - **`@view` matching:** yes. View matching is def-aware and may also use the
   same semantic comparison machinery that higher-level inference uses.
 - **`@recover` / `@abstract`:** partially. They first compare the resolved
-  view expressions structurally. If that fails, they get one narrow retry that
-  unfolds concrete defs without hidden dummy args and then canonicalizes.
+  view expressions structurally. If that fails, they retry walking both sides
+  together: a pair that differs is canonicalized, and a pair whose heads still
+  differ has its def side unfolded one step (defs without hidden dummy args
+  only).
 - **Normalization-aware higher-level inference:** yes, when the frontend
   solver explicitly asks for a def-aware comparison.
 - **Strict omitted-binder replay:** no. Replay stays exact and does not open
@@ -158,17 +160,12 @@ writing `ex u (eq u u)` for `somesame u` where
 `def somesame {.w: obj} (a: obj): form = $ ex w (eq w a) $;` — is a capture,
 not an unfolding. The two expressions are simply not definitionally equal, and
 the compiler rejects the line with an ordinary conclusion mismatch instead of
-emitting a proof the verifier would refuse. Definition compression is held to
-the same rule, one step later: the arguments a candidate fold would pass are
-only known once matching has bound them, so disjointness is re-checked against
-those arguments before the fold is accepted.
+emitting a proof the verifier would refuse.
 
 Hidden bound binders from the same expansion must also remain **distinct**.
 Matching may align corresponding binders across two expansions, but cannot
 identify two siblings, directly or through an alias chain. This constraint
 stays in the match-local state through snapshots and witness assignment.
-Definition compression uses the same expansion machinery, so it cannot fold
-an expression into a definition by collapsing distinct hidden binders.
 
 ---
 

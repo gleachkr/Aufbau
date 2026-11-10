@@ -1,24 +1,16 @@
 const std = @import("std");
 const ExprId = @import("../../expr.zig").ExprId;
-const head_class = @import("../../head_class.zig");
-const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 const Types = @import("../types.zig");
 const MatchState = @import("../match_state.zig");
-const TransparentMatch = @import("./transparent_match.zig");
 const Root = @import("witness_state.zig");
 
 const SymbolicExpr = Types.SymbolicExpr;
 const BindingMode = Types.BindingMode;
-const BoundValue = Types.BoundValue;
 const RepresentativeCache = Types.RepresentativeCache;
 const MatchSession = MatchState.MatchSession;
 
-const symbolicSortName = Root.symbolicSortName;
 const symbolicToConcreteIfPlain = Root.symbolicToConcreteIfPlain;
-const symbolicExprEql = Root.symbolicExprEql;
-const boundValueRepresentative = Root.boundValueRepresentative;
 const slotForWitness = Root.slotForWitness;
-const cloneRepresentativeState = Root.cloneRepresentativeState;
 const materializeRepresentativeSymbolic = Root.materializeRepresentativeSymbolic;
 
 pub fn chooseRepresentative(
@@ -37,28 +29,9 @@ pub fn chooseRepresentative(
         &state,
         mode,
     );
-    if (try materializeRepresentativeSymbolic(self, symbolic, &state)) |m| {
-        return m;
-    }
-    // Def compression is only a compactness pass. It can fold an otherwise
-    // concrete representative back into a def that has hidden binders. For
-    // example, the forced separation motive `in_all_subsets S u` can compress
-    // to the `in_all_subsets` def, whose hidden `.X` binder has no witness in
-    // this fresh representative session. That compressed form is not
-    // materializable here even though the pre-compression concrete expression
-    // is a valid representative. If compression produced such an escaping
-    // hidden binder, retry the rebuild+canonicalize prefix and leave the
-    // original `MissingRepresentative` behavior in place if that also cannot
-    // be materialized.
-    const uncompressed = try rebuildCanonicalRepresentative(
-        self,
-        expr_id,
-        &state,
-        mode,
-    );
     return (try materializeRepresentativeSymbolic(
         self,
-        uncompressed,
+        symbolic,
         &state,
     )) orelse error.MissingRepresentative;
 }
@@ -94,11 +67,7 @@ pub fn chooseRepresentativeSymbolic(
         return try self.allocSymbolic(.{ .fixed = plain });
     }
 
-    var current = try rebuildCanonicalRepresentative(self, expr_id, state, mode);
-    while (try compressRepresentativeToDef(self, current, state)) |compressed| {
-        if (symbolicExprEql(self, current, compressed)) break;
-        current = compressed;
-    }
+    const current = try rebuildCanonicalRepresentative(self, expr_id, state, mode);
     try cache.put(self.shared.allocator, expr_id, current);
     if (current.* == .fixed) {
         if (self.shared.exprIsPlaceholderFree(expr_id)) {
@@ -112,10 +81,10 @@ pub fn chooseRepresentativeSymbolic(
     return current;
 }
 
-// The rebuild + canonicalize prefix of `chooseRepresentativeSymbolic`, without
-// the def-compression chain. This is the materializable, less-compact form;
-// `chooseRepresentative` falls back to it when def compression produced a form
-// that cannot be materialized against a fresh session.
+// Rebuild from the arguments' representatives, then canonicalize a plain
+// result. A representative never folds a subterm into a def: a def the value
+// does not mention is invisible to the line, and folding into one hid
+// structure from rewrites and readers (#586, #619, #626).
 fn rebuildCanonicalRepresentative(
     self: anytype,
     expr_id: ExprId,
@@ -217,345 +186,6 @@ pub fn rebuildExprRepresentativeSymbolic(
             }
             self.shared.allocator.free(plain_args);
             plain_args_owned = false;
-            break :blk try self.allocSymbolic(.{ .app = .{
-                .term_id = app.term_id,
-                .args = args,
-            } });
-        },
-    };
-}
-
-const CompressionMatchKind = enum {
-    concrete,
-    symbolic,
-};
-
-pub fn compressRepresentativeToDef(
-    self: anytype,
-    symbolic: *const SymbolicExpr,
-    state: *const MatchSession,
-) anyerror!?*const SymbolicExpr {
-    const sort_name = symbolicSortName(self, symbolic, state) orelse {
-        return null;
-    };
-
-    // Loop-invariant: depends only on (symbolic, state), which no failed
-    // candidate attempt mutates (matching runs against the per-candidate
-    // temp clone; `state` is `*const` throughout).
-    const plain_symbolic = try symbolicToConcreteIfPlain(
-        self,
-        symbolic,
-        state,
-    );
-    const match_kind: CompressionMatchKind = if (plain_symbolic != null)
-        .concrete
-    else
-        .symbolic;
-
-    // A def-headed expression keeps its def. Its own def matches it, and
-    // comes before any def wrapping it, so the first fold could only trade
-    // it for a look-alike declared earlier (an alpha-equivalent copy, or a
-    // proof-local def with the same body), which its readers then have to
-    // unfold back (#586).
-    if (isDefHeaded(self, symbolic)) return null;
-
-    const candidates = try self.shared.defCompressionCandidates(sort_name);
-    term_loop: for (candidates) |term_id| {
-        const term = self.shared.env.terms.items[term_id];
-        // Skip a def whose body cannot match before cloning the state for it.
-        if (!bodyMayMatch(self, term.body.?, .{ .symbolic = symbolic })) continue;
-
-        var temp = try cloneRepresentativeState(
-            self,
-            state,
-            term.args.len,
-        );
-        defer temp.deinit(self.shared.allocator);
-
-        // Ordinary arguments are inference binders, but hidden arguments
-        // are bound dummies, not unrestricted pattern variables. Use the
-        // normal expansion machinery so their distinctness is enforced
-        // while matching, before accepting a fold.
-        const template_args = try self.shared.scratch().alloc(
-            *const SymbolicExpr,
-            term.args.len,
-        );
-        for (template_args, 0..) |*arg, idx| {
-            arg.* = try self.allocSymbolic(.{ .binder = idx });
-        }
-        const dummy_base = temp.symbolic_dummy_infos.items.len;
-        const symbolic_template = (try TransparentMatch.expandSymbolicApp(
-            self,
-            .{ .term_id = term_id, .args = template_args },
-            &temp,
-        )) orelse continue;
-        const matched = if (plain_symbolic) |plain|
-            try TransparentMatch.matchExprToSymbolic(
-                self,
-                plain,
-                symbolic_template,
-                &temp,
-                .transparent,
-            )
-        else
-            try TransparentMatch.matchSymbolicToSymbolicState(
-                self,
-                symbolic_template,
-                symbolic,
-                &temp,
-            );
-        if (!matched) {
-            continue;
-        }
-
-        const args = try self.shared.allocator.alloc(
-            *const SymbolicExpr,
-            term.args.len,
-        );
-        var args_owned = true;
-        errdefer if (args_owned) self.shared.allocator.free(args);
-        const plain_args = try self.shared.allocator.alloc(
-            ExprId,
-            term.args.len,
-        );
-        var plain_args_owned = true;
-        errdefer if (plain_args_owned) self.shared.allocator.free(plain_args);
-        var all_plain = true;
-        for (0..term.args.len) |idx| {
-            const binding = temp.bindings[idx] orelse {
-                self.shared.allocator.free(args);
-                self.shared.allocator.free(plain_args);
-                continue :term_loop;
-            };
-            args[idx] = try exportCompressedArgFromTempState(
-                self,
-                binding,
-                &temp,
-                match_kind,
-            );
-            if (try symbolicToConcreteIfPlain(self, args[idx], &temp)) |plain| {
-                plain_args[idx] = plain;
-            } else {
-                all_plain = false;
-            }
-        }
-
-        if (!try compressionKeepsDummiesFresh(
-            self,
-            args,
-            dummy_base,
-            term.dummy_args.len,
-            &temp,
-        )) {
-            self.shared.allocator.free(args);
-            self.shared.allocator.free(plain_args);
-            continue :term_loop;
-        }
-
-        if (all_plain) {
-            self.shared.allocator.free(args);
-            args_owned = false;
-            const rebuilt = try self.shared.theorem.interner.internAppOwned(
-                @intCast(term_id),
-                plain_args,
-            );
-            plain_args_owned = false;
-            return try self.allocSymbolic(.{ .fixed = rebuilt });
-        }
-        self.shared.allocator.free(plain_args);
-        plain_args_owned = false;
-        return try self.allocSymbolic(.{ .app = .{
-            .term_id = @intCast(term_id),
-            .args = args,
-        } });
-    }
-    return null;
-}
-
-fn isDefHeaded(self: anytype, symbolic: *const SymbolicExpr) bool {
-    const head = switch (symbolic.*) {
-        .app => |app| app.term_id,
-        .fixed => |expr_id| switch (self.shared.theorem.interner.node(expr_id).*) {
-            .app => |app| app.term_id,
-            .variable, .placeholder => return false,
-        },
-        .binder, .dummy => return false,
-    };
-    return self.shared.env.terms.items[head].is_def;
-}
-
-const MatchTarget = union(enum) {
-    symbolic: *const SymbolicExpr,
-    expr: ExprId,
-};
-
-/// Whether a def body can match `target`. False only when the two meet
-/// rigid heads that differ, reached from the root through equal rigid heads.
-/// A rigid head is never unfolded, rewritten or rearranged, so equal rigid
-/// heads match their arguments in place, and different ones never match.
-fn bodyMayMatch(self: anytype, template: TemplateExpr, target: MatchTarget) bool {
-    const app = switch (template) {
-        .binder => return true,
-        .app => |app| app,
-    };
-    const target_app = matchTargetApp(self, target) orelse return true;
-    const env = self.shared.env;
-    const registry = self.shared.registry;
-    if (head_class.classify(env, registry, app.term_id) == .rigid and
-        head_class.classify(env, registry, target_app.term_id) == .rigid)
-    {
-        if (app.term_id != target_app.term_id) return false;
-        for (app.args, 0..) |arg, idx| {
-            if (!bodyMayMatch(self, arg, target_app.arg(idx))) return false;
-        }
-        return true;
-    }
-    return !head_class.rigidHeadsDiffer(env, registry, app.term_id, target_app.term_id);
-}
-
-const MatchTargetApp = struct {
-    term_id: u32,
-    symbolic_args: ?[]const *const SymbolicExpr,
-    expr_args: []const ExprId,
-
-    fn arg(self: MatchTargetApp, idx: usize) MatchTarget {
-        if (self.symbolic_args) |args| return .{ .symbolic = args[idx] };
-        return .{ .expr = self.expr_args[idx] };
-    }
-};
-
-fn matchTargetApp(self: anytype, target: MatchTarget) ?MatchTargetApp {
-    const expr_id = switch (target) {
-        .symbolic => |symbolic| switch (symbolic.*) {
-            .app => |app| return .{
-                .term_id = app.term_id,
-                .symbolic_args = app.args,
-                .expr_args = &.{},
-            },
-            .fixed => |expr_id| expr_id,
-            .binder, .dummy => return null,
-        },
-        .expr => |expr_id| expr_id,
-    };
-    return switch (self.shared.theorem.interner.node(expr_id).*) {
-        .app => |app| .{
-            .term_id = app.term_id,
-            .symbolic_args = null,
-            .expr_args = app.args,
-        },
-        .variable, .placeholder => null,
-    };
-}
-
-/// A def's hidden binders must be fresh with respect to the arguments the
-/// fold would pass, or the folded expression is not def-equal to the one it
-/// replaces (MMB `UDummy` disjointness) and the verifier rejects the
-/// conversion the compiler emits from it.
-///
-/// `matchSymbolicDummyState` normally enforces this eagerly off each dummy's
-/// `forbidden_deps`, but the compression template is applied to bare binders:
-/// at expansion time `fixedSymbolicDeps` has nothing concrete to forbid, so
-/// every hidden dummy is minted with an empty mask. Matching has since bound
-/// those binders, so run the deferred check here, against the arguments the
-/// fold actually carries.
-fn compressionKeepsDummiesFresh(
-    self: anytype,
-    args: []const *const SymbolicExpr,
-    dummy_base: usize,
-    dummy_count: usize,
-    state: *const MatchSession,
-) anyerror!bool {
-    if (dummy_count == 0) return true;
-    var arg_deps: u55 = 0;
-    for (args) |arg| {
-        arg_deps |= try TransparentMatch.fixedSymbolicDeps(self, arg);
-    }
-    if (arg_deps == 0) return true;
-    for (dummy_base..dummy_base + dummy_count) |slot| {
-        const witness = Root.currentWitnessExpr(slot, state) orelse continue;
-        if (try Root.exprDeps(self, witness) & arg_deps != 0) return false;
-    }
-    return true;
-}
-
-fn exportCompressedArgFromTempState(
-    self: anytype,
-    bound: BoundValue,
-    state: *const MatchSession,
-    match_kind: CompressionMatchKind,
-) anyerror!*const SymbolicExpr {
-    return switch (match_kind) {
-        // A concrete match builds bindings entirely inside the temporary
-        // session. Any binder that survives here is temp-local and must
-        // be inlined before we return a representative to the caller.
-        .concrete => try exportConcreteMatchedBoundValue(
-            self,
-            bound,
-            state,
-        ),
-        // A symbolic-to-symbolic match may legitimately bind a def arg to
-        // a caller-owned binder. We therefore preserve the representative
-        // structure as-is on this path.
-        .symbolic => try boundValueRepresentative(self, bound),
-    };
-}
-
-fn exportConcreteMatchedBoundValue(
-    self: anytype,
-    bound: BoundValue,
-    state: *const MatchSession,
-) anyerror!*const SymbolicExpr {
-    return switch (bound) {
-        .concrete => |concrete| if (concrete.mode == .exact)
-            try self.allocSymbolic(.{ .fixed = concrete.raw })
-        else
-            try exportConcreteMatchedSymbolic(
-                self,
-                concrete.repr,
-                state,
-            ),
-        .symbolic => |symbolic| try exportConcreteMatchedSymbolic(
-            self,
-            symbolic.expr,
-            state,
-        ),
-    };
-}
-
-fn exportConcreteMatchedSymbolic(
-    self: anytype,
-    symbolic: *const SymbolicExpr,
-    state: *const MatchSession,
-) anyerror!*const SymbolicExpr {
-    return switch (symbolic.*) {
-        .binder => |idx| blk: {
-            if (idx >= state.bindings.len) {
-                return error.TemplateBinderOutOfRange;
-            }
-            const binding = state.bindings[idx] orelse {
-                return error.MissingBinderAssignment;
-            };
-            break :blk try exportConcreteMatchedBoundValue(
-                self,
-                binding,
-                state,
-            );
-        },
-        .fixed => |expr_id| try self.allocSymbolic(.{ .fixed = expr_id }),
-        .dummy => |slot| try self.allocSymbolic(.{ .dummy = slot }),
-        .app => |app| blk: {
-            const args = try self.shared.allocator.alloc(
-                *const SymbolicExpr,
-                app.args.len,
-            );
-            errdefer self.shared.allocator.free(args);
-            for (app.args, 0..) |arg, idx| {
-                args[idx] = try exportConcreteMatchedSymbolic(
-                    self,
-                    arg,
-                    state,
-                );
-            }
             break :blk try self.allocSymbolic(.{ .app = .{
                 .term_id = app.term_id,
                 .args = args,

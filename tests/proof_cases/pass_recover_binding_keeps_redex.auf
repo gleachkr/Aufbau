@@ -1,0 +1,4 @@
+pass_recover_binding_keeps_redex
+--------------------------------
+
+l1: $ emp |- k1 o (a o w) ~ f $ by all_elim [#1]
