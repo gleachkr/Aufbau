@@ -1,0 +1,41 @@
+-- Lean0 11-09 (P1): `ax` against a context holding `zero = k11` and
+-- `zero = k12`, numerals as nested defs. The structural solver asks
+-- whether `k11` and `k12` have a common target; the search unfolds each
+-- side toward the other and compares again, and it met the same pairs of
+-- partly unfolded numerals along every order of unfoldings, about 8 times
+-- the work per level (12 s at k8, past a minute here). A pair found to
+-- have no common target is now remembered as such.
+delimiter $ ( ) $;
+import "lib/ctx.mm0";
+import "lib/iff.mm0";
+
+sort cls;
+term zero: cls;
+term pr (a b: cls): cls;
+def suc (a: cls): cls = $ pr a a $;
+
+def k0: cls = $ zero $;
+def k1: cls = $ suc k0 $;
+def k2: cls = $ suc k1 $;
+def k3: cls = $ suc k2 $;
+def k4: cls = $ suc k3 $;
+def k5: cls = $ suc k4 $;
+def k6: cls = $ suc k5 $;
+def k7: cls = $ suc k6 $;
+def k8: cls = $ suc k7 $;
+def k9: cls = $ suc k8 $;
+def k10: cls = $ suc k9 $;
+def k11: cls = $ suc k10 $;
+def k12: cls = $ suc k11 $;
+
+term ceq (a b: cls): wff;
+infixl ceq: $=$ prec 50;
+term nd (g: ctx) (p: wff): wff;
+infixl nd: $⊢$ prec 0;
+
+--| @congr
+axiom nd_congr (g1 g2: ctx) (p1 p2: wff):
+  $ ctx_eq g1 g2 $ > $ p1 ↔ p2 $ > $ (g1 ⊢ p1) ↔ (g2 ⊢ p2) $;
+axiom ax (g: ctx) (p: wff): $ g , p ⊢ p $;
+
+theorem t (g: ctx): $ g , zero = k11 , zero = k12 ⊢ zero = k11 $;

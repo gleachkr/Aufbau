@@ -60,6 +60,14 @@ fn Engine(comptime mode: Mode) type {
         hidden_witness_provider: ?DefOps.HiddenWitnessProvider = null,
         /// Each expression's normal form; null while it is being normalized.
         cache: std.AutoHashMap(ExprId, ?NormalizeResult),
+        /// Pairs found to have no common target. Each def-bearing side
+        /// is unfolded toward the other and the pair compared again, so
+        /// without it the same pairs are met along every order of
+        /// unfoldings, exponentially many in the depth of def nesting.
+        /// The verdict holds for the engine's life: it reads the normal
+        /// forms in `cache` and the engine's fixed settings, and a pair
+        /// that runs out of steps fails with an error, not null.
+        common_target_misses: std.AutoHashMapUnmanaged(Types.CommonTargetPair, void) = .empty,
         /// Whether `@rewrite` rules apply. Off, the normal form is the ACUI
         /// one: bags ordered, grouped and rid of units and repeats only.
         rewrites: bool = true,
@@ -137,6 +145,7 @@ fn Engine(comptime mode: Mode) type {
 
         pub fn deinit(self: *Self) void {
             self.cache.deinit();
+            self.common_target_misses.deinit(self.allocator);
             if (self.support_ctx) |ctx| {
                 ctx.deinit();
                 self.allocator.destroy(ctx);

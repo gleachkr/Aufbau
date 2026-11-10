@@ -10,6 +10,7 @@ const ProofEmit = @import("./proof_emit.zig");
 const Types = @import("./types.zig");
 
 const CommonTargetResult = Types.CommonTargetResult;
+const CommonTargetPair = Types.CommonTargetPair;
 
 pub fn buildCommonTarget(
     self: anytype,
@@ -38,6 +39,23 @@ fn buildCommonTargetInside(
     rhs: ExprId,
 ) anyerror!?CommonTargetResult {
     if (lhs == rhs) return sameTarget(lhs);
+    const pair = CommonTargetPair{
+        .enclosing_head = enclosing_head,
+        .lhs = lhs,
+        .rhs = rhs,
+    };
+    if (self.common_target_misses.contains(pair)) return null;
+    const result = try buildDistinctCommonTarget(self, enclosing_head, lhs, rhs);
+    if (result == null) try self.common_target_misses.put(self.allocator, pair, {});
+    return result;
+}
+
+fn buildDistinctCommonTarget(
+    self: anytype,
+    enclosing_head: ?u32,
+    lhs: ExprId,
+    rhs: ExprId,
+) anyerror!?CommonTargetResult {
     if (try buildDefCommonTarget(self, lhs, rhs)) |result| return result;
     if (try Cover.sharedStructuralCombiner(self, lhs, rhs)) |acui| {
         // Members of a bag of this combiner would meet again as one-member

@@ -13,6 +13,14 @@ pub const CommonTargetResult = struct {
     rhs_conv_line_idx: ?usize,
 };
 
+/// A pair `buildCommonTarget` compared, and the combiner of the bag whose
+/// members they are (`buildMemberCommonTarget`), if any.
+pub const CommonTargetPair = struct {
+    enclosing_head: ?u32,
+    lhs: ExprId,
+    rhs: ExprId,
+};
+
 pub const AcuiLeaf = struct {
     old_expr: ExprId,
     new_expr: ExprId,

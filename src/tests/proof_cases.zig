@@ -751,6 +751,9 @@ const proof_cases = [_]ProofCase{
     // Lean0 11-09: a normalized comparison that runs out of dependency bits
     // for a def's unknown hidden dummies is no match yet, not an error.
     .{ .stem = "pass_view_def_many_hidden_dummies", .outcome = .pass },
+    // Lean0 11-09: two numerals as nested defs with no common target are
+    // compared once per pair of partial unfoldings, not once per path.
+    .{ .stem = "pass_def_numerals_no_common_target", .outcome = .pass },
     .{
         .stem = "fail_two_sort_eigen_smuggle",
         .outcome = .{ .fail = error.DepViolation },
