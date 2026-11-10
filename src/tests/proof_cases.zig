@@ -276,6 +276,10 @@ const proof_cases = [_]ProofCase{
         .stem = "pass_def_unfold_then_rewrite_recover",
         .outcome = .pass,
     },
+    // The @recover alignment stopped at a depth of 32 counting both
+    // descent and unfolding, so the folded line and the unfolded ref were
+    // cut off at different points of a deep def chain (#620).
+    .{ .stem = "pass_recover_deep_def_chain", .outcome = .pass },
     .{ .stem = "pass_def_unfold_then_acui_concl", .outcome = .pass },
     .{ .stem = "pass_def_unfold_then_acui_hyp", .outcome = .pass },
     .{

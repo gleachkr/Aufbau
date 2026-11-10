@@ -137,8 +137,6 @@ pub const MatchSnapshot = struct {
     fresh_var: ?FreshVar = null,
 };
 
-const preprocess_max_depth: usize = 32;
-
 /// Solve the derived bindings' targets until none makes progress, then
 /// check each `@recover` whose target was bound some other way: a view
 /// match, or another derived binding.
@@ -281,7 +279,7 @@ pub fn recoverInputsSettled(
 
 /// Check a `@recover` whose target something else bound: the source must
 /// read back as an instance of the pattern at that target, compared the way
-/// a concrete reading aligns its source (`preprocessDerivedExpr`). A pattern
+/// a concrete reading aligns its source (`Aligner`). A pattern
 /// that accepts the source without showing the hole admits any target. A
 /// placeholder in the target or the inputs, still open in a search, leaves
 /// the check undecided.
@@ -343,7 +341,7 @@ pub fn checkRecoverFeasible(
 
 /// Whether a `@recover` that reads `candidate` off its source agrees with
 /// `target`, already bound: equal once aligned the way a concrete reading
-/// aligns its source (`preprocessDerivedExpr`).
+/// aligns its source (`Aligner`).
 pub fn recoverReadsBackAt(
     theorem: *TheoremContext,
     env: *const GlobalEnv,
@@ -351,9 +349,11 @@ pub fn recoverReadsBackAt(
     candidate: ExprId,
     target: ExprId,
 ) !bool {
-    return candidate == target or
-        try preprocessDerivedExpr(theorem, env, registry, candidate) ==
-            try preprocessDerivedExpr(theorem, env, registry, target);
+    if (candidate == target) return true;
+    var aligner: Aligner = undefined;
+    aligner.init(theorem, env, registry);
+    defer aligner.deinit();
+    return try aligner.equal(candidate, target);
 }
 
 const RecoverReading = union(enum) {
@@ -570,6 +570,7 @@ fn recoverBindingCandidateFromSeed(
                 target_sort,
                 candidate,
                 skipped_equal_hole,
+                null,
             );
         },
         .semantic => |semantic| blk: {
@@ -583,6 +584,7 @@ fn recoverBindingCandidateFromSeed(
                 target_sort,
                 candidate,
                 skipped_equal_hole,
+                null,
             );
         },
         .bound => |bound| try recoverBindingCandidateFromBoundValue(
@@ -632,6 +634,7 @@ fn recoverBindingCandidateFromBoundValue(
                 target_sort,
                 candidate,
                 skipped_equal_hole,
+                null,
             );
         },
         .symbolic => |symbolic| try recoverBindingCandidateSymbolic(
@@ -687,6 +690,7 @@ fn recoverBindingCandidateSymbolic(
                         target_sort,
                         candidate,
                         skipped_equal_hole,
+                        null,
                     );
                 }
             }
@@ -719,6 +723,7 @@ fn recoverBindingCandidateSymbolic(
                 target_sort,
                 candidate,
                 skipped_equal_hole,
+                null,
             );
         },
         .dummy => |slot| blk: {
@@ -866,7 +871,7 @@ pub const ConcreteRecover = union(enum) {
 };
 
 /// The concrete acceptance relation for a recover source: the raw
-/// structural walk, then the aligned (preprocessed) retry — the same two
+/// structural walk, then the aligned retry (`Aligner`) — the same two
 /// paths `applyRecoverBinding` tries before falling back to symbolic
 /// seeds. Returns the recovered target candidate on acceptance, `.vacuous`
 /// when the pattern accepts without exposing the hole, `.none` when
@@ -891,18 +896,23 @@ pub fn concreteRecoverCandidate(
         pattern_expr,
         hole_expr,
         target_sort,
+        null,
     );
     if (raw != .none) {
         if (debug_views) ViewTrace.printMessage("raw recover matched concrete pattern", .{});
         return raw;
     }
+    var aligner: Aligner = undefined;
+    aligner.init(theorem, env, registry);
+    defer aligner.deinit();
     const aligned = try concreteWalk(
         theorem,
         env,
-        try preprocessDerivedExpr(theorem, env, registry, source_expr),
-        try preprocessDerivedExpr(theorem, env, registry, pattern_expr),
+        source_expr,
+        pattern_expr,
         hole_expr,
         target_sort,
+        &aligner,
     );
     if (aligned != .none and debug_views) {
         ViewTrace.printMessage("aligned recover matched concrete pattern", .{});
@@ -918,6 +928,7 @@ fn concreteWalk(
     pattern_expr: ExprId,
     hole_expr: ExprId,
     target_sort: []const u8,
+    aligner: ?*Aligner,
 ) !ConcreteRecover {
     var candidate: ?ExprId = null;
     var skipped_equal_hole = false;
@@ -930,6 +941,7 @@ fn concreteWalk(
         target_sort,
         &candidate,
         &skipped_equal_hole,
+        aligner,
     ) catch |err| switch (err) {
         // The structures diverge, whatever the walk skipped before.
         error.RecoverStructureMismatch => return if (source_expr == pattern_expr) .vacuous else .none,
@@ -951,6 +963,9 @@ fn recordCandidate(candidate: *?ExprId, value: ExprId) bool {
     return true;
 }
 
+/// The structural walk of `source_expr` against `pattern_expr`. With an
+/// aligner, a pair that differs is walked canonicalized, and one whose
+/// heads differ with a def unfolded (`Aligner`), rather than rejected.
 fn recoverBindingCandidate(
     theorem: *TheoremContext,
     env: *const GlobalEnv,
@@ -960,7 +975,8 @@ fn recoverBindingCandidate(
     target_sort: []const u8,
     candidate: *?ExprId,
     skipped_equal_hole: *bool,
-) !bool {
+    aligner: ?*Aligner,
+) anyerror!bool {
     if (pattern_expr == hole_expr) {
         if (!recordCandidate(candidate, source_expr)) return error.RecoverConflict;
         return true;
@@ -981,6 +997,23 @@ fn recoverBindingCandidate(
         if (!recordCandidate(candidate, recovered)) return error.RecoverConflict;
         return true;
     }
+
+    if (aligner) |active| if (source_expr != pattern_expr) {
+        if (try active.canonical(source_expr, pattern_expr)) |next| {
+            defer active.leave(next);
+            return try recoverBindingCandidate(
+                theorem,
+                env,
+                next.left,
+                next.right,
+                hole_expr,
+                target_sort,
+                candidate,
+                skipped_equal_hole,
+                aligner,
+            );
+        }
+    };
 
     const source_node = theorem.interner.node(source_expr);
     const pattern_node = theorem.interner.node(pattern_expr);
@@ -1012,14 +1045,32 @@ fn recoverBindingCandidate(
             ),
         },
         .app => |pattern_app| switch (source_node.*) {
-            .variable => return error.RecoverStructureMismatch,
-            .placeholder => return error.RecoverStructureMismatch,
+            .variable, .placeholder => return try recoverAfterStep(
+                theorem,
+                env,
+                source_expr,
+                pattern_expr,
+                hole_expr,
+                target_sort,
+                candidate,
+                skipped_equal_hole,
+                aligner,
+            ),
             .app => |source_app| blk: {
-                if (source_app.term_id != pattern_app.term_id) {
-                    return error.RecoverStructureMismatch;
-                }
-                if (source_app.args.len != pattern_app.args.len) {
-                    return error.RecoverStructureMismatch;
+                if (source_app.term_id != pattern_app.term_id or
+                    source_app.args.len != pattern_app.args.len)
+                {
+                    return try recoverAfterStep(
+                        theorem,
+                        env,
+                        source_expr,
+                        pattern_expr,
+                        hole_expr,
+                        target_sort,
+                        candidate,
+                        skipped_equal_hole,
+                        aligner,
+                    );
                 }
                 var found = false;
                 for (source_app.args, pattern_app.args, 0..) |
@@ -1045,12 +1096,43 @@ fn recoverBindingCandidate(
                         target_sort,
                         candidate,
                         skipped_equal_hole,
+                        aligner,
                     )) or found;
                 }
                 break :blk found;
             },
         },
     };
+}
+
+/// The walk of a pair whose heads differ: on the pair the aligner unfolds
+/// it to, or a structure mismatch without one.
+fn recoverAfterStep(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    source_expr: ExprId,
+    pattern_expr: ExprId,
+    hole_expr: ExprId,
+    target_sort: []const u8,
+    candidate: *?ExprId,
+    skipped_equal_hole: *bool,
+    aligner: ?*Aligner,
+) anyerror!bool {
+    const active = aligner orelse return error.RecoverStructureMismatch;
+    const next = (try active.unfold(source_expr, pattern_expr)) orelse
+        return error.RecoverStructureMismatch;
+    defer active.leave(next);
+    return try recoverBindingCandidate(
+        theorem,
+        env,
+        next.left,
+        next.right,
+        hole_expr,
+        target_sort,
+        candidate,
+        skipped_equal_hole,
+        aligner,
+    );
 }
 
 /// Whether `pattern_expr` is a chain of one or more coercion applications
@@ -1242,42 +1324,18 @@ fn applyAbstractBinding(
         if (walk.found_plug) return try walk.commit(view_bindings, candidate);
     }
 
-    const aligned_left = try preprocessDerivedExpr(
-        theorem,
-        env,
-        registry,
-        left_expr,
-    );
-    const aligned_right = try preprocessDerivedExpr(
-        theorem,
-        env,
-        registry,
-        right_expr,
-    );
-    // The retry matches the plugs against the preprocessed sides, so every
-    // solved binder a plug mentions is preprocessed the same way; pattern
-    // structure itself is left alone.
-    const aligned_bindings = try theorem.allocator.dupe(?ExprId, view_bindings);
-    defer theorem.allocator.free(aligned_bindings);
-    try preprocessPlugBindings(
-        theorem,
-        env,
-        registry,
-        abstract.left_plug.template,
-        aligned_bindings,
-    );
-    try preprocessPlugBindings(
-        theorem,
-        env,
-        registry,
-        abstract.right_plug.template,
-        aligned_bindings,
-    );
-    walk.reset(aligned_bindings);
+    // The retry brings the sides into line where they differ. A plug is
+    // tried at each pair before it is canonicalized or unfolded, so it
+    // matches the sides as written wherever they still are.
+    var aligner: Aligner = undefined;
+    aligner.init(theorem, env, registry);
+    defer aligner.deinit();
+    walk.reset(view_bindings);
+    walk.aligner = &aligner;
     const candidate = abstractContextExpr(
         &walk,
-        aligned_left,
-        aligned_right,
+        left_expr,
+        right_expr,
     ) catch |err| switch (err) {
         error.AbstractStructureMismatch => {
             if (walk.disagreement) return error.AbstractPatternConflict;
@@ -1294,7 +1352,7 @@ fn applyAbstractBinding(
 }
 
 /// The context `abstract`'s walk reads off `view_bindings` as they stand,
-/// without the retry on preprocessed sides; null when the walk finds no
+/// without the retry on aligned sides; null when the walk finds no
 /// site or the sides differ elsewhere.
 pub fn abstractAsIs(
     theorem: *TheoremContext,
@@ -1312,30 +1370,6 @@ pub fn abstractAsIs(
         else => return err,
     };
     return if (walk.found_plug) candidate else null;
-}
-
-fn preprocessPlugBindings(
-    theorem: *TheoremContext,
-    env: *const GlobalEnv,
-    registry: *RewriteRegistry,
-    template: TemplateExpr,
-    bindings: []?ExprId,
-) !void {
-    switch (template) {
-        .binder => |idx| {
-            if (bindings[idx]) |value| {
-                bindings[idx] = try preprocessDerivedExpr(
-                    theorem,
-                    env,
-                    registry,
-                    value,
-                );
-            }
-        },
-        .app => |app| for (app.args) |arg| {
-            try preprocessPlugBindings(theorem, env, registry, arg, bindings);
-        },
-    }
 }
 
 /// Where an `@abstract` walk substitutes. The hole and the plugs meet at a
@@ -1519,6 +1553,9 @@ pub const PlugWalk = struct {
     /// earlier site's solution. Turns the walk's failure into a conflict
     /// report rather than a structure mismatch.
     disagreement: bool = false,
+    /// Brings a pair that differs into line instead of rejecting it; only
+    /// the retry on aligned sides has one.
+    aligner: ?*Aligner = null,
 
     /// A walk from the solved view state, or null when the plugs are
     /// unsolved or the sorts do not meet (see `plugFrame`).
@@ -1651,9 +1688,15 @@ fn abstractContextExpr(
     walk: *PlugWalk,
     left_expr: ExprId,
     right_expr: ExprId,
-) !ExprId {
+) anyerror!ExprId {
     if (walk.identityFirst() and left_expr == right_expr) return left_expr;
     if (walk.trySite(left_expr, right_expr)) return walk.frame.hole_expr;
+    if (walk.aligner) |aligner| if (left_expr != right_expr) {
+        if (try aligner.canonical(left_expr, right_expr)) |next| {
+            defer aligner.leave(next);
+            return try abstractContextExpr(walk, next.left, next.right);
+        }
+    };
 
     const theorem = walk.theorem;
     const left_node = theorem.interner.node(left_expr);
@@ -1661,19 +1704,18 @@ fn abstractContextExpr(
     return switch (left_node.*) {
         .variable, .placeholder => switch (right_node.*) {
             .variable, .placeholder => {
-                if (left_expr != right_expr) return error.AbstractStructureMismatch;
+                if (left_expr != right_expr) return try abstractAfterStep(walk, left_expr, right_expr);
                 return left_expr;
             },
-            .app => return error.AbstractStructureMismatch,
+            .app => return try abstractAfterStep(walk, left_expr, right_expr),
         },
         .app => |left_app| switch (right_node.*) {
-            .variable, .placeholder => return error.AbstractStructureMismatch,
+            .variable, .placeholder => return try abstractAfterStep(walk, left_expr, right_expr),
             .app => |right_app| blk: {
-                if (left_app.term_id != right_app.term_id) {
-                    return error.AbstractStructureMismatch;
-                }
-                if (left_app.args.len != right_app.args.len) {
-                    return error.AbstractStructureMismatch;
+                if (left_app.term_id != right_app.term_id or
+                    left_app.args.len != right_app.args.len)
+                {
+                    return try abstractAfterStep(walk, left_expr, right_expr);
                 }
                 const args = try theorem.allocator.alloc(ExprId, left_app.args.len);
                 errdefer theorem.allocator.free(args);
@@ -1689,92 +1731,147 @@ fn abstractContextExpr(
     };
 }
 
-fn preprocessDerivedExpr(
-    theorem: *TheoremContext,
-    env: *const GlobalEnv,
-    registry: *RewriteRegistry,
-    expr_id: ExprId,
-) !ExprId {
-    var arena = ArenaAllocator.init(theorem.allocator);
-    defer arena.deinit();
-
-    var canonicalizer = Canonicalizer.init(
-        arena.allocator(),
-        theorem,
-        registry,
-        env,
-        {},
-    );
-    defer canonicalizer.deinit();
-    return try preprocessDerivedExprInner(
-        &canonicalizer,
-        theorem,
-        env,
-        expr_id,
-        0,
-    );
+/// The context read off a pair whose heads differ: on the pair the walk's
+/// aligner unfolds it to, or a structure mismatch without one.
+fn abstractAfterStep(
+    walk: *PlugWalk,
+    left_expr: ExprId,
+    right_expr: ExprId,
+) anyerror!ExprId {
+    const aligner = walk.aligner orelse return error.AbstractStructureMismatch;
+    const next = (try aligner.unfold(left_expr, right_expr)) orelse
+        return error.AbstractStructureMismatch;
+    defer aligner.leave(next);
+    return try abstractContextExpr(walk, next.left, next.right);
 }
 
-fn preprocessDerivedExprInner(
-    canonicalizer: *Canonicalizer,
+/// Lines up two expressions that agree once concrete defs with no hidden
+/// dummy args are unfolded and the rewrite / ACUI registry has
+/// canonicalized them, step by step where a walk over the two finds them
+/// apart: a pair that differs is canonicalized (`canonical`), and a pair
+/// whose heads still differ has a def unfolded one step (`unfold`). What
+/// the two share is never unfolded, so a large constant on both sides
+/// costs nothing, and no depth limit cuts the two sides off at different
+/// points of a deep def chain (#620).
+const Aligner = struct {
     theorem: *TheoremContext,
     env: *const GlobalEnv,
-    expr_id: ExprId,
-    depth: usize,
-) !ExprId {
-    if (depth >= preprocess_max_depth) return expr_id;
+    arena: ArenaAllocator,
+    canonicalizer: Canonicalizer,
+    /// The pairs a step handed out that a walk is still comparing. A step
+    /// leading back to one of them would never end, as a rewrite folding
+    /// into a def that unfolds back to it would.
+    active: std.AutoHashMapUnmanaged(Pair, void) = .empty,
 
-    if (try expandConcreteDefForDerived(theorem, env, expr_id)) |expanded| {
-        if (expanded != expr_id) {
-            return try preprocessDerivedExprInner(
-                canonicalizer,
-                theorem,
-                env,
-                expanded,
-                depth + 1,
-            );
-        }
+    const Pair = struct { left: ExprId, right: ExprId };
+
+    /// In place: the canonicalizer allocates from the aligner's own arena.
+    fn init(
+        self: *Aligner,
+        theorem: *TheoremContext,
+        env: *const GlobalEnv,
+        registry: *RewriteRegistry,
+    ) void {
+        self.* = .{
+            .theorem = theorem,
+            .env = env,
+            .arena = ArenaAllocator.init(theorem.allocator),
+            .canonicalizer = undefined,
+        };
+        self.canonicalizer = Canonicalizer.init(
+            self.arena.allocator(),
+            theorem,
+            registry,
+            env,
+            {},
+        );
     }
 
-    var current = expr_id;
-    const node = theorem.interner.node(current);
-    switch (node.*) {
-        .variable => {},
-        .placeholder => {},
-        .app => |app| {
-            const args = try canonicalizer.allocator.alloc(ExprId, app.args.len);
-            var any_changed = false;
-            for (app.args, 0..) |arg, idx| {
-                const aligned_arg = try preprocessDerivedExprInner(
-                    canonicalizer,
-                    theorem,
-                    env,
-                    arg,
-                    depth + 1,
-                );
-                args[idx] = aligned_arg;
-                any_changed = any_changed or aligned_arg != arg;
+    fn deinit(self: *Aligner) void {
+        self.canonicalizer.deinit();
+        self.arena.deinit();
+    }
+
+    /// Both sides canonicalized, or null when that changes neither. The
+    /// caller compares the pair and then hands it to `leave`.
+    fn canonical(self: *Aligner, left: ExprId, right: ExprId) !?Pair {
+        const next: Pair = .{
+            .left = try self.canonicalizer.canonicalize(left),
+            .right = try self.canonicalizer.canonicalize(right),
+        };
+        if (next.left == left and next.right == right) return null;
+        return try self.enter(next);
+    }
+
+    /// For a pair whose heads differ, the side headed by a concrete def
+    /// unfolded one step: the later-declared def when both are, as the
+    /// earlier one cannot unfold into it. Null when neither is. The caller
+    /// compares the pair and then hands it to `leave`.
+    fn unfold(self: *Aligner, left: ExprId, right: ExprId) !?Pair {
+        const left_body = try expandConcreteDefForDerived(self.theorem, self.env, left);
+        const right_body = try expandConcreteDefForDerived(self.theorem, self.env, right);
+        if (left_body) |body| {
+            if (right_body == null or
+                self.headTerm(left) >= self.headTerm(right))
+            {
+                return try self.enter(.{ .left = body, .right = right });
             }
-            if (any_changed) {
-                current = try theorem.interner.internApp(app.term_id, args);
-            }
-        },
+        }
+        const body = right_body orelse return null;
+        return try self.enter(.{ .left = left, .right = body });
     }
 
-    current = try canonicalizer.canonicalize(current);
-    if (try expandConcreteDefForDerived(theorem, env, current)) |expanded| {
-        if (expanded != current) {
-            return try preprocessDerivedExprInner(
-                canonicalizer,
-                theorem,
-                env,
-                expanded,
-                depth + 1,
-            );
-        }
+    fn enter(self: *Aligner, pair: Pair) !?Pair {
+        const entry = try self.active.getOrPut(self.arena.allocator(), pair);
+        return if (entry.found_existing) null else pair;
     }
-    return current;
-}
+
+    fn leave(self: *Aligner, pair: Pair) void {
+        _ = self.active.remove(pair);
+    }
+
+    /// Only called on def-headed expressions.
+    fn headTerm(self: *const Aligner, expr_id: ExprId) u32 {
+        return self.theorem.interner.node(expr_id).app.term_id;
+    }
+
+    /// Whether `left` and `right` agree once aligned.
+    fn equal(self: *Aligner, left: ExprId, right: ExprId) anyerror!bool {
+        if (left == right) return true;
+        if (try self.canonical(left, right)) |next| {
+            defer self.leave(next);
+            return try self.equal(next.left, next.right);
+        }
+        if (try self.sameHead(left, right)) |args| {
+            for (args.left, args.right) |left_arg, right_arg| {
+                if (!try self.equal(left_arg, right_arg)) return false;
+            }
+            return true;
+        }
+        const next = (try self.unfold(left, right)) orelse return false;
+        defer self.leave(next);
+        return try self.equal(next.left, next.right);
+    }
+
+    const Args = struct { left: []const ExprId, right: []const ExprId };
+
+    fn sameHead(self: *Aligner, left: ExprId, right: ExprId) !?Args {
+        const left_app = switch (self.theorem.interner.node(left).*) {
+            .app => |app| app,
+            .variable, .placeholder => return null,
+        };
+        const right_app = switch (self.theorem.interner.node(right).*) {
+            .app => |app| app,
+            .variable, .placeholder => return null,
+        };
+        if (left_app.term_id != right_app.term_id or
+            left_app.args.len != right_app.args.len)
+        {
+            return null;
+        }
+        return .{ .left = left_app.args, .right = right_app.args };
+    }
+};
 
 fn expandConcreteDefForDerived(
     theorem: *TheoremContext,

@@ -335,8 +335,8 @@ qualifies, but only when no argument has the target sort outright.
 If `target` is already bound — explicitly, by the view match, or by another
 derived binding — `@recover` checks that binding instead of solving it: a
 source that reads back at a different target fails with a recover conflict.
-The two are compared after unfolding concrete defs and canonicalizing both,
-as the retry described below does.
+The two are compared up to unfolding concrete defs and canonicalizing,
+the way the retry described below lines up a source and its pattern.
 A pattern that accepts the source without exposing the hole admits any
 target. When the source is a member of a context the view split, the check
 rejects the split rather than the line, and the members are tried modulo
@@ -351,9 +351,9 @@ A few behavioral details are worth keeping in mind:
   in the view state.
 - It works from the current resolved view expressions, not from eagerly-
   finalized theorem expressions.
-- It first tries direct structural comparison. If that fails, it retries after
-  narrowly preprocessing the compared expressions by unfolding concrete defs
-  without hidden dummy args and canonicalizing the result.
+- It first tries direct structural comparison. If that fails, it retries,
+  lining the source and the pattern up where they differ: unfolding concrete
+  defs without hidden dummy args and canonicalizing.
 - Bound argument slots are only skipped when the slot itself is unchanged and
   equal to `hole`. Changed bound slots are still structural mismatches or
   ordinary candidate sites, depending on where `hole` appears.
@@ -565,9 +565,9 @@ position fits the patterns on its own but disagrees with an earlier site's
 solution. (Whether the mismatch surfaced as a structure error or as a
 missing site, the conflict verdict wins once such a position was seen.)
 
-The preprocess retry described below matches the patterns against the
-preprocessed sides; the patterns themselves are not preprocessed, only the
-solved binders they mention.
+The retry described below tries the patterns at each position before it
+lines the two sides up there, so a pattern matches the sides as written
+wherever they still agree with it.
 
 `auto?`'s search core applies a rule whose plugs are bare names through
 its view: it proves the view's premises, then works the context out from
@@ -591,9 +591,9 @@ The same operational limits apply here:
   nothing solved up front.
 - It works from the current resolved view expressions, not from eagerly-
   finalized theorem expressions.
-- It first tries direct structural comparison. If that fails, it retries after
-  the same narrow preprocess step used by `@recover`: unfold concrete defs
-  without hidden dummy args, then canonicalize.
+- It first tries direct structural comparison. If that fails, it retries,
+  lining the two sides up the way `@recover` does: unfolding concrete defs
+  without hidden dummy args and canonicalizing where they differ.
 - It does not allocate theorem-local dummies merely to expose hidden witness
   structure.
 
@@ -814,15 +814,21 @@ resolved witness is the stable thing, not the temporary slot id.
 
 ### 5. Derived bindings get an unfold / canonicalize retry path
 
-Raw structural comparison is tried first. If that fails, the compiler retries
-with a preprocessed version of the relevant expressions.
+Raw structural comparison is tried first. If that fails, the compiler retries,
+lining the relevant expressions up.
 
-That preprocessing is intentionally narrow:
+The retry walks the two expressions together and only works where they
+differ:
 
-- repeatedly unfold concrete defs that have no hidden dummy args,
-- recursively preprocess children,
-- canonicalize with the rewrite / ACUI registry, and then
-- try structural recovery / abstraction again.
+- where they differ, both are canonicalized with the rewrite / ACUI
+  registry;
+- where their heads still differ, the side headed by a concrete def with no
+  hidden dummy args is unfolded one step (the later-declared def first) and
+  the walk goes on; and
+- a subterm both sides share is left alone, however much it would unfold.
+
+So a def chain of any depth lines up, and a large constant both sides
+mention costs nothing.
 
 This is the path that lets `@recover` or `@abstract` succeed when the source
 and pattern only line up *after* a concrete def has been exposed and rewrite /

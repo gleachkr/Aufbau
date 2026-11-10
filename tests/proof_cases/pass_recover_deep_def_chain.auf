@@ -1,0 +1,4 @@
+pass_recover_deep_def_chain
+---------------------------
+
+l1: $ emp |- rr a w ~ f $ by all_elim [#1]
