@@ -1,0 +1,118 @@
+-- Lean0 model-levels `lrel_add_sem` a2: a premise keeps a def application,
+-- `triple y z w`, where the rule's pattern holds the def's body, read off the
+-- comprehension `kd` in the goal. Matching the two unfolds `triple`, which
+-- leaves its arguments as fixed expressions (`y`, `z`, `w` under the class
+-- coercion), against the pattern's own applications `cv z`. That pair used to
+-- fail, so `cab_intro` needed an explicit `p`.
+delimiter $ ( ) { } [ / ] , | $;
+sort fml;
+strict provable sort wff;
+--| @vars x y z w
+sort set;
+strict sort class;
+sort hyps;
+term all {x: set} (p: fml x): fml;
+prefix all: $∀$ prec 41;
+term sb_f {x: set} (t: set x) (p: fml x): fml;
+notation sb_f {x: set} (t: set x) (p: fml x): fml =
+  ($[$:41) x ($/$:0) t ($]$:0) p;
+term cv (a: set): class;
+coercion cv: set > class;
+term cab {x: set} (p: fml x): class;
+notation cab {x: set} (p: fml x): class = (${$:max) x ($|$:0) p ($}$:0);
+term sb_c {x: set} (t: set x) (A: class x): class;
+notation sb_c {x: set} (t: set x) (A: class x): class =
+  ($⟦$:41) x ($/$:0) t ($⟧$:0) A;
+term hyps_eq (G H: hyps): wff;
+term emp: hyps;
+--| @acui hyps_assoc hyps_comm emp hyps_idem
+term join (G H: hyps): hyps;
+infixl join: $,$ prec 5;
+term hyp (p: fml): hyps;
+coercion hyp: fml > hyps;
+term nd (G: hyps) (p: fml): wff;
+infixl nd: $⇒$ prec 0;
+term seq_eq (s t: wff): wff;
+infixl seq_eq: $⟚$ prec 1;
+term iff (p q: fml): wff;
+infixr iff: $⟺$ prec 20;
+--| @relation hyps hyps_eq hyps_refl hyps_trans hyps_sym _
+axiom hyps_refl (G: hyps): $ hyps_eq G G $;
+axiom hyps_trans (G H K: hyps):
+  $ hyps_eq G H $ > $ hyps_eq H K $ > $ hyps_eq G K $;
+axiom hyps_sym (G H: hyps): $ hyps_eq G H $ > $ hyps_eq H G $;
+axiom hyps_assoc (G H K: hyps):
+  $ hyps_eq ((G , H) , K) (G , (H , K)) $;
+axiom hyps_comm (G H: hyps): $ hyps_eq (G , H) (H , G) $;
+axiom hyps_idem (G: hyps): $ hyps_eq (G , G) G $;
+axiom hyps_unit (G: hyps): $ hyps_eq (emp , G) G $;
+--| @congr
+axiom join_congr (G1 G2 H1 H2: hyps):
+  $ hyps_eq G1 G2 $ > $ hyps_eq H1 H2 $ > $ hyps_eq (G1 , H1) (G2 , H2) $;
+--| @relation wff seq_eq seq_refl seq_trans seq_sym seq_mp
+axiom seq_refl (s: wff): $ s ⟚ s $;
+axiom seq_trans (s t u: wff): $ s ⟚ t $ > $ t ⟚ u $ > $ s ⟚ u $;
+axiom seq_sym (s t: wff): $ s ⟚ t $ > $ t ⟚ s $;
+axiom seq_mp (s t: wff): $ s ⟚ t $ > $ s $ > $ t $;
+--| @relation fml iff iff_refl iff_trans iff_sym _
+axiom iff_refl (p: fml): $ p ⟺ p $;
+axiom iff_trans (p q r: fml): $ p ⟺ q $ > $ q ⟺ r $ > $ p ⟺ r $;
+axiom iff_sym (p q: fml): $ p ⟺ q $ > $ q ⟺ p $;
+--| Equivalent formulas are interderivable from equal hypotheses.
+--| @congr
+axiom nd_congr (G H: hyps) (p q: fml):
+  $ hyps_eq G H $ > $ p ⟺ q $ > $ (G ⇒ p) ⟚ (H ⇒ q) $;
+--| @rewrite
+axiom sb_f_all {x y: set} (t: set x) (p: fml x y):
+  $ [x/t] (∀ y p) ⟺ ∀ y [x/t] p $;
+term ceq (A B: class) : fml;
+infixl ceq: $=$ prec 50;
+term wcel (A B: class) : fml;
+infixl wcel: $∈$ prec 50;
+term isset (A: class) : fml;
+term ceqt (A B: class): wff;
+infixl ceqt: $≐$ prec 50;
+--| @relation class ceqt ceqt_refl ceqt_trans ceqt_sym _
+axiom ceqt_refl (A: class): $ A ≐ A $;
+axiom ceqt_trans (A B C: class): $ A ≐ B $ > $ B ≐ C $ > $ A ≐ C $;
+axiom ceqt_sym (A B: class): $ A ≐ B $ > $ B ≐ A $;
+--| @rewrite
+axiom sb_c_var {x: set} (t: set x): $ (⟦ x / t ⟧ x) ≐ t $;
+--| @rewrite
+axiom sb_c_irrel {x: set} (t: set x) (A: class): $ (⟦ x / t ⟧ A) ≐ A $;
+--| @congr
+axiom all_congr {x: set} (p q: fml x):
+  $ p ⟺ q $ > $ ∀ x p ⟺ ∀ x q $;
+--| @rewrite
+axiom sb_f_wcel {x: set} (t: set x) (A B: class x):
+  $ [x/t] (A ∈ B) ⟺ (⟦ x / t ⟧ A) ∈ (⟦ x / t ⟧ B) $;
+term empty : class;
+prefix empty: $∅$ prec max;
+term opair (A B: class): class;
+notation opair (A B: class): class = ($⟨$:max) A ($,$:5) B ($⟩$:0);
+--| Membership of a class in an abstraction, through a name `z` for it.
+axiom cab_intro {x z: set} (G: hyps x) (A: class) (p: fml x):
+  $ G ⇒ isset A $ > $ G , z = A ⇒ [x/z] p $ > $ G ⇒ A ∈ {x | p} $;
+--| @congr
+axiom wcel_congr (A B C D: class):
+  $ A ≐ B $ > $ C ≐ D $ > $ (A ∈ C) ⟺ (B ∈ D) $;
+--| @congr
+axiom opair_congr (A B C D: class):
+  $ A ≐ B $ > $ C ≐ D $ > $ ⟨ A , C ⟩ ≐ ⟨ B , D ⟩ $;
+--| @rewrite
+axiom sb_c_opair {x: set} (t: set x) (A B: class x):
+  $ (⟦ x / t ⟧ ⟨ A , B ⟩) ≐ ⟨ ⟦ x / t ⟧ A , ⟦ x / t ⟧ B ⟩ $;
+term scons (A S: class) : class;
+--| @congr
+axiom scons_congr (A B C D: class): $ A ≐ B $ > $ C ≐ D $ > $ scons A C ≐ scons B D $;
+--| @rewrite
+axiom sb_c_scons {x: set} (t: set x) (A B: class x):
+  $ (⟦ x / t ⟧ (scons A B)) ≐ scons (⟦ x / t ⟧ A) (⟦ x / t ⟧ B) $;
+term tag: class;
+def triple (a1 a2 a3: class): class = $ ⟨ tag , scons a1 (scons a2 (scons a3 ∅)) ⟩ $;
+term rel: class;
+def kd (.x .y .w: set): class = $ {x | ∀ y ∀ w (⟨ tag , scons y (scons x (scons w ∅)) ⟩ ∈ rel)} $;
+theorem def_premise {y z w: set} (G: hyps) (a: class):
+  $ G ⇒ isset a $ >
+  $ G , z = a ⇒ ∀ y ∀ w (triple y z w ∈ rel) $ >
+  $ G ⇒ a ∈ kd $;

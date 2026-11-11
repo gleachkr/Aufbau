@@ -758,6 +758,9 @@ const proof_cases = [_]ProofCase{
     // conclusion leaves no bindings when it fails, and starts its normalized
     // comparison from what the rest of the premise forces.
     .{ .stem = "pass_normalized_premise_forced_bindings", .outcome = .pass },
+    // Lean0 model-levels: a premise keeping a def application matches a
+    // pattern holding the def's body, whose arguments the unfolding fixes.
+    .{ .stem = "pass_def_premise_against_unfolded_pattern", .outcome = .pass },
     .{
         .stem = "fail_two_sort_eigen_smuggle",
         .outcome = .{ .fail = error.DepViolation },

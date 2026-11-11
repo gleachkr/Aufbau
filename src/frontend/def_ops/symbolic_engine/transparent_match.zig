@@ -1115,7 +1115,12 @@ fn matchSymbolicToSymbolicStateInner(
     rhs: *const SymbolicExpr,
     state: *MatchSession,
 ) anyerror!bool {
-    if (rhs.* == .fixed and holeyActual(self, rhs.fixed)) {
+    // A fixed side is a concrete expression, which the app case below cannot
+    // take apart, so an app is matched against it as one. A def unfolded by
+    // `expandConcreteDef` keeps its arguments fixed: `ra_add z z w` becomes
+    // `⟨ kr_add , scons (cv z) … ⟩` with `cv z` fixed, against a pattern's
+    // own `cv z`.
+    if (rhs.* == .fixed and (lhs.* == .app or holeyActual(self, rhs.fixed))) {
         return try matchSymbolicToExprState(self, lhs, rhs.fixed, state);
     }
     if (lhs.* != .app and holeySymbolicActual(self, rhs)) return true;

@@ -1,0 +1,3 @@
+def_premise
+-----------
+l1: $ G ⇒ a ∈ kd $ by cab_intro [#1, #2]
