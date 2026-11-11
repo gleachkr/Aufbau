@@ -169,7 +169,6 @@ calculus](lambda-calculus.md).
 --| @auto forward
 --| @auto eager      -- optionally: @auto eager N
 --| @auto bridge
---| @auto trigger (TERM child ...)
 ```
 
 One mode per line; a rule may carry several lines. Search applies every
@@ -189,11 +188,6 @@ proofs.
 only from the reference pool and forward-derived facts. This is intended to 
 accommodate weakening and similar rules , where a generating application would 
 enumerate every subset of the context. A bridge rule must have a hypothesis.
-
-`trigger` supplies a parenthesized prefix pattern over term names, rule
-binders, and `_`. Before searching, the engine matches it against subterms
-of the goal to create fully instantiated facts from a hypothesis-free rule,
-which the search then uses as references.
 
 More details are available in [Powering search](powering-search.md).
 

@@ -290,22 +290,3 @@ never generates a sub-proof for them. So `weak [#1]` still closes `Γ , q ⊢
 p` from a hypothesis `Γ ⊢ p` wherever that sub-goal arises, while the
 forgetting searches disappear. The annotation requires at least one
 hypothesis.
-
-## `@auto trigger`: seed leaf facts
-
-Some proofs need a leaf fact backward search cannot easily discover, typically
-an axiom instance like `p ⊢ p` for some subformula `p` of the goal. `@auto
-trigger` applies to hypothesis-free rules and takes a pattern over term names,
-the rule's binders, and `_`:
-
-```mm0
---| @auto trigger (hyp a)
-axiom ax (g: ctx) (a: wff): $ g , a ⊢ a $;
-```
-
-When search would otherwise fail, the engine matches each trigger pattern
-against the goal's subterms. It creates a rule instance for each match and
-retries with those facts in the reference pool. The pattern has to name
-every binder of the rule except those that default to the unit of an `@acui`
-combiner. `g` above defaults to the empty context, and the annotation is
-rejected if a binder is unresolvable.

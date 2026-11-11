@@ -1,12 +1,6 @@
--- Minimal propositional natural-deduction theory for the `@auto trigger`
--- seeding guards (docs/design_notes/trigger_seeding.md).
---
--- This is the pure repro of the elimination-major "left rule" gap: from an
--- EMPTY ref pool, backward search cannot pin an elim rule's premise-only
--- binder (imp_elim's `p`, or_elim's disjuncts), so `p → q , p ⊢ q` is a MISS
--- at any budget. The `@auto trigger` annotations on `ax` seed ground
--- identity axioms over the goal's subterms (context members and implication
--- antecedents — the analytic leaf set), and the seeds ARE the missing refs.
+-- Minimal propositional natural-deduction theory: elimination rules whose
+-- premise-only binder (imp_elim's `p`, or_elim's disjuncts) no reference
+-- pins, so `p → q , p ⊢ q` must be found from an EMPTY ref pool.
 
 delimiter $ ( ) { } , $;
 
@@ -71,15 +65,8 @@ axiom hyp_congr (p q: wff): $ p ↔ q $ > $ ctx_eq (hyp p) (hyp q) $;
 axiom nd_congr (G H: ctx) (p q: wff):
   $ ctx_eq G H $ > $ p ↔ q $ > $ (G ⊢ p) ↔ (H ⊢ q) $;
 
--- Primitive rules. Triggers on `ax`: seed `φ ⊢ φ` for every context member
--- (`hyp φ` subterm — the left-rule reading), for every implication
--- antecedent (what `imp_intro` will move into context), and for every
--- disjunct (what `or_elim` will move into its minors' contexts).
+-- Primitive rules.
 
---| @auto trigger (hyp p)
---| @auto trigger (im p _)
---| @auto trigger (or p _)
---| @auto trigger (or _ p)
 axiom ax (G: ctx) (p: wff): $ G , p ⊢ p $;
 
 axiom imp_intro (G: ctx) (p q: wff):

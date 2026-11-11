@@ -77,16 +77,6 @@ const zero_span = Span{ .start = 0, .end = 0 };
 /// present (the session's clipper-backed index, already built for backward
 /// search) it pre-filters pool sources per premise slot; derived sources are
 /// scanned linearly (bounded by `max_forward_facts`).
-///
-/// `seeds` are `@auto trigger` ground facts (sourceless `DerivedRef`s minted
-/// by `trigger.zig`; empty when the theory has no trigger rules or every
-/// seed restated a pool fact).
-/// They enter as depth-0 derived sources so layer-1 joins fire over them,
-/// and stay in the derived pool for backward use. The caller has already
-/// dropped seeds that restate a pool fact or each other
-/// (`trigger.dropRestatedSeeds`). Seeds occupy the lowest derived indices,
-/// as recipe acyclicity requires (a join product referencing a seed must sit
-/// at a strictly higher index).
 pub fn saturate(
     context: *const Context,
     theorem: *TheoremContext,
@@ -94,7 +84,6 @@ pub fn saturate(
     ref_index: ?*const ref_index_mod.Index,
     options: ForwardOptions,
     counters: ?*SearchCounters,
-    seeds: []const DerivedRef,
 ) !DerivedPool {
     var result = DerivedPool{
         .arena = ArenaAllocator.init(context.allocator),
@@ -135,23 +124,6 @@ pub fn saturate(
         _ = try sat.seen.getOrPut(sat.scratch, try sat.shapeKey(expr));
     }
     sat.pool_count = sat.sources.items.len;
-
-    for (seeds) |seed| {
-        // Registered so a join restating a seed is dropped like one
-        // restating a pool fact.
-        const shape_gop = try sat.seen.getOrPut(
-            sat.scratch,
-            try sat.shapeKey(seed.shape),
-        );
-        std.debug.assert(!shape_gop.found_existing);
-        const idx = sat.derived.items.len;
-        try sat.derived.append(sat.arena, seed);
-        try sat.sources.append(sat.scratch, .{
-            .source = .{ .derived = idx },
-            .expr = seed.shape,
-            .depth = 0,
-        });
-    }
 
     const rule_limit = @min(
         context.available_rule_count,

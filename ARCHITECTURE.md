@@ -1097,7 +1097,7 @@ metadata for:
 - structural ACUI combiner metadata, indexed by head term
 - normalization specs for theorem applications
 - fallback and alpha rules
-- `@auto` forward, eager, bridge, and trigger enrollment
+- `@auto` forward, eager, and bridge enrollment
 - `@conversion` theorem/definition enrollment and directed `@compute` rules
 
 ### Normalizer
@@ -1287,7 +1287,7 @@ There are distinct engines with different contracts:
 - `compiler/search/core/` is the search core behind `auto?` and `exact?`
   (one step): a goal-directed prover over witness variables, with iterative
   deepening, a per-call budget and failure/success memos. `entry.zig` sets a
-  call up: the `@vars` pool, `@auto trigger` seeds and forward saturation.
+  call up: the `@vars` pool and forward saturation.
   `apply.zig` probes each rule against the goal for `apply?`.
 - `conversion.zig` drives a separate e-graph. `egraph.zig` records justified
   equality unions; `compiler/search/egraph/explain.zig` extracts explanations;

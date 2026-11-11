@@ -97,8 +97,6 @@ axiom mem_congr (x y A B: set):
 axiom sb_f_congr {x: set} (t u: set x) (p q: wff x):
   $ t = u $ > $ p ↔ q $ > $ [x/t] p ↔ [x/u] q $;
 
---| @auto trigger (hyp p)
---| @auto trigger (im p _)
 axiom ax (G: ctx) (p: wff): $ G , p ⊢ p $;
 
 axiom imp_intro (G: ctx) (p q: wff):

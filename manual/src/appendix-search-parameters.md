@@ -68,7 +68,7 @@ out.
 ## What search reads from the theory
 
 The searches can be controlled by annotations in the `.mm0` file: `@auto
-forward` / `backward` / `eager` / `trigger` enroll rules for `auto?` (see
+forward` / `eager` / `bridge` enroll rules for `auto?` (see
 [Powering search](powering-search.md)), `@conversion` and `@compute` enroll
 equations for `conversion?` (see [Computation](computation.md)), and `@vars`
 supplies a witness pool. The per-invocation parameters above only decide how

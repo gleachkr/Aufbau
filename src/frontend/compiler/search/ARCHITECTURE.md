@@ -84,8 +84,7 @@ Trimming costs checker runs per surfaced suggestion only, never search ticks
 **Holey goals (type inference).** A line whose assertion has proof holes
 (`g ⊢ t : _ty`) reaches `generateTopLevel` as `Goal.holey`. Each hole is a
 hole wvar (`core/wvars.zig`) that the proof fills, and the close-out
-validates against the line as written, holes and all. No trigger seeds are
-harvested for a holey goal (holes are not subterms).
+validates against the line as written, holes and all.
 
 ## The search core
 
@@ -94,11 +93,9 @@ harvested for a holey goal (holes are not subterms).
 1. the `@vars` pool tokens, named as dummies of the clone in sorted order
    (`poolVarsClone`), from which the close-out names leftover
    eigenvariables and witnesses;
-2. for a concrete goal in a theory with `@auto trigger` rules, the trigger
-   seeds (`trigger.zig`), less any restating a pool fact;
-3. when the theory has `@auto forward` rules, bounded forward saturation
-   over the ref pool with the seeds as depth-0 sources (`saturateForward`);
-4. `runCore`: `core.run`, recording how it ended (`SearchCounters.core_ran`,
+2. when the theory has `@auto forward` rules, bounded forward saturation
+   over the ref pool (`saturateForward`);
+3. `runCore`: `core.run`, recording how it ended (`SearchCounters.core_ran`,
    `core_end`, `gen_last_depth`), and copying a found proof out of the
    core's transient state (`cloneApplication`).
 
@@ -252,8 +249,8 @@ See `docs/rewrite_system.md` for the user-facing surface.
 The core applies every rule its catalog admits, annotated or not; a rule's
 role comes from its shape and annotations (`core/catalog.zig`): a rule with
 no premises is a closer, `@auto bridge` makes a bridge, `@auto eager` a safe
-rule, and every other rule is unsafe. `@auto forward` and `@auto trigger`
-feed the facts instead. The annotation is a doc-comment immediately before
+rule, and every other rule is unsafe. `@auto forward` feeds the facts
+instead. The annotation is a doc-comment immediately before
 the rule's declaration:
 
 ```
@@ -265,15 +262,13 @@ axiom rim ...         -- invertible: a safe rule, depth-free
 axiom rand ...        -- same, tried after priority 1
 --| @auto bridge
 axiom weak ...        -- premises closed by facts only
---| @auto trigger (hyp p)
-axiom ax ...          -- seed φ⊢φ per goal context member
 ```
 
 Exactly one mode is required (`error.InvalidAutoAnnotation` otherwise; `eager`
 takes an optional priority ≥ 1). Parsing lands in
 `RewriteRegistry.processAuto` (`rewrite_registry.zig`); the search queries
 `isAutoForwardRule` / `eagerPriority` / `isAutoBridgeRule` /
-`autoForwardRuleCount` / `triggerRuleCount`. Annotating a rule never
+`autoForwardRuleCount`. Annotating a rule never
 changes *validity* (every proof still re-validates through the checker); it
 only changes the *search*, and `@auto eager` narrows it under the user's
 invertibility declaration, which the search trusts.
@@ -315,27 +310,6 @@ rest binders are shares, so the fact a premise is closed by binds `g` to the
 part of the context it states and the settle step hands `h` the rest.
 Opening the premise to rules would not terminate: the step costs no depth
 and its premise, with a fresh share, is a new goal each time.
-
-### `@auto trigger PATTERN` — ground seeds from goal subterms
-
-Only on **hypothesis-free** rules (`ax`-style; a seed has no premise recipe).
-The pattern is a parenthesized prefix tree over term *names*, the rule's own
-binder names (captures), and `_` (wildcard) — `(hyp p)`, `(im p _)`. A rule
-binder the pattern does not name must be a non-bound binder of an
-ACUI-combiner sort (it defaults to the unit at harvest, then
-`normalizeAcuiUnits` cleans the instantiated conclusion); anything else is an
-annotation error, so every seed is ground by construction. Validation checks
-term availability, arity (derived from the term declaration), capture/nested
-sorts, and that bound argument positions carry only `_`.
-
-`entry.zig` harvests the seeds once, from the subterms of a concrete root
-goal: each match mints a ground instance of the rule (for `ax`: `φ ⊢ φ` per
-harvested formula) as a sourceless `DerivedRef`. Seeds restating a pool fact
-are dropped. The core does not take a seed itself as a fact (a closer gives
-the same axiom instance); seeds matter as depth-0 sources of forward
-saturation, whose joins against them yield facts. See
-`docs/design_notes/trigger_seeding.md` for what the patterns should enumerate
-(the analytic leaf set: context members, implication antecedents, disjuncts).
 
 ### `@auto forward` — enrich the fact pool before the search
 
@@ -525,7 +499,7 @@ Notes:
 | `root.zig` | public surface / re-exports |
 | `session.zig` | `SearchSession`: lazy index + pool caching |
 | `types.zig` | `Goal`, `Context`, `ApplyCandidate`, options, counters, `GlobalBudget` and tick weights, `DerivedRef`/`DerivedPool` |
-| `entry.zig` | `auto?` and `exact?` entries (`generateTopLevel`, `exactTopLevel`): the `@vars` pool clone, trigger seeds, forward saturation, `runCore`/`endCore`, copying the proof out |
+| `entry.zig` | `auto?` and `exact?` entries (`generateTopLevel`, `exactTopLevel`): the `@vars` pool clone, forward saturation, `runCore`/`endCore`, copying the proof out |
 | `core/root.zig` | the search core, in a discarded clone of the work theorem: entry, abstention, facts, the one-step pass and deepening, close-out (name leftover eigenvariables, then witnesses, from `@vars`, render every binding explicitly, one `probe`) |
 | `core/catalog.zig` | the rules the core applies, by role (closer, bridge = `@auto bridge`, safe = `@auto eager`, unsafe), indexed by conclusion head; quantifier rules' witnesses (γ, δ) read off their `@view`/`@recover`; cuts, shares, abstractions |
 | `core/terms.zig` | canonical ACUI bags, conclusion matching and unification through witness variables (bag members as choice points), unfolding and normal forms, premise building, the view's leaf swap (none where the pattern holds a variable that depends on the hole, or while a premise is still to fix the pattern: the core then reads the witness off the closed premise with the checker's `@recover`) |
@@ -535,7 +509,6 @@ Notes:
 | `core/prover.zig` | the agenda in continuation-passing style, the proof record, γ/δ steps, splits, the W5 prune and dedupe, the relaxed run, and the failure/success memos |
 | `meta_store.zig` | the meta store forward saturation's universal metas live in (`DerivedPool.store`); the leaf kinds live in `../inference/open_terms.zig` |
 | `forward.zig` | forward saturation (`@auto forward`), recipe materialization, the binding `Namer` |
-| `trigger.zig` | `@auto trigger` seed harvest: subterm e-match → sourceless ground `DerivedRef`s |
 | `tunables.zig` | per-call search parameters: names, ranges, validation, and applying them to `GenerateOptions` |
 | `candidate.zig` | `probe`/`commit` over `tryCandidate`: full checker re-validation on a cloned theorem |
 | `apply.zig` | `apply?`: rule-index candidates probed against the checker |

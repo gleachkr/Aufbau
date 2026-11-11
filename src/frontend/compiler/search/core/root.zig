@@ -268,9 +268,7 @@ fn poolFacts(request: Request, theorem: *TheoremContext, terms: *Terms, arena: s
         try facts.append(arena, .{ .expr = canonical, .ref = entry.ref, .shape = try terms.shape(canonical) });
     }
     if (request.derived) |dpool| for (dpool.refs) |*dref| {
-        // A trigger seed has no sources: an axiom instance the closers
-        // already give.
-        if (dref.sources.len == 0 or dref.has_universal_meta) continue;
+        if (dref.has_universal_meta) continue;
         if (!try terms.supported(dref.shape)) continue;
         const canonical = terms.canonical(dref.shape) catch |err| switch (err) {
             error.Unsupported => continue,

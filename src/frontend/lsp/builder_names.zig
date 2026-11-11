@@ -64,8 +64,6 @@ pub fn indexAnnotations(
             std.mem.eql(u8, directive, "@alpha"))
         {
             try indexViewArgs(self, document, args, decl_index, binders);
-        } else if (std.mem.eql(u8, directive, "@auto")) {
-            try indexTrigger(self, document, args, decl_index, binders);
         } else if (std.mem.eql(u8, directive, "@view")) {
             view = try indexView(self, document, args, decl_index);
         } else if (std.mem.eql(u8, directive, "@recover") or
@@ -95,37 +93,6 @@ fn indexGlobalArgs(
             .rule => ruleDeclIndex(self, token.text),
         } orelse continue;
         try addGlobalUse(self, document, token.text, index);
-    }
-}
-
-/// `@auto trigger (TERM child …)`: the name after each `(` is a term, any
-/// other name a binder of the rule.
-fn indexTrigger(
-    self: anytype,
-    document: DocumentId,
-    args: []const u8,
-    decl_index: usize,
-    binders: []const BinderDecl,
-) !void {
-    var pos: usize = 0;
-    const mode = nextAnnotationToken(args, &pos) orelse return;
-    if (!std.mem.eql(u8, mode.text, "trigger")) return;
-    var after_open = false;
-    while (pos < args.len) {
-        const name = source.scanIdent(args, &pos) orelse {
-            if (args[pos] == '(') after_open = true;
-            if (args[pos] == ')') after_open = false;
-            pos += 1;
-            continue;
-        };
-        if (after_open) {
-            if (termDeclIndex(self, name)) |index| {
-                try addGlobalUse(self, document, name, index);
-            }
-        } else {
-            try addBinderUse(self, document, name, decl_index, binders);
-        }
-        after_open = false;
     }
 }
 

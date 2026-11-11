@@ -221,7 +221,6 @@ axiom sb_f_R {x: obj} (t: obj x) (a b: obj x):
 -- step normal-form ND never needs. Search reaches the eliminations through the
 -- derived left rules below instead.
 
---| @auto trigger (hyp a)
 axiom ax (g: ctx) (a: wff): $ g , a ⊢ a $;
 
 -- Weakening. Admissible (it is built into `ax`), but not derivable as a single

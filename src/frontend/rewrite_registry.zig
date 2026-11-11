@@ -42,23 +42,6 @@ pub const ResolvedRelation = struct {
     transport_id: ?u32,
 };
 
-/// One `@auto trigger` pattern: a prefix term tree e-matched against the
-/// goal's subterms before `auto?` searches. A `binder` node
-/// captures the annotated rule's binder at that index from the matched
-/// position; `wildcard` matches anything. Ground by construction: every rule
-/// binder not named by the pattern must default to an ACUI unit (validated
-/// at annotation time), so each match mints one fully concrete rule instance.
-pub const TriggerPattern = union(enum) {
-    app: App,
-    binder: usize,
-    wildcard,
-
-    pub const App = struct {
-        term_id: u32,
-        args: []const TriggerPattern,
-    };
-};
-
 /// A rewrite rule: lhs ~ rhs, indexed by the head term_id of lhs.
 pub const RewriteRule = struct {
     rule_id: u32,
@@ -240,12 +223,6 @@ pub const RewriteRegistry = struct {
     auto_bridge_rules: std.AutoHashMap(u32, void),
     /// ACUI structural metadata by combiner head term_id.
     acui_by_head: std.AutoHashMap(u32, StructuralCombiner),
-    /// `@auto trigger` patterns by rule_id (one list entry per annotation
-    /// line). Only hypothesis-free rules may carry triggers.
-    trigger_by_rule: std.AutoHashMap(
-        u32,
-        std.ArrayListUnmanaged(TriggerPattern),
-    ),
     /// `@conversion` rules in declaration order. The egraph builds its own
     /// match-side head indexes per search call; the registry keeps a flat
     /// list.
@@ -280,10 +257,6 @@ pub const RewriteRegistry = struct {
             .acui_by_head = std.AutoHashMap(u32, StructuralCombiner).init(
                 allocator,
             ),
-            .trigger_by_rule = std.AutoHashMap(
-                u32,
-                std.ArrayListUnmanaged(TriggerPattern),
-            ).init(allocator),
         };
     }
 
@@ -314,7 +287,6 @@ pub const RewriteRegistry = struct {
         .{ "auto_eager_rules", .map },
         .{ "auto_bridge_rules", .map },
         .{ "acui_by_head", .map },
-        .{ "trigger_by_rule", .list_map },
         .{ "conversions", .list },
         .{ "def_conversions", .list },
         .{ "computes", .list },
@@ -324,8 +296,8 @@ pub const RewriteRegistry = struct {
     /// pipeline captures one before a declaration and reinstates it when
     /// the declaration fails, discarding whatever the declaration
     /// registered. Containers are copied; the rule payloads they hold
-    /// (templates, trigger patterns, names) are borrowed arena data that
-    /// no path mutates, so both registries share them.
+    /// (templates, names) are borrowed arena data that no path mutates, so
+    /// both registries share them.
     pub fn clone(
         self: *const RewriteRegistry,
         allocator: std.mem.Allocator,
@@ -1092,9 +1064,6 @@ pub const RewriteRegistry = struct {
         iter: *std.mem.TokenIterator(u8, .any),
     ) !void {
         const mode = iter.next() orelse return error.InvalidAutoAnnotation;
-        if (std.mem.eql(u8, mode, "trigger")) {
-            return self.processTrigger(env, stmt_name, iter.rest());
-        }
         if (std.mem.eql(u8, mode, "eager")) {
             return self.processEager(env, stmt_name, iter);
         }
@@ -1141,108 +1110,6 @@ pub const RewriteRegistry = struct {
         const rule = &env.rules.items[rule_id];
         if (ruleDefersWitness(rule)) return error.EagerRuleDefersWitness;
         try self.auto_eager_rules.put(rule_id, priority);
-    }
-
-    /// Parse and validate one `@auto trigger PATTERN` annotation. The pattern
-    /// is a parenthesized prefix term tree over term *names*, the rule's own
-    /// binder names (captures), and `_` (wildcard) — e.g. `(im p _)`. Ground
-    /// seeds only: a rule binder the pattern does not name must be a
-    /// non-bound binder of an ACUI-combiner sort (it defaults to the unit at
-    /// harvest time); anything else is an annotation error. Only
-    /// hypothesis-free rules qualify (a seed has no premise recipe).
-    fn processTrigger(
-        self: *RewriteRegistry,
-        env: *const GlobalEnv,
-        stmt_name: []const u8,
-        pattern_text: []const u8,
-    ) !void {
-        const rule_id = env.getRuleId(stmt_name) orelse return;
-        const rule = &env.rules.items[rule_id];
-        if (rule.hyps.len != 0) return error.TriggerRuleHasHypotheses;
-
-        var tokens = TriggerTokenizer{ .text = pattern_text };
-        const pattern = try self.parseTriggerNode(env, rule, &tokens);
-        if (tokens.next() != null) return error.InvalidTriggerAnnotation;
-        // A bare capture or wildcard root would match every subterm of its
-        // sort — the Z3 lesson is explicit patterns, so the root must name a
-        // term head.
-        if (pattern != .app) return error.InvalidTriggerAnnotation;
-
-        const named = try self.allocator.alloc(bool, rule.args.len);
-        defer self.allocator.free(named);
-        @memset(named, false);
-        try validateTriggerApp(env, rule, pattern.app, named);
-        for (rule.args, named) |arg, is_named| {
-            if (is_named) continue;
-            if (arg.bound or
-                !self.combinerSortRegistered(env, arg.sort_name))
-            {
-                return error.TriggerBinderNotGround;
-            }
-        }
-
-        const gop = try self.trigger_by_rule.getOrPut(rule_id);
-        if (!gop.found_existing) {
-            gop.value_ptr.* = .empty;
-        }
-        try gop.value_ptr.append(self.allocator, pattern);
-    }
-
-    /// One trigger-pattern node. Arity comes from the term declaration, so
-    /// exactly `term.args.len` child nodes are parsed before the closing
-    /// paren — a wrong-arity pattern fails as a syntax error.
-    fn parseTriggerNode(
-        self: *RewriteRegistry,
-        env: *const GlobalEnv,
-        rule: *const RuleDecl,
-        tokens: *TriggerTokenizer,
-    ) anyerror!TriggerPattern {
-        const token = tokens.next() orelse
-            return error.InvalidTriggerAnnotation;
-        if (std.mem.eql(u8, token, "(")) {
-            const name = tokens.next() orelse
-                return error.InvalidTriggerAnnotation;
-            const term_id = env.term_names.get(name) orelse
-                return error.UnknownTriggerTerm;
-            const term = &env.terms.items[term_id];
-            if (!term.available) return error.UnknownTriggerTerm;
-            const args = try self.allocator.alloc(
-                TriggerPattern,
-                term.args.len,
-            );
-            for (args) |*slot| {
-                slot.* = try self.parseTriggerNode(env, rule, tokens);
-            }
-            const close = tokens.next() orelse
-                return error.InvalidTriggerAnnotation;
-            if (!std.mem.eql(u8, close, ")")) {
-                return error.InvalidTriggerAnnotation;
-            }
-            return .{ .app = .{ .term_id = term_id, .args = args } };
-        }
-        if (std.mem.eql(u8, token, ")")) {
-            return error.InvalidTriggerAnnotation;
-        }
-        if (std.mem.eql(u8, token, "_")) return .wildcard;
-        const idx = findRuleArgIndex(rule, token) orelse
-            return error.UnknownTriggerBinder;
-        return .{ .binder = idx };
-    }
-
-    /// True when some registered ACUI combiner returns `sort_name` — i.e. a
-    /// harvest-time unit default exists for an unnamed binder of that sort.
-    fn combinerSortRegistered(
-        self: *const RewriteRegistry,
-        env: *const GlobalEnv,
-        sort_name: []const u8,
-    ) bool {
-        var it = self.acui_by_head.keyIterator();
-        while (it.next()) |head| {
-            if (head.* >= env.terms.items.len) continue;
-            const term = &env.terms.items[head.*];
-            if (std.mem.eql(u8, term.ret_sort_name, sort_name)) return true;
-        }
-        return false;
     }
 
     fn processAcui(
@@ -1321,10 +1188,6 @@ pub const RewriteRegistry = struct {
         rule_id: u32,
     ) bool {
         return self.auto_forward_rules.contains(rule_id);
-    }
-
-    pub fn triggerRuleCount(self: *const RewriteRegistry) usize {
-        return self.trigger_by_rule.count();
     }
 
     pub fn autoForwardRuleCount(self: *const RewriteRegistry) usize {
@@ -1607,79 +1470,6 @@ fn noteUnitLaw(
             return error.AmbiguousStructuralUnitRule;
         }
         side.slot.* = .{ .rule_id = rule_id, .reversed = is_reversed };
-    }
-}
-
-/// Whitespace/paren tokenizer for `@auto trigger` pattern text: `(` and `)`
-/// are single-character tokens, everything else splits on whitespace.
-const TriggerTokenizer = struct {
-    text: []const u8,
-    pos: usize = 0,
-
-    fn next(self: *TriggerTokenizer) ?[]const u8 {
-        while (self.pos < self.text.len and
-            std.ascii.isWhitespace(self.text[self.pos]))
-        {
-            self.pos += 1;
-        }
-        if (self.pos >= self.text.len) return null;
-        const start = self.pos;
-        const c = self.text[start];
-        if (c == '(' or c == ')') {
-            self.pos += 1;
-            return self.text[start..self.pos];
-        }
-        while (self.pos < self.text.len) : (self.pos += 1) {
-            const ch = self.text[self.pos];
-            if (std.ascii.isWhitespace(ch) or ch == '(' or ch == ')') break;
-        }
-        return self.text[start..self.pos];
-    }
-};
-
-/// Semantic checks for one trigger app node, recording which rule binders
-/// the pattern names. Bound term positions hold variables, which a ground
-/// seed cannot capture or constrain — only `_` is admitted there. Capture
-/// and nested-app sorts must line up with the term's declared argument
-/// sorts, and a capture must target a non-bound rule binder (the captured
-/// subterm is an arbitrary expression, not a variable).
-fn validateTriggerApp(
-    env: *const GlobalEnv,
-    rule: *const RuleDecl,
-    app: TriggerPattern.App,
-    named: []bool,
-) anyerror!void {
-    const term = &env.terms.items[app.term_id];
-    for (term.args, app.args) |term_arg, child| {
-        switch (child) {
-            .wildcard => {},
-            .binder => |idx| {
-                if (term_arg.bound) return error.TriggerBoundPosition;
-                if (rule.args[idx].bound) {
-                    return error.TriggerBinderNotGround;
-                }
-                if (!std.mem.eql(
-                    u8,
-                    rule.args[idx].sort_name,
-                    term_arg.sort_name,
-                )) {
-                    return error.TriggerSortMismatch;
-                }
-                named[idx] = true;
-            },
-            .app => |child_app| {
-                if (term_arg.bound) return error.TriggerBoundPosition;
-                const child_term = &env.terms.items[child_app.term_id];
-                if (!std.mem.eql(
-                    u8,
-                    child_term.ret_sort_name,
-                    term_arg.sort_name,
-                )) {
-                    return error.TriggerSortMismatch;
-                }
-                try validateTriggerApp(env, rule, child_app, named);
-            },
-        }
     }
 }
 

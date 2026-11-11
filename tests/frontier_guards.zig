@@ -267,18 +267,10 @@ pub const guards = [_]FrontierGuard{
         .fwd_attempts = 16384,
         .fwd_facts = 128,
     },
-    // `@auto trigger` seeding depth guards (see
-    // docs/design_notes/trigger_seeding.md). The minimal ND theory is the
-    // pure repro of the elimination-major left-rule gap: both theorems
-    // must regenerate their WHOLE proof from the bare goal and an EMPTY
-    // ref pool, which is possible ONLY through the seeds —
-    // `nd_mp_inner` (`p → q , p ⊢ q`) was a clean MISS at any budget
-    // before them (imp_elim's `p` is premise-only; no ref pins it). These
-    // pin the whole chain: annotation parsing → subterm harvest → seed
-    // minting → seeded derived pool → the planner ordering that lets the
-    // seed-fillable elimination major lead its open minors
-    // (`HypPlan.rigid_pins`; `nd_or_comm_min` k=5 misses without it). FULL
-    // at the default budget.
+    // The minimal ND theory: both theorems regenerate their whole proof from
+    // the bare goal and an empty ref pool, through elimination rules whose
+    // premise-only binder (imp_elim's `p`, or_elim's disjuncts) no reference
+    // pins. FULL at the default budget.
     .{
         .filter = "nd_mp_inner",
         .files = "tests/search_bench_cases/nd_minimal.mm0:" ++
@@ -291,12 +283,8 @@ pub const guards = [_]FrontierGuard{
             "tests/search_bench_cases/nd_minimal.auf",
         .mode = "depth",
     },
-    // The real-theory seeding win: zermelo_frontier's `ax` carries the
-    // same triggers, and `nd_exists_elim_const` (4/6 before, capped at
-    // the k where a truncated `ax` line had to be re-invented) is FULL
-    // with them — the only zermelo per-theorem change from the
-    // annotation. (`nd_or_comm` stays 2/6: its k=3 miss is the separate
-    // phase-5 distractor-flood budget death, not the left-rule gap.)
+    // Existential elimination, `(∃ x p) → ((p → q) → q)`: FULL at the
+    // default budget.
     .{
         .filter = "nd_exists_elim_const",
         .files = "tests/search_bench_cases/zermelo_frontier.mm0:" ++
@@ -398,10 +386,9 @@ pub const guards = [_]FrontierGuard{
         .max_k = 1,
     },
     // A cut whose `or_elim` branch member `cb_g_branch …` is a disjunct of a
-    // derived line, not a subterm of the goal (added for sub-goal `@auto
-    // trigger` re-seeding, task #512). Capped at k=5, the frontier, for the core budget
-    // spend described at `lt_trans_ax`, so this no longer reaches the k=7
-    // cut. The k=4 and k=5 cuts take 3.3G since the core passes open cuts
+    // derived line, not a subterm of the goal. Capped at k=5, the frontier,
+    // for the core budget spend described at `lt_trans_ax`, so this no
+    // longer reaches the k=7 cut. The k=4 and k=5 cuts take 3.3G since the core passes open cuts
     // through rules and retries a premise no fact closes first when the
     // fact guess for its sibling fails, so the budget is 3.6G.
     .{

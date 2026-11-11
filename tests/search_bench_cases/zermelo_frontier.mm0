@@ -125,10 +125,6 @@ axiom nd_congr (G H: ctx) (p q: wff):
 -- Primitive logical natural-deduction rules
 -- --------------------------------------------------------------------------
 
---| @auto trigger (hyp p)
---| @auto trigger (im p _)
---| @auto trigger (or p _)
---| @auto trigger (or _ p)
 axiom ax (G: ctx) (p: wff): $ G , p ⊢ p $;
 
 axiom imp_intro (G: ctx) (p q: wff):

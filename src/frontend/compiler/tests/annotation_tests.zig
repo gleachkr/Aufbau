@@ -413,8 +413,7 @@ test "compiler rejects malformed auto annotations" {
     try std.testing.expectEqual(mm0.CompilerDiagnosticSource.mm0, diag.source);
     try std.testing.expectEqualStrings("top_i", diag.name.?);
     try std.testing.expectEqualStrings(
-        "@auto expects one mode: forward, eager [PRIORITY >= 1], " ++
-            "bridge, or trigger PATTERN",
+        "@auto expects one mode: forward, eager [PRIORITY >= 1], or bridge",
         mm0.compilerDiagnosticSummary(diag),
     );
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;
@@ -1116,112 +1115,17 @@ test "compiler reports conversion annotation diagnostics with spans" {
     );
 }
 
-// Shared prelude for the `@auto trigger` annotation tests: enough context
-// machinery that `ax`'s unnamed `G` binder can default to the ACUI unit.
-const trigger_mm0_prelude =
-    \\delimiter $ ( ) $;
-    \\provable sort wff;
-    \\sort ctx;
-    \\term im (p q: wff): wff;
-    \\term emp: ctx;
-    \\--| @acui ctx_assoc ctx_comm emp
-    \\term join (G H: ctx): ctx;
-    \\term hyp (p: wff): ctx;
-    \\term nd (G: ctx) (p: wff): wff;
-    \\
-;
-
-test "compiler parses auto trigger annotations" {
-    const mm0_src = trigger_mm0_prelude ++
+test "compiler rejects the removed auto trigger annotation" {
+    const mm0_src =
+        \\provable sort wff;
+        \\sort ctx;
+        \\term hyp (p: wff): ctx;
+        \\term nd (G: ctx) (p: wff): wff;
         \\--| @auto trigger (hyp p)
-        \\--| @auto trigger (im p _)
-        \\axiom ax (G: ctx) (p: wff): $ nd (join G (hyp p)) p $;
-    ;
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
-    const rule_id = metadata.env.getRuleId("ax") orelse {
-        return error.MissingRule;
-    };
-    try std.testing.expectEqual(
-        @as(usize, 1),
-        metadata.registry.triggerRuleCount(),
-    );
-    const patterns = metadata.registry.trigger_by_rule.get(rule_id) orelse {
-        return error.MissingTriggerPatterns;
-    };
-    try std.testing.expectEqual(@as(usize, 2), patterns.items.len);
-    // `(hyp p)`: unary app capturing binder 1 (`p`).
-    const hyp_pattern = patterns.items[0];
-    try std.testing.expect(hyp_pattern == .app);
-    try std.testing.expectEqual(@as(usize, 1), hyp_pattern.app.args.len);
-    try std.testing.expectEqual(
-        mm0.RewriteRegistry.TriggerPattern{ .binder = 1 },
-        hyp_pattern.app.args[0],
-    );
-    // `(im p _)`: binary app, capture then wildcard.
-    const im_pattern = patterns.items[1];
-    try std.testing.expect(im_pattern == .app);
-    try std.testing.expectEqual(@as(usize, 2), im_pattern.app.args.len);
-    try std.testing.expectEqual(
-        mm0.RewriteRegistry.TriggerPattern{ .binder = 1 },
-        im_pattern.app.args[0],
-    );
-    try std.testing.expect(im_pattern.app.args[1] == .wildcard);
-}
-
-test "compiler rejects auto trigger on a rule with hypotheses" {
-    const mm0_src = trigger_mm0_prelude ++
-        \\--| @auto trigger (hyp p)
-        \\axiom weak (G: ctx) (p q: wff):
-        \\  $ nd G p $ > $ nd (join G (hyp q)) p $;
+        \\axiom ax (G: ctx) (p: wff): $ nd G p $;
     ;
     var compiler = Compiler.init(std.testing.allocator, mm0_src);
-    try std.testing.expectError(
-        error.TriggerRuleHasHypotheses,
-        compiler.check(),
-    );
-}
-
-test "compiler rejects auto trigger leaving a non-context binder unnamed" {
-    // `(hyp _)` names neither `p` (wff — no ACUI combiner sort) nor `G`;
-    // only `G` can default to a unit, so the seed would not be ground.
-    const mm0_src = trigger_mm0_prelude ++
-        \\--| @auto trigger (hyp _)
-        \\axiom ax (G: ctx) (p: wff): $ nd (join G (hyp p)) p $;
-    ;
-    var compiler = Compiler.init(std.testing.allocator, mm0_src);
-    try std.testing.expectError(
-        error.TriggerBinderNotGround,
-        compiler.check(),
-    );
-}
-
-test "compiler rejects auto trigger with a wrong-sort capture" {
-    // `join`'s argument positions are ctx-sorted; `p` is a wff binder.
-    const mm0_src = trigger_mm0_prelude ++
-        \\--| @auto trigger (join p _)
-        \\axiom ax (G: ctx) (p: wff): $ nd (join G (hyp p)) p $;
-    ;
-    var compiler = Compiler.init(std.testing.allocator, mm0_src);
-    try std.testing.expectError(
-        error.TriggerSortMismatch,
-        compiler.check(),
-    );
-}
-
-test "compiler rejects auto trigger with unbalanced pattern" {
-    const mm0_src = trigger_mm0_prelude ++
-        \\--| @auto trigger (hyp p
-        \\axiom ax (G: ctx) (p: wff): $ nd (join G (hyp p)) p $;
-    ;
-    var compiler = Compiler.init(std.testing.allocator, mm0_src);
-    try std.testing.expectError(
-        error.InvalidTriggerAnnotation,
-        compiler.check(),
-    );
+    try std.testing.expectError(error.InvalidAutoAnnotation, compiler.check());
 }
 
 // One entry in every registry collection, keyed so a second call adds a
@@ -1282,9 +1186,6 @@ fn registerEveryFamily(
         .comm_name = null,
         .idem_name = null,
     });
-    const triggers = try registry.trigger_by_rule.getOrPut(7);
-    if (!triggers.found_existing) triggers.value_ptr.* = .empty;
-    try triggers.value_ptr.append(registry.allocator, .wildcard);
     try registry.conversions.append(registry.allocator, rule);
     try registry.def_conversions.append(registry.allocator, .{
         .term_id = key,
@@ -1310,7 +1211,6 @@ fn expectEveryFamilyCount(
     try expectEqual(expected, registry.auto_forward_rules.count());
     try expectEqual(expected, registry.auto_eager_rules.count());
     try expectEqual(expected, registry.acui_by_head.count());
-    try expectEqual(expected, registry.trigger_by_rule.get(7).?.items.len);
     try expectEqual(expected, registry.conversionRules().len);
     try expectEqual(expected, registry.defConversionRules().len);
     try expectEqual(expected, registry.computeRules().len);

@@ -937,14 +937,9 @@ test "forward keeps a step whose bound variable nothing stuck holds" {
     try expectFound("renames_bound", "R2", true);
 }
 
-// ---------------------------------------------------------------------------
-// `@auto trigger` seeding. The fixture is the guarded bench theory
-// (tests/search_bench_cases/nd_minimal.*): the pure repro of the
-// elimination-major left-rule gap, closed by ground `ax` seeds harvested
-// from the goal's subterms.
-// ---------------------------------------------------------------------------
-
-test "auto trigger seeds close an elimination major from an empty pool" {
+// The guarded bench theory tests/search_bench_cases/nd_minimal.*: an
+// elimination whose major premise holds a binder the goal does not fix.
+test "auto closes an elimination major from an empty pool" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -955,10 +950,8 @@ test "auto trigger seeds close an elimination major from an empty pool" {
         .unlimited,
     );
 
-    // The pure left-rule repro: `p → q , p ⊢ q` from an EMPTY ref pool.
-    // Without seeding this is a clean miss at any budget (imp_elim's `p` is
-    // premise-only, so backward search has no ref to pin it); the `(hyp p)`
-    // trigger seeds `p → q ⊢ p → q` and `p ⊢ p`, which pin it.
+    // `p → q , p ⊢ q` from an EMPTY ref pool: imp_elim's `p` is
+    // premise-only, so no reference pins it; `ax` closes both premises.
     const proof_src =
         "nd_mp_inner\n" ++
         "-----------\n" ++
@@ -974,7 +967,6 @@ test "auto trigger seeds close an elimination major from an empty pool" {
     defer suggestions.deinit();
 
     try std.testing.expect(suggestions.items.len > 0);
-    try std.testing.expect(counters.trigger_seed_count > 0);
     var found_imp_elim = false;
     for (suggestions.items) |item| {
         if (std.mem.indexOf(u8, item.replacement, "imp_elim") != null) {
@@ -982,73 +974,6 @@ test "auto trigger seeds close an elimination major from an empty pool" {
         }
     }
     try std.testing.expect(found_imp_elim);
-}
-
-test "auto trigger drops a seed that restates a hypothesis" {
-    // `@auto trigger` with no `@auto forward` rules, so the seeds take the
-    // seed-only pool. The `p ⊢ q` goal harvests the one seed `ax: p ⊢ p`; a
-    // hypothesis stating it leaves nothing new to seed.
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\sort ctx;
-        \\term bi (a b: wff): wff;
-        \\infixl bi: $↔$ prec 20;
-        \\term ctx_eq (g h: ctx): wff;
-        \\term emp: ctx;
-        \\notation emp: ctx = ($∅$:max);
-        \\--| @acui ctx_assoc ctx_comm emp ctx_idem
-        \\term join (g h: ctx): ctx;
-        \\infixl join: $,$ prec 5;
-        \\term hyp (a: wff): ctx;
-        \\coercion hyp: wff > ctx;
-        \\term nd (g: ctx) (a: wff): wff;
-        \\infixl nd: $⊢$ prec 1;
-        \\--| @relation wff bi biid bitr bisym mpbi
-        \\axiom biid (a: wff): $ a ↔ a $;
-        \\axiom bitr (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
-        \\axiom bisym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
-        \\axiom mpbi (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
-        \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
-        \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
-        \\axiom ctx_trans (g h i: ctx):
-        \\  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
-        \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
-        \\axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
-        \\axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
-        \\axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
-        \\axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
-        \\--| @auto trigger (hyp a)
-        \\axiom ax (g: ctx) (a: wff): $ g , a ⊢ a $;
-        \\term r: wff;
-        \\theorem restated (p: wff): $ p ⊢ p $ > $ p ⊢ r $;
-        \\theorem seeded (p q: wff): $ p ⊢ q $;
-    ;
-    // `restated` concludes `p ⊢ r` for the constant `r`, so it is no lemma
-    // for `seeded`'s `p ⊢ q`.
-    const cases = [_]struct { proof: []const u8, seeds: usize }{
-        .{ .proof = "restated\n--------\nl1: $ p ⊢ r $ by auto?\n", .seeds = 0 },
-        .{
-            .proof = "restated\n--------\nl1: $ p ⊢ r $ by sorry!\n\n" ++
-                "seeded\n------\nl1: $ p ⊢ q $ by auto?\n",
-            .seeds = 1,
-        },
-    };
-    for (cases) |case| {
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-        defer arena.deinit();
-        var counters = types.SearchCounters{};
-        var suggestions = try suggestionsAtNeedle(
-            &arena,
-            mm0_src,
-            case.proof,
-            "auto?",
-            .{ .counters = &counters, .generate = .{ .enabled = true } },
-        );
-        defer suggestions.deinit();
-        try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
-        try std.testing.expectEqual(case.seeds, counters.trigger_seed_count);
-    }
 }
 
 // An ACUI sequent calculus with two chained forward rules. A context written
@@ -1145,40 +1070,6 @@ test "forward join matches a pool context equal modulo ACUI to a derived fact's"
         try expectOffered(suggestions.items, &.{"qsr [pq [#1], #2]"});
         try std.testing.expectEqual(@as(usize, 2), counters.derived_ref_count);
     }
-}
-
-test "theories without trigger annotations mint no seeds on a miss" {
-    // A clean full-ladder miss in a trigger-free theory: the seeding gate
-    // (`triggerRuleCount() > 0`) must skip the harvest entirely.
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\term P: wff;
-        \\term Q: wff;
-        \\term R: wff;
-        \\axiom p: $ P $;
-        \\axiom pq: $ P $ > $ Q $;
-        \\theorem t: $ R $;
-    ;
-    const proof_src =
-        \\t
-        \\----
-        \\l1: $ R $ by auto?
-    ;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var counters = types.SearchCounters{};
-    var suggestions = try suggestionsAtNeedle(
-        &arena,
-        mm0_src,
-        proof_src,
-        "auto?",
-        .{ .counters = &counters, .generate = .{ .enabled = true } },
-    );
-    defer suggestions.deinit();
-
-    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
-    try std.testing.expectEqual(@as(usize, 0), counters.trigger_seed_count);
 }
 
 test "auto co-solves a complementary two-meta ax leaf through the rule template" {

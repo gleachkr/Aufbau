@@ -286,10 +286,6 @@ pub const SearchCounters = struct {
     meta_assignments: usize = 0,
     meta_rollbacks: usize = 0,
     derived_ref_count: usize = 0,
-    /// `@auto trigger` seeds the search ran with: those harvested from the
-    /// goal, less any restating a pool fact or another seed (zero when the
-    /// theory has no trigger rules or no seed was new).
-    trigger_seed_count: usize = 0,
     forward_rule_attempts: usize = 0,
     forward_match_tuples: usize = 0,
     forward_layers_run: usize = 0,

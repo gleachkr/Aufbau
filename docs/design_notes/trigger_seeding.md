@@ -1,6 +1,12 @@
 # Trigger seeding — analytic `ax`-instance seeds from goal subterms
 
-Status: **IMPLEMENTED** (2026-07-03) — phase 6 in `generate.zig`, harvest in
+Status: **REMOVED** (2026-11-11, #630). Under the search core, which closes
+`φ ⊢ φ` with `ax` directly, the seeds reached the search only through
+`@auto forward` joins, and removing them lost no row on any bench theory, the
+Pelletier battery or the guards. The rest of this note describes the ladder
+search the core replaced.
+
+Earlier status: **IMPLEMENTED** (2026-07-03) — phase 6 in `generate.zig`, harvest in
 `search/trigger.zig`, annotation parsing in `rewrite_registry.zig`; guarded
 by the `nd_minimal` depth-frontier tests in `build.zig`. Two findings from
 implementation are folded in below and marked **[impl]**: the seed-aware

@@ -526,16 +526,12 @@ term all_elim ...          -- run this rule forward, before backward search
 
 --| @auto eager
 axiom rim ...              -- an invertible step, taken without alternatives
-
---| @auto trigger (hyp p)
-axiom ax ...               -- seed ground instances from the goal's subterms
 ```
 
 Each `@auto` line names exactly one mode — `forward`, `eager` (with an
-optional priority), `bridge`, or `trigger …`; anything else on that line
-is a compile error. The modes are *per line*, not per rule: a rule may
-carry several `@auto` lines, and multiple `--| @auto trigger` lines on one
-axiom are an ordinary pattern (each contributes another seed pattern).
+optional priority), or `bridge`; anything else on that line is a compile
+error. The modes are *per line*, not per rule: a rule may carry several
+`@auto` lines.
 
 Enrollment is **entirely manual** — there is no automatic classifier that
 guesses which rules to promote. Annotating a rule never affects
@@ -726,36 +722,6 @@ goal whose context mentions `x` (MM0's dependency condition counts every
 occurrence, bound ones included), so a proof that must forget such a
 member *before* applying that rule needs weakening as a generating step,
 which a bridge rule no longer provides.
-
-### `@auto trigger PATTERN` — seed ground facts from the goal
-
-Some proofs need a *leaf* fact that backward search can't reach from
-nothing — classically, an axiom instance like `φ ⊢ φ` where `φ` is some
-subformula of the goal. `@auto trigger` handles this. It applies only to
-**hypothesis-free** rules (axiom-shaped), and it takes a pattern written
-as a parenthesized prefix tree over term names, the rule's own binder
-names, and `_` (wildcard):
-
-```mm0
---| @auto trigger (hyp p)     -- for each `hyp p` in the goal, seed `p ⊢ p`
-axiom ax: $ hyp p |- p $;
-
---| @auto trigger (im p _)    -- harvest every implication antecedent
-axiom ...
-```
-
-Before the search starts, the engine matches each trigger pattern against
-the *goal's* subterms and mints a ground instance of the rule for every
-match. Those seeds join the references (and, in a theory with `@auto
-forward` rules, the facts forward saturation starts from) for the whole
-search, so an elimination whose premise is a context member can be closed
-at any depth. In effect the annotations let the author enumerate the
-*analytic leaf set* of the theory — the context members, implication
-antecedents, and disjuncts that its elimination rules move around — so the
-search has the raw material it needs. Harvesting is one pass over the goal,
-plus one over each sub-goal that mentions a variable the goal does not (the
-fresh variable a quantifier rule introduced, whose instances no pass over the
-goal could have seen); a seed nobody selects costs nothing further.
 
 ## A worked example
 

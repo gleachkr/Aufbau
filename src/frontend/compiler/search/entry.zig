@@ -1,13 +1,12 @@
 //! The `auto?` and `exact?` entries: set up the search core's run on a
-//! clone of the theorem (the `@vars` pool, `@auto trigger` seeds, forward
-//! saturation), run it, and copy the proof it finds out of the transient
-//! state (see `search/ARCHITECTURE.md`).
+//! clone of the theorem (the `@vars` pool, forward saturation), run it, and
+//! copy the proof it finds out of the transient state (see
+//! `search/ARCHITECTURE.md`).
 
 const std = @import("std");
 const ArenaAllocator = @import("../../arena_allocator.zig").ArenaAllocator;
 const types = @import("./types.zig");
 const forward = @import("./forward.zig");
-const trigger = @import("./trigger.zig");
 const core = @import("./core/root.zig");
 const session_mod = @import("./session.zig");
 const expr_mod = @import("../../expr.zig");
@@ -80,45 +79,16 @@ pub fn generateTopLevel(
     var vars_clone = try poolVarsClone(session, &work_theorem, theorem_vars);
     defer if (vars_clone) |*clone| clone.deinit();
 
-    // `@auto trigger` seeds: ground instances of the theory's hypothesis-free
-    // trigger rules harvested from the goal's subterms (the analytic leaf
-    // set; see `trigger.zig`), less any restating a pool fact. They reach
-    // the core as the depth-0 sources of forward saturation. A holey goal's
-    // holes are metas, not subterms to seed from.
-    var harvested: []types.DerivedRef = &.{};
-    defer session.allocator.free(harvested);
-    var seeds: []const types.DerivedRef = &.{};
-    if (goal == .concrete and session.context.registry.triggerRuleCount() > 0) {
-        harvested = try trigger.harvestSeeds(
-            session.context,
-            &work_theorem,
-            goal.concrete,
-            session.allocator,
-        );
-        seeds = try trigger.dropRestatedSeeds(
-            session.context,
-            &work_theorem,
-            try session.getReferencePool(theorem, session.effectiveCounters(null)),
-            &.{},
-            harvested,
-            session.allocator,
-        );
-    }
-
-    // Bounded multi-layer forward saturation over the ref pool, with the
-    // seeds as depth-0 sources, before the core runs. Skipped entirely
-    // (no cost) when the theory declares no `@auto forward` rules — the
-    // pool then holds the seeds alone, if any.
+    // Bounded multi-layer forward saturation over the ref pool before the
+    // core runs. Skipped entirely (no cost) when the theory declares no
+    // `@auto forward` rules.
     var derived_pool: ?types.DerivedPool = null;
     defer if (derived_pool) |*dpool| dpool.deinit();
     if (session.context.registry.autoForwardRuleCount() > 0) {
-        derived_pool = try saturateForward(session, theorem, &work_theorem, options, seeds);
-    } else if (seeds.len > 0) {
-        derived_pool = try trigger.seedOnlyPool(session.context, seeds);
+        derived_pool = try saturateForward(session, theorem, &work_theorem, options);
     }
 
     const counters = session.effectiveCounters(null);
-    if (counters) |c| c.trigger_seed_count += seeds.len;
     var applications = std.ArrayListUnmanaged(RuleApplication).empty;
     try runCore(.{
         .compiler = compiler,
@@ -293,14 +263,12 @@ fn endCore(counters: ?*types.SearchCounters, end: types.CoreEnd) void {
     c.core_end = end;
 }
 
-/// Bounded forward saturation over the theorem's ref pool, with `seeds` as
-/// extra depth-0 sources.
+/// Bounded forward saturation over the theorem's ref pool.
 fn saturateForward(
     session: *session_mod.SearchSession,
     theorem: *const TheoremContext,
     work_theorem: *TheoremContext,
     options: GenerateOptions,
-    seeds: []const types.DerivedRef,
 ) !types.DerivedPool {
     const ref_pool = try session.getReferencePool(
         theorem,
@@ -317,7 +285,6 @@ fn saturateForward(
         ref_index,
         options.forward,
         session.effectiveCounters(null),
-        seeds,
     );
 }
 

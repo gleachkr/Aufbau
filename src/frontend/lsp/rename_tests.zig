@@ -109,7 +109,6 @@ test "renaming a term renames its name but not its notation" {
         \\delimiter $ ( ) $;
         \\provable sort wff;
         \\term im (a b: wff): wff; infixr im: $->$ prec 25;
-        \\--| @auto trigger (im a _)
         \\axiom ax (a: wff): $ im a (a -> a) $;
         ,
     }, .mm0, "im", 0, "imp", .{
@@ -117,7 +116,6 @@ test "renaming a term renames its name but not its notation" {
         \\delimiter $ ( ) $;
         \\provable sort wff;
         \\term imp (a b: wff): wff; infixr imp: $->$ prec 25;
-        \\--| @auto trigger (imp a _)
         \\axiom ax (a: wff): $ imp a (a -> a) $;
         ,
     });

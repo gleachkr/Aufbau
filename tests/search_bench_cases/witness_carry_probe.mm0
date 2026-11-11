@@ -155,7 +155,6 @@ axiom ne_congr (a b c d: nat):
 axiom ne_def (a b: nat): $ a ≠ b ↔ ¬ a = b $;
 
 -- ND structural and connective rules.
---| @auto trigger (hyp a)
 axiom ax (g: ctx) (a: wff): $ g , a ⊢ a $;
 axiom imp_intro (g: ctx) (a b: wff):
   $ g , a ⊢ b $ > $ g ⊢ a → b $;
