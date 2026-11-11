@@ -1602,7 +1602,10 @@ const NodeInference = struct {
         // or on a def unfolded where the search kept it (`id_trans ...`
         // read off a sub-proof as its body), which state the same line. A
         // rewritten value does not: the line may need a congruence the
-        // theory lacks to convert it.
+        // theory lacks to convert it. An unfolded value can also name the
+        // def's dummies (`J ih k p ...`), which the rule's dependency check
+        // may refuse where the search's value hides them, so values that
+        // meet only through a def agree only when the rule accepts them.
         var canonicalizer = Canonicalizer.init(
             allocator,
             n.theorem,
@@ -1612,6 +1615,7 @@ const NodeInference = struct {
         );
         canonicalizer.rewrites = false;
         defer canonicalizer.deinit();
+        var through_defs = false;
         for (values, 0..) |value, idx| {
             const expected = value orelse continue;
             if (idx < bindings.len) {
@@ -1619,8 +1623,21 @@ const NodeInference = struct {
                 const inferred = try canonicalizer.canonicalize(bindings[idx]);
                 const wanted = try canonicalizer.canonicalize(expected);
                 if (inferred == wanted) continue;
-                if ((try canonicalizer.buildCommonTarget(inferred, wanted)) != null) continue;
+                if ((try canonicalizer.buildCommonTarget(inferred, wanted)) != null) {
+                    through_defs = true;
+                    continue;
+                }
             }
+            allocator.free(bindings);
+            return null;
+        }
+        if (through_defs and (try Inference.firstDepViolation(
+            n.context.env,
+            n.theorem,
+            n.rule.args,
+            n.rule.arg_names,
+            bindings,
+        )) != null) {
             allocator.free(bindings);
             return null;
         }

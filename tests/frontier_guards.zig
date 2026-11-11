@@ -139,6 +139,18 @@ pub const guards = [_]FrontierGuard{
             "tests/search_bench_cases/martin_lof_frontier.auf",
         .mode = "depth",
     },
+    // Depth guard for trimming against a def the checker reads unfolded
+    // (`apply.zig` `agreeingTrial`): from k=31 the search proves
+    // `nat_ind_elim`'s base case with `J_elim` steps that name `id_trans`'s
+    // dummies `k` and `ih`, so the `z` inference reads back mentions `k`,
+    // which the rule forbids. Accepting it as the search's `id_trans ...`
+    // left every suggestion untrimmed, and the run fails on any.
+    .{
+        .filter = "add_suc_right",
+        .files = "tests/search_bench_cases/martin_lof_frontier.mm0:" ++
+            "tests/search_bench_cases/martin_lof_frontier.auf",
+        .mode = "depth",
+    },
     // `arr_intro`'s `lam_intro` step needs the opposite: the hidden binder is
     // the λ's own `x`, and the conclusion seed must keep that pin rather than
     // drop it as a conflict with the dummy (`seed.seedValueIsLoose`). Without
