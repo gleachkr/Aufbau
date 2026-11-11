@@ -1,3 +1,110 @@
+# Aufbau 0.0.19
+
+Aufbau 0.0.19 replaces the proof search behind `auto?` and `exact?` with a
+new search core. The new core improves handling of unknown binders, so 
+witnesses, middle formulas and the parts of a split context are found by 
+unification. On the search benchmarks it finds more proofs than 0.0.18 in less 
+time per line. The generation search it replaces is removed, with its `nodes:` 
+and `fuel:` parameters and the `@auto backward` and `@auto trigger` 
+annotations.
+
+## Highlights
+
+### A new search core
+
+`auto?` searches backward from the goal. A quantifier witness, the middle
+formula of a transitivity rule or the antecedent of modus ponens stays an
+unknown shared by the whole proof until a hypothesis, an axiom or a later
+step fixes it. A rule that joins several contexts (`or_elim`'s
+`G , H , K ⊢ r`) splits the goal's context between its premises without
+enumerating splits, and a context that is a sequence is matched in order.
+The core unfolds definitions where a rule needs what they stand for, tries
+goals in their `@rewrite` normal form, closes goals with `@auto forward`
+facts, applies `@abstract` rules such as Leibniz replacement, and searches
+goals with proof holes, filling each hole any way that makes the line check.
+
+On the depth benchmarks, each release on its own bench theories, `auto?`
+finds 2,705 proofs to 0.0.18's 2,336 and 524 of 706 theorems whole to 462.
+On the breadth benchmark it finds all 4,548 lines (0.0.18: 4,546) in under
+half the time per line, and the natural-deduction Pelletier battery goes
+from 17 to 46 of 48 problems. A search still stops after about 3 seconds at
+the default budget; the slowest on the depth benchmarks takes 2.9 s.
+
+`auto?` also has no depth limit by default: it deepens until it finds a
+proof, the budget runs out, or a deeper pass could find nothing. When it
+has tried everything without a limit cutting it short, it searches once
+more with fewer limits on the unknowns rules leave to their premises, which
+finds typing derivations whose type comes from a rule. A failed `auto?`
+says how the search ended and which retry, if any, could help.
+
+### `exact?`
+
+`exact?` runs on the same core. It still proves the goal with one rule,
+but may close that rule's premises with rules that have no premises of
+their own, meets rules whose conclusion is a definition that unfolds to the
+goal, and reads a quantifier witness off the hypothesis that proves the
+premise. It finds 4,530 of the breadth benchmark's 4,548 lines to 0.0.18's
+4,523, puts the expected proof first on 24 more, and its slowest call drops
+from 60 ms to 5 ms.
+
+### Removed with generation search
+
+The `nodes:` and `fuel:` parameters of `auto?` bounded only the generation
+search and are gone; the editor flags them as unknown parameters. So are
+the `phase`, `phase_name` and `rules` fields of `abc search --json`. The
+`@auto backward` annotation no longer changed anything and is now an error.
+A few kinds of proof only the generation search found are not found any
+more: two eliminations in a row from a hypothesis that has no
+`@auto forward`, and a step under an idempotent context that keeps the
+formula it takes apart. 72 of the depth benchmark's proofs now run out of
+the default budget, and an `@acui` combiner that is idempotent but not
+commutative is not searched.
+
+### Smaller changes
+
+- `@auto bridge` marks a rule, such as weakening, whose premises search
+  closes only from hypotheses and forward-derived facts.
+- A failed `auto?` reports a `@vars` pool that ran out.
+- A search reuses the memory it frees: on the Pelletier battery the largest
+  search peaks at 188 MB, where 0.0.18's peaked at 643 MB.
+- `@auto forward` joins a derived fact with a hypothesis when their shared
+  context binder agrees modulo `@acui` laws.
+- Inference failures name the binder every reading leaves open, and say
+  when a `@view` would let inference read a `@rewrite` premise.
+- Comparing expressions through definitions no longer repeats failed
+  comparisons exponentially; a set-theory library whose lines took up to
+  minutes each compiles in under a second.
+- Inference reads more off the line. A premise that matches only in its
+  `@rewrite` normal form no longer fixes a variable before the conclusion
+  does, a failed comparison leaves no bindings behind, and a witness under a
+  substitution is read off the normal form. A set-theory library that gave
+  105 bindings explicitly now needs none of them.
+- A rule variable's value is never folded into a definition, so declaring a
+  definition no longer breaks lines that do not use it.
+- `@recover` and `@abstract` compare through chains of definitions of any
+  depth, and comparing numerals written as nested definitions no longer
+  takes eight times longer per level.
+- `mm0-zig` reads proof streams past 4 GiB and rejects a stream end with a
+  data field, as `mm0-c` does.
+
+## Compatibility
+
+Every test theory from 0.0.18 compiles or fails as before, and every binary
+it compiles verifies; proofs are 0.2% smaller overall. Two test theories
+changed to keep compiling: they relied on a value folded into a
+definition with a hidden dummy, which hid a variable from MM0's
+dependency check, and their rule now declares `@freshen` instead. A `--| @auto
+backward` or `--| @auto trigger` line is now an error: delete it. `auto?`
+calls that set `nodes:` or `fuel:` ignore them. The bench theories drop
+their `@auto backward` and `@auto trigger` lines, and the `nd_fol` bench 
+fixture restates its quantifier and negation rules.
+
+The MMB format and the proof syntax are unchanged.
+
+Aufbau remains pre-1.0 software; APIs and proof syntax may still change.
+
+---
+
 # Aufbau 0.0.18
 
 Aufbau 0.0.18 adds rename and document highlights to the language server,

@@ -3,351 +3,212 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.0.19] - 2026-11-09
 
 ### Added
 
-- `auto?` tries each goal first with a new search core, which leaves a
-  quantifier witness it has not chosen as an unknown shared by the whole
-  proof and fills it in by unification when a later step needs a
-  particular term. A premise variable a rule's conclusion leaves open
-  (the middle formula of a transitivity rule, the antecedent of modus
-  ponens) is such an unknown too, chosen by a hypothesis, an axiom or a
-  rule whose conclusion fixes it, or read off a hypothesis one rule
-  away: a rule with no such unknowns of its own may leave one to
-  premises that hypotheses close (`R x ?b` by way of `S x ?b`), but
-  never to a premise that is the bare unknown, which any hypothesis
-  would close. A rule's premises that hypotheses might close go first
-  and guess the unknowns they share with the others; when the guesses
-  fail, a premise no hypothesis closes that holds all of those unknowns
-  goes first instead, so a rule can fix them (`b = a` from `a = b` by
-  modus ponens for `⇔`, whose antecedent `a = a` no hypothesis
-  states). Where a rule's conclusion gives an unknown structure
-  with parts nothing in the goal fixes, those parts become unknowns of
-  their own for the rule's premises to fix from hypotheses (`syl`'s
-  middle formula against `a2i`'s `(a → b) → (a → c)`); a bound variable
-  among them is a fresh variable, named once the proof needs it (the
-  `f` of `λ f. f · p · q` in a definition's equation stated as a
-  rule). The core unfolds a definition in a goal or hypothesis where a
-  rule needs what the definition stands for, with the definition's
-  hidden bound variables named once the proof needs them (from the
-  sort's `@vars` pool, then the theorem's own bound variables), and named
-  apart where two uses of the definition need different ones (a Church
-  numeral's type at two instances), and tries a goal in its `@rewrite` normal form too, so an
+- `auto?` and `exact?` run on a new search core, which replaces the
+  generation search. It leaves a quantifier witness it has not chosen as an
+  unknown shared by the whole proof and fills it in by unification when a
+  later step needs a particular term. A premise variable a rule's
+  conclusion leaves open (the middle formula of a transitivity rule, the
+  antecedent of modus ponens) is such an unknown too, chosen by a
+  hypothesis, an axiom or a rule whose conclusion fixes it, or read off a
+  hypothesis one rule away: a rule with no such unknowns of its own may
+  leave one to premises that hypotheses close (`R x ?b` by way of
+  `S x ?b`), but never to a premise that is the bare unknown, which any
+  hypothesis would close. A rule's premises that hypotheses might close go
+  first and guess the unknowns they share with the others; when the
+  guesses fail, a premise no hypothesis closes that holds all of those
+  unknowns goes first instead, so a rule can fix them (`b = a` from
+  `a = b` by modus ponens for `⇔`, whose antecedent `a = a` no hypothesis
+  states). Where a rule's conclusion gives an unknown structure with parts
+  nothing in the goal fixes, those parts become unknowns of their own for
+  the rule's premises to fix from hypotheses (`syl`'s middle formula
+  against `a2i`'s `(a → b) → (a → c)`); a bound variable among them is a
+  fresh variable, named once the proof needs it (the `f` of
+  `λ f. f · p · q` in a definition's equation stated as a rule), and an
+  eigenvariable may take a name an argument binds where the rule's
+  `@freshen` renames it there, as the checker allows.
+- The search core unfolds a definition in a goal or hypothesis where a
+  rule needs what the definition stands for, with the definition's hidden
+  bound variables named once the proof needs them (from the sort's `@vars`
+  pool, then the theorem's own bound variables), and named apart where two
+  uses of the definition need different ones (a Church numeral's type at
+  two instances). It tries a goal in its `@rewrite` normal form too, so an
   induction rule's premise stated as a substitution meets the facts for
   what it reduces to. A rule whose conclusion states a substitution (an
-  eliminator's type `[k/n] C`) meets the goal's normal form once the
-  rest of the conclusion has fixed it, and a variable that occurs only
-  inside the substitution is chosen by a hypothesis or a premise's
-  proof, as for modus ponens. A substitution of a witness still unknown
-  (`all_elim`'s `[x/t] p`) meets the goal in the form it reduces to with
-  the witness as a fresh variable, which fixes the witness where the
-  goal says what it is. A rule whose conclusion is nothing but such a
-  substitution (a Hilbert-style `ax_inst`, `∀ x p > [x/t] p`) is tried
-  on every goal of its sort, since what it reduces to may have any head.
-  A rule's conclusion gives an unknown the
-  structure the rest of the conclusion fixes (`R a (f a)` against
-  `R C ?t` makes the witness `f C`), and never structure nothing fixes.
-  A rule joining several contexts
-  (`or_elim`'s `G , H , K ⊢ r`) splits the goal's context between its
-  premises without enumerating splits: a hypothesis fixes the part of
-  the premise it proves, and a premise proved by rules gets what the
-  other parts leave or the whole context. Where the context holds a
-  bound variable a rule has not named yet (`dvd_elim`'s `k` in
-  `y = x * k`), the hypothesis that proves a part names it; one whose
-  context holds a member that matches nothing in the goal's is not
+  eliminator's type `[k/n] C`) meets the goal's normal form once the rest
+  of the conclusion has fixed it, and a variable that occurs only inside
+  the substitution is chosen by a hypothesis or a premise's proof, as for
+  modus ponens. A substitution of a witness still unknown (`all_elim`'s
+  `[x/t] p`) meets the goal in the form it reduces to with the witness as
+  a fresh variable, which fixes the witness where the goal says what it
+  is. A rule whose conclusion is nothing but such a substitution (a
+  Hilbert-style `ax_inst`, `∀ x p > [x/t] p`) is tried on every goal of
+  its sort, since what it reduces to may have any head. A rule's
+  conclusion gives an unknown the structure the rest of the conclusion
+  fixes (`R a (f a)` against `R C ?t` makes the witness `f C`), and never
+  structure nothing fixes.
+- A rule joining several contexts (`or_elim`'s `G , H , K ⊢ r`) splits the
+  goal's context between its premises without enumerating splits: a
+  hypothesis fixes the part of the premise it proves, and a premise proved
+  by rules gets what the other parts leave or the whole context. Where the
+  context holds a bound variable a rule has not named yet (`dvd_elim`'s
+  `k` in `y = x * k`), the hypothesis that proves a part names it; one
+  whose context holds a member that matches nothing in the goal's is not
   tried. A context that is a sequence (`martin_lof`'s, an `@acui`
   combiner with neither commutativity nor idempotence) is matched in
-  order, so `g , x : A` takes the last entry as `x : A`. Besides the hypotheses, the core closes goals with the
-  facts the `@auto forward` pass derives from them, so it reaches proofs
-  through rules it cannot apply backward. An `@auto bridge` rule
-  (weakening) carries a fact stated in a smaller context to the goal: its
-  premises are closed by facts only, never by a sub-search. A
-  rule whose `@view` works a binder out with `@abstract` (Leibniz
-  replacement, `eq_replace`) is searched as its view: once the premises'
-  proofs fix the equation and the formula to rewrite, the core works the
-  context out from both sides, with a fresh variable for the hole. A
-  goal with proof holes is searched with each hole as an unknown the
+  order, so `g , x : A` takes the last entry as `x : A`. A premise that is
+  the goal again once the part of the context it receives is filled in
+  (weakening's `g ⊢ a`, given the whole context) is cut there, so an
+  unprovable goal under such a rule ends at once instead of stacking the
+  rule until the budget runs out.
+- Besides the hypotheses, the search core closes goals with the facts the
+  `@auto forward` pass derives from them. A rule whose `@view` works a binder out
+  with `@abstract` (Leibniz replacement, `eq_replace`) is searched as its
+  view: once the premises' proofs fix the equation and the formula to
+  rewrite, the core works the context out from both sides, with a fresh
+  variable for the hole.
+- A goal with proof holes is searched with each hole as an unknown the
   proof fills, any way that makes the line check: where a rule gives a
-  hole structure (`t_lam`'s type `A → B`), the parts nothing fixes yet
-  are unknowns the premises' rules fix, so a typing goal `g ⊢ t : _ty`
-  gets its type; a context hole is split between a rule's contexts
-  (`iff_intro`'s `G , H`), takes whatever members the proof needs (an
-  `ax` step may put its formula there), and a part nothing fills is
-  empty. A
-  goal the core does not take (idempotent non-commutative `@acui`
-  combiners) or cannot prove goes on to the existing generation search
-  in what is left of the same budget, and the checker validates every
-  proof either way. The core keeps MM0's dependency conditions on the
-  proofs it builds, including for theorem variables declared to depend
-  on a bound variable, so the checker rejects few of them; where a rule
-  declares `@freshen` for an argument that holds the bound variable, the
-  core leaves the renaming to the checker. The core does not search
-  the same goal twice at the same depth where it can tell the outcome:
-  a goal that holds part of a split context and fails is remembered with
-  what the split leaves it, and a goal whose every proof only fixed its
-  own unknowns, each rejected by the rest of the proof, keeps those
-  proofs and hands them out again in the same order (6% fewer core
-  ticks on the bench corpus, 12 more depth rows). What it remembers
-  holds whatever came before: it keeps track of which variables earlier
-  steps have taken as fresh names and of the order in which the goal's
-  unknowns were made, and no longer depends on when a definition in a
-  hypothesis was first unfolded or on how the rest of the proof fared
-  after each of the goal's proofs. On the bench
-  corpus the core alone finds 10% more depth rows than the generation
-  search alone, and 511 whole proofs to its 474. With both, 346 rows
-  are new and 67 are lost, where a failed core search uses up the
-  budget the generation search needed. The
-  `nd_fol` rows cost 97% fewer ticks and the `additive_fol` rows 29%
-  fewer, and the Pelletier battery goes from 36 to 47 of 48 problems
-  found.
-- `@auto bridge`: a rule annotated this way stays a backward candidate for
-  `auto?`, but search fills its premises only from the reference pool and
-  forward-derived facts, never by generating a sub-proof. Weakening is the
-  intended case: searched through, it enumerates which context members to
-  forget; as a bridge it costs one lookup and still closes a sub-goal from
-  a fact stated for a smaller context. The rule must have a hypothesis.
+  hole structure (`t_lam`'s type `A → B`), the parts nothing fixes yet are
+  unknowns the premises' rules fix, so a typing goal `g ⊢ t : _ty` gets
+  its type; a context hole is split between a rule's contexts
+  (`iff_intro`'s `G , H`), takes whatever members the proof needs (an `ax`
+  step may put its formula there), and a part nothing fills is empty.
+- The search core keeps MM0's dependency conditions on the proofs it
+  builds, including for theorem variables declared to depend on a bound
+  variable, so the checker rejects few of them; where a rule declares
+  `@freshen` for an argument that holds the bound variable, the core
+  leaves the renaming to the checker. It does not search the same goal
+  twice at the same depth where it can tell the outcome: a goal that holds
+  part of a split context and fails is remembered with what the split
+  leaves it, and a goal whose every proof only fixed its own unknowns, each
+  rejected by the rest of the proof, keeps those proofs and hands them out
+  again in the same order.
+- `@auto bridge`: `auto?` applies a rule annotated this way with its
+  premises closed only by hypotheses and forward-derived facts, never by a
+  sub-search. Weakening is the intended case: searched through, it
+  enumerates which context members to forget; as a bridge it costs one
+  lookup and still closes a goal from a fact stated for a smaller context.
+  The rule must have a hypothesis.
 - A failed `auto?` reports when some branch needed a variable and found
   every name of the sort's `@vars` pool in use there, with the pool's size.
   No limit reaches such a branch, so the report used to blame only the
-  limits. The `nd_fol` bench fixture's pool grows from six names to nine
-  (`z1 z2 z3`, after the six it had, so their order is unchanged):
-  Pelletier problems with four bound variables and two eigenvariables had
-  run out, and two more of them are now found.
+  limits.
 
 ### Changed
 
-- `auto?` runs the search core alone: the generation search no longer takes
-  over a goal the core misses or does not take. On the bench corpus this
-  loses no proof. A goal the core does not take, one with an idempotent but
-  not commutative `@acui` combiner, is not searched. Two kinds of proof only the generation search found are
-  gone: two eliminations in a row from a hypothesis with no `@auto forward`
-  (`x ⊢ c` from `x ⊢ a ∧ (b ∧ c)`), which `@auto forward` reaches, and a step under an
-  idempotent context that keeps the formula it takes apart beside its parts
-  (`g , a ∧ b ⊢ c` from `g , a ∧ b , a , b ⊢ c`). The generation search is
-  removed, and with it the `nodes:` and `fuel:` parameters of `auto?`, which
-  bounded only it (`nodes:` on `conversion?` stays), `abc search`'s
-  `--ladder` and `--no-core`, the
-  `phase`, `phase_name` and `rules` fields of `--json`, and the rules `-vv`
-  listed as tried most.
+- `auto?` and `exact?` have no generation search behind the search core,
+  and with it go the `nodes:` and `fuel:` parameters of `auto?` (`nodes:`
+  on `conversion?` stays), the `phase`, `phase_name` and `rules` fields of
+  `abc search --json`, and the rules `-vv` listed as tried most. On the
+  depth benchmarks (each release on its own bench theories) `auto?` finds
+  2,705 proofs to 0.0.18's 2,336 and 524 of 706 theorems whole to 462,
+  and on the breadth benchmark it finds all 4,548 lines (0.0.18: 4,546),
+  in under half the time per line. A goal under an `@acui` combiner that
+  is idempotent but not commutative is not searched. Some proofs the
+  generation search found are gone: two eliminations in a row from a
+  hypothesis with no `@auto forward` (`x ⊢ c` from `x ⊢ a ∧ (b ∧ c)`),
+  which `@auto forward` reaches; a step under an idempotent context that
+  keeps the formula it takes apart beside its parts
+  (`g , a ∧ b ⊢ c` from `g , a ∧ b , a , b ⊢ c`); and 72 of the depth
+  benchmark's proofs (of 36 theorems, among them four `martin_lof`
+  lemmas and `hoare`'s `countdown`), all of which now run out of
+  the default budget.
 - `@auto backward` is removed. The search core applies every rule, and
   leaves a binder the goal does not fix as an unknown whether or not the
   rule is annotated, so the annotation no longer changed anything. A
   `--| @auto backward` line is now an error (`@auto` expects one mode:
-  forward, eager, bridge or trigger); delete it.
-- A search stops after about 3 seconds at the default budget, down from about
-  22. The work budget now also counts the search core's matching, comparing
-  and term walks, which it used to miss, and its default is 2.3 units instead
-  of 6.3. A few proofs that took longer now miss at the default, and the miss
-  report suggests the `budget:` to retry with.
-- `auto?` has no depth limit by default. The search core deepens until it finds
-  a proof, the work budget runs out, or a pass reaches no goal the limit stops,
-  since a deeper pass could then find nothing. `depth:` still sets a limit. On
-  the bench corpus this finds 53 more proofs and 7 more theorems whole, with
-  the slowest search under 3 seconds. A search that used to stop at depth 6 may
-  now use its whole budget before it misses.
-- When the search core has tried everything at every depth without finding a
-  proof, and no limit cut it short, it searches once more with fewer limits on
-  the unknowns a rule leaves to its premises: a premise holding one may then be
-  proved by rules as well as hypotheses, and a rule with unknowns of its own
-  may leave one to its premises too. This finds typing derivations whose
-  unknown type comes from a rule, such as those for Church lists and numerals in
-  `reynolds`. On the bench corpus it finds 31 more proofs and 4 more theorems
-  whole. 6 proofs of 4 `martin_lof` theorems that only the generation search
-  found are now missed, since the second search uses the budget first, and a
-  goal with no proof can now use the whole budget where it used to end early.
-- A failed `auto?` that the search core ended reports how it ended. A core
-  that tried everything at every depth says so and suggests no retry, since no
-  limit hid a proof from it; one that reached the call's depth limit, or spent
+  forward, eager or bridge); delete it.
+- `@auto trigger` is removed. Its seeds, axiom instances such as `p ⊢ p`
+  taken from the goal's subterms, gave the search core nothing its rules
+  with no premises do not already give, and reached it only through the
+  facts `@auto forward` joined them into. On the bench theories, removing
+  them loses no proof, finds the same Pelletier problems with fewer ticks,
+  and puts the direct proof first on 6 lines where a seed had put a detour
+  ahead of it. A `--| @auto trigger` line is now an error; delete it.
+- The work budget counts the search core's matching, comparing and term
+  walks, and its default is 2.3 units instead of 6.3, so a search still
+  stops after about 3 seconds at the default: the slowest on the depth
+  benchmarks takes 2.9 s (2.2 s in 0.0.18). A search that misses now
+  usually spends its whole budget first, and the miss report suggests the
+  `budget:` to retry with.
+- `auto?` has no depth limit by default. The search core deepens until it
+  finds a proof, the work budget runs out, or a pass reaches no goal the
+  limit stops, since a deeper pass could then find nothing. `depth:` still
+  sets a limit. A search that used to stop at depth 6 may now use its whole
+  budget before it misses.
+- When the search core has tried everything at every depth without finding
+  a proof, and no limit cut it short, it searches once more with fewer
+  limits on the unknowns a rule leaves to its premises: a premise holding
+  one may then be proved by rules as well as hypotheses, and a rule with
+  unknowns of its own may leave one to its premises too. This finds typing
+  derivations whose unknown type comes from a rule, such as those for
+  Church lists and numerals in `reynolds`. A goal with no proof can then
+  use the whole budget.
+- A failed `auto?` reports how the search ended. A search that tried
+  everything at every depth says so and suggests no retry, since no limit
+  hid a proof from it; one that reached the call's depth limit, or spent
   the budget at it, suggests more depth along with more budget; and one the
-  call-stack guard stopped says so. Run without the generation search, such a
-  miss used to read as one that never searched, with no retry.
-- `exact?` runs on the search core. It still proves the goal with one rule,
-  and may now close that rule's premises with rules that have no premises of
-  their own (`and_intro [#1, true_intro []]`) as well as with references. It
-  meets a rule whose conclusion is a definition that unfolds to the goal, and
-  a definition that drops one of its arguments in its body is compared
-  unfolded. Proofs come fewest nested steps first, then in the order the
-  theory declares their rules. A quantifier rule whose `@view` instance has
-  no syntactic form, a schematic formula that may depend on the bound
-  variable (`p: wff x` in `ex_intro`'s `[x/t] p`), takes its premise from a
-  hypothesis or axiom, and the witness is read off it as the checker reads
-  the rule's `@recover`. So is a witness whose formula a premise fixes rather
-  than the conclusion (`ex_elim_sub`'s `u`, read off its second premise once
-  the first, `∃ x p`, is proved). On the bench corpus `exact?` finds 9 lines
-  it missed and misses 2 it found (both `martin_lof`, which `auto?` still
+  call-stack guard stopped says so.
+- `exact?` still proves the goal with one rule, and may now close that
+  rule's premises with rules that have no premises of their own (`and_intro
+  [#1, true_intro []]`) as well as with references. It meets a rule whose
+  conclusion is a definition that unfolds to the goal, and a definition that
+  drops one of its arguments in its body is compared unfolded. Proofs come
+  fewest nested steps first, then in the order the theory declares their
+  rules. A quantifier rule whose `@view` instance has no syntactic form, a
+  schematic formula that may depend on the bound variable (`p: wff x` in
+  `ex_intro`'s `[x/t] p`), takes its premise from a hypothesis or axiom, and
+  the witness is read off it as the checker reads the rule's `@recover`. So
+  is a witness whose formula a premise fixes rather than the conclusion
+  (`ex_elim_sub`'s `u`, read off its second premise once the first, `∃ x p`,
+  is proved). On the breadth benchmark `exact?` finds 4,530 of 4,548 lines
+  to 0.0.18's 4,523 (the 2 it no longer finds are `martin_lof` lines `auto?`
   finds), gives the expected proof first on 24 more, and its slowest call
-  drops from 58 ms to 5 ms. `auto?` now tries one-step proofs before it
-  deepens, and no longer runs a separate direct pass first; it finds every
-  line of the corpus. The `exact?` miss report says how many references were
-  in reach.
-- The search core lets an eigenvariable take a name an argument binds when
-  the rule's `@freshen` renames it there (`ex_elim`'s `x` in a `c` that
-  binds the same name), as the checker does. It counts a binder as
-  renamable only when its term has an `@alpha` rule, which is all the
-  checker's `@freshen` can rename through.
+  drops from 60 ms to 5 ms. `auto?` tries one-step proofs before it deepens,
+  and no longer runs a separate direct pass first. The `exact?` miss report
+  says how many references were in reach.
+- A search reuses the memory it frees instead of holding all of it until it
+  returns, so its peak memory no longer grows with the work it does. On the
+  natural-deduction Pelletier battery the largest search peaks at 188 MB,
+  where 0.0.18's peaked at 643 MB.
 - A theorem's or axiom's bound variable named only in dependency lists
   (`{k: set} (G: hyps k)` with no `k` in any hypothesis or the
   conclusion) is now reported as an unused parameter. Such a variable is
   idle, and inference can never determine it, so every use had to name
   it.
-- The `nd_fol` bench fixture decomposes a negated assumption on the left,
-  with one eager rule per connective (`¬ ¬`, `¬ ∨`, `¬ →`, `¬ ∧`, `¬ ↔`, and
-  `¬ ∀` and `¬ ∃` turned into `∃ ¬` and `∀ ¬`) and `contra_left` to close
-  on a negated atom, instead of switching the goal with `not_left`. Because
-  `not_left` kept its `¬ a`, on `¬ ¬ ∃ x p ⊢ ⊥` it reopened the `∃` with a
-  fresh variable on every round at no depth cost, until the `@vars` pool
-  ran out. The fixture's bench rows stay 57/57; in the Pelletier battery
-  problem 42 is now found, at 7% less work over the battery.
-- The `nd_fol` bench fixture gains `imp_case_left`, the classical left rule
-  for `→` as an eager case split (`g , ¬ a ⊢ c` and `g , b ⊢ c` give
-  `g , (a → b) ⊢ c`), next to the intuitionistic `imp_left`, which stays
-  as a rule the search must cope with. `imp_left` switches the goal to the
-  antecedent and costs a depth level per use, so Pelletier 46 needed about
-  11 levels; with the case split the search core finds it at depth 4. The
-  fixture's bench rows stay 57/57, and the Pelletier battery goes from 43
-  to 47 of 48 problems (24, 36, 37 and 46 are new, all found by the core)
-  at a quarter of the work on the problems found before.
-- The search core matches an unsafe rule's conclusion once per goal
-  instead of once per alternative tried, when the match fixes no unknown.
-  On a goal with 20 assumptions each `∀`/`→` member was rematched for every
-  other one; a Pelletier 47 lemma now costs a third of the work, with the
-  same search.
-- A search reuses the memory it frees instead of holding all of it until it
-  returns, so its peak memory no longer grows with the work it does. On a
-  Pelletier problem it was about 85 MB per unit of `budget`: 740 MB at the
-  default, 20 GB for a retry at `budget: 300`; it is now 100 MB and 1.6 GB.
-  Retried searches no longer run the machine (or a browser tab's 4 GB) out
-  of memory, and results and work counts are unchanged.
-- In a theory with commutative `@acui` combiners, `auto?` recognizes a
-  sub-goal it has already tried even when it reaches it again inside a
-  different branch of the search. Before, the members of a context were
-  put in an order that depended on where the goal was built, so the same
-  goal could miss its own remembered failure. On Pelletier 43 at depth 5
-  this removes 41% of one search phase's sub-goals, and Pelletier 24 is
-  found at depth 7 instead of 8. Results on the bench corpus are unchanged,
-  at about 0.3% more work; one unannotated Pelletier problem that was found
-  just under the default budget now runs out just over it.
-- `auto?` no longer counts against its node limit a sub-goal it cannot
-  search: one whose unknowns include a witness carried in from an enclosing
-  rule that this part of the search does not solve. Such sub-goals made up
-  most of the nodes of the deep phases on Pelletier problems. On the bench
-  corpus one more theorem closes at every depth and nine more depths are
-  found (one theorem loses five), at about 2.5% more work on the goals found
-  before; a search that fails now runs to its other limits, about 6% longer.
-- `auto?` harvests `@auto trigger` seeds before the search starts and keeps
-  them in its reference pool for every phase, instead of running a second
-  search over them after a miss. Goals that need a seed no longer pay for
-  a full failed search first, and the misses whose budget ran out before
-  the retry could start are reached: on the bench corpus two more
-  theorems close at every depth, total work drops slightly, and the
-  proofs found for every other goal are unchanged.
-- `auto?` harvests `@auto trigger` seeds again at a sub-goal that mentions a
-  variable the goal does not, such as the fresh variable a quantifier rule
-  introduces, keeping the seeds that name it for that sub-goal's search. An
-  elimination whose premise is such an instance no longer has to be
-  re-invented: six more zermelo frontier rows close (four theorems reach
-  every depth) and Pelletier 44 is found in the natural-deduction battery,
-  at the same total work on the bench corpus.
-- A forward-derived fact that holds for every instance, such as `∀`
-  elimination's `F ?t → G ?t`, can now fill a premise of a backward rule
-  whose other arguments the goal has fixed: `auto?` solves the instance
-  from what the goal fixes (`G u` gives `t := u`) and searches the
-  remaining premises, such as `F u`, backward. The goal has to meet a
-  symbol of the fact, not only its open instance. The bench corpus is
-  unchanged; in the natural-deduction battery with a forward modus-ponens
-  joiner, Pelletier 32 is found and Pelletier 28 takes 85% less work.
-- `auto?` no longer re-applies a `@recover` rule that keeps its principal,
-  such as `∀` on the left, when the context already holds an instance whose
-  witness is still open and used nowhere else: the new instance would be a
-  copy of it. A proof that needs a second instance still opens it, at the
-  point it first uses it. The bench corpus and the Pelletier battery find
-  the same proofs; a Pelletier 30 sub-goal that keeps re-opening its `∀`s
-  takes 30% less work, and one that missed is now found.
-- `auto?` recognizes a sub-goal with an open witness that comes back with
-  its context reordered or a member duplicated (in a context where copies
-  are one member) as the goal it is already working on, and stops there
-  instead of searching it again one level deeper. A goal that fails only
-  because such a repeat was cut no longer stops the goals above the repeat
-  from remembering their own failures. The bench corpus finds the same
-  proofs plus one more church row; the natural-deduction Pelletier battery
-  finds one more problem, and the ⊥ goals that kept re-deriving
-  themselves through `raa` take about half the work.
-- `auto?` also recognizes a premise that becomes a goal it is already
-  working on once the part of the context it receives is filled in:
-  weakening's premise `g ⊢ a`, given the whole of the goal's context, is
-  the goal again one level deeper. It is cut there, so an unprovable goal
-  under such a rule, with a context hole, ends in a millisecond instead
-  of stacking the rule until the budget runs out. The bench corpus finds
-  the same proofs.
-- When none of a rule's remaining premises can be met by a known fact,
-  `auto?` now searches first the premise whose structure fixes variables
-  the other premises share, such as an elimination rule's major premise,
-  instead of the premise with the largest known part. The natural-deduction
-  bench does the same work in a fifth fewer ticks and one more euclid
-  theorem closes at a deeper cut.
 - `@auto eager` accepts a premise-only bound binder that no other binder
   may depend on, the fresh eigenvariable of a rule such as
   `all_intro {x y} (g: ctx x) (p: wff x): g ⊢ [x/y] p > g ⊢ ∀ x p`, and
   `auto?` applies `@view` rules whose `@recover` target is such a binder,
-  naming it from the `@vars` pool or after a reference that uses it. The
-  `nd_fol` bench fixture states its quantifier rules this way.
-- The search core takes about 45% less wall time across the depth
-  benchmarks (2,146 s to 1,184 s with the core alone, 1,194 s with the
-  older search behind it), and 60% less on equational goals
-  such as Peano associativity (6.4 s to 2.5 s). Its memos of facts about an
-  expression (whether it holds an unknown, a definition, a rewritable
-  term) and its canonical and normal forms are arrays indexed by the
-  expression instead of hash maps; a hypothesis or rule whose conclusion
-  differs from the goal where neither can unfold, rewrite or read as an
-  `@acui` bag is skipped before the unifier starts; and the hypotheses and
-  each head's rules sit in a path index, so a goal meets only those that
-  apply its terms wherever both are specific. Every benchmark row finds
-  what it found before; the search now skips some definition unfoldings
-  that could not lead anywhere, so some searches report fewer work ticks
-  (up to 14%), and a few take slightly different paths (at most 2.7% more
-  ticks).
+  naming it from the `@vars` pool or after a reference that uses it.
+- The `nd_fol` bench fixture states its quantifier rules with a fresh
+  eigenvariable, as above; decomposes a negated assumption on the left, with
+  one eager rule per connective (`¬ ¬`, `¬ ∨`, `¬ →`, `¬ ∧`, `¬ ↔`, and `¬
+  ∀` and `¬ ∃` turned into `∃ ¬` and `∀ ¬`) and `contra_left` to close on a
+  negated atom, instead of switching the goal with `not_left`, which
+  reopened a `∃` under `¬ ¬` on every round; gains `imp_case_left`, the
+  classical left rule for `→` as an eager case split, next to the
+  intuitionistic `imp_left`; makes `bi_left` a classical case split; adds
+  `or_right_l` and a `@congr` for `↔`; and grows its `@vars` pool from six
+  names to nine (`z1 z2 z3`, after the six it had). Its bench rows stay
+  57/57, and the natural-deduction Pelletier battery goes from 17 to 46 of
+  48 problems (each release on its own `nd_fol`), in a quarter of the wall
+  time.
+- An `@abstract` rule over a substitution term (`eq_replace` on a schematic
+  formula) needs the substitution composition law as a `@rewrite`, so that
+  `[x/a] [z/x] p` meets `[z/a] p`; `docs/view_recover.md` now says so, and
+  the `zermelo` example adds it (`sb_f_comp`).
 
 ### Fixed
 
-- `auto?` did not apply a rule that splits a context without an idempotent
-  law between its premises, such as `two: nd g a > ndr h a > nd2 (g , h) a`
-  under `@acui ctx_assoc ctx_comm emp _`. It now does, and a premise whose
-  rule names only some of the context's members, such as
-  `la: nd (g , A) bot`, takes those and leaves the rest to its sibling:
-  `nd2 (B , A , B) bot` is `two [la (g := $ hyp B $) [], lb []]`.
-- `auto?` could recurse until its stack guard stopped it on an `@auto eager`
-  rule that splits an idempotent context (`mix`'s `g , h` in
-  `|- (a & b) , g , h`): a part may take the whole context, the `&` with it,
-  so each premise held the goal again with one more copy of a member. A goal
-  repeats the one it was reached through now whichever part of the context
-  it was given.
-- `auto?` did not apply a rule whose context names a formula its other part
-  already holds, such as `tag_member`'s `D , p ⊢ tag D p` with `p` one of
-  `D`'s members, though an idempotent context allows it.
-- `auto?` could not give a witness a variable the formula binds somewhere else:
-  it refused `y` for `x` in `P x → ∀ y P y`, where `x` is not under the `∀`.
-- `auto?` treated a rule's `@freshen` as covering a variable the context holds
-  free, as in `¬ P y ⊢ ∀ y P y`, which no renaming helps. It offered the checker
-  proof after proof it had to reject, and passed over the rules that apply.
-- `auto?` dropped an `@acui` combiner's unit from a context even when the theory
-  has no unit law to drop it with, so it read `∅ , p` as `p` and offered proofs
-  the checker rejected (typing `λ f. λ k. λ x. f · (k · x)` under `∅` with the
-  generic `ax`). Without a unit law the unit now counts as a member like any
-  other.
-- Inferring the binders of a rule that spreads a context over many binders could
-  take minutes when the `@acui` combiner had no unit law, as in a theory whose
-  unit axiom does not parse yet. The ways to fill them are now counted rather
-  than listed.
-- A search could overflow the WebAssembly engine's call stack and kill the
-  instance, as Pelletier 34 did under the LSP. The search's stack guard now
-  stops short of that on WebAssembly, so such a search misses. Native builds
-  have more room and find that proof.
-- `auto?` forward chaining kept a fact from a rule whose bound variable an
-  independent argument holds, which no proof can use. A search could close its
-  goal with that fact over and over, have the checker reject each proof, and
-  run out of budget; one such miss took 22 seconds and is now found in about 1.
-  A variable `@freshen` can rename out through `@alpha` still counts.
+- Inferring the binders of a rule that spreads a context over many binders
+  could take minutes when the `@acui` combiner had no unit law, as in a
+  theory whose unit axiom does not parse yet. The ways to fill them are now
+  counted rather than listed.
 - `mm0-zig` rejected a certificate whose proof stream runs past 4 GiB,
   usually with `TruncatedCommand`, though the format allows it and `mm0-c`
   accepts it. Positions in the proof and unify streams are now 64-bit on
@@ -398,21 +259,28 @@ This file records notable user-facing changes to Aufbau. The project follows
   then needed a fresh `@vars` name ("hidden def witness needed a fresh
   @vars token") or a `@congr` rule for the other definition. An
   expression headed by a definition now keeps it.
-- A rule variable read off a line now takes the expression the line has
-  there, in its `@rewrite` normal form, not that expression folded into a
-  definition with the same body. With a 0-ary
-  `def n1: nat = $ s z $`, `s z` came back as `n1`, and an inline
-  sub-proof written for `s z` could not infer its variables.
+- A rule variable's value was folded into any definition whose body it
+  matched, including one the line never mentions, so declaring a
+  definition could break lines that did not use it. With a 0-ary
+  `def n1: nat = $ s z $`, `s z` came back as `n1`, and an inline sub-proof
+  written for `s z` could not infer its variables. With
+  `def sn (a: nat): nat = $ s a $`, `G ⇒ enc_nat (s nz) = …` by `eq_refl`
+  failed, since no `@rewrite` rule takes `enc_nat (sn nz)` apart. With
+  `def rr (a b: mor): mor = $ k1 o (a o b) $`, an `all_elim` line whose
+  `@view` read `p` as `k1 o (a o x) ~ f` handed the rule `rr a x ~ f`,
+  which no substitution rule pushes `[x/w]` through. A value is now never
+  folded: it is the expression the line has there, in its `@rewrite`
+  normal form. Lines also check faster without the fold: in a theory with
+  74 definitions of the same shape, a line spent about 150 ms trying each
+  one, and now takes under a millisecond. A line that the fold let through only by hiding a variable
+  in a definition's dummy now meets MM0's dependency check: `all_elim` at
+  `x := b` on a context written `A. a A. b …`, which mentions `b`, is
+  refused, and an `@freshen` on the rule renames the context apart
+  instead.
 - A suggestion could keep every binding it was found with when the
   checker, left to infer one, chose the binding's `@rewrite` normal form
   and could not convert the line back. Trimming now counts an inferred
   binding as the search's only when the two differ by `@acui` laws.
-- `auto?` treated two copies of one context member as competing choices
-  for a rule's principal formula and left it unchosen, so an `@auto eager`
-  rule never fired at a goal such as `g , ¬ a , ¬ a ⊢ ⊥` and the search
-  fanned out over every other rule there. Copies now count as one choice:
-  one more Pelletier problem closes in the `nd_fol` battery, and the bench
-  corpus is unchanged.
 - `@rewrite` rules that keep growing an expression, such as
   `(f o g) o h ~ f o (g o h) o (g o h)`, could make a line take minutes,
   or crash the compiler, where a `@view` or `@recover` rule matched
@@ -461,6 +329,51 @@ This file records notable user-facing changes to Aufbau. The project follows
   shows, so `conversion?` could not rewrite inside `[x := x + a] e`. The
   cells now use the chapter's rule. The `reynolds` example's
   `sb_ty_congr` is relaxed the same way.
+- `@auto forward` never fired a rule whose context binder is shared between a
+  derived fact and a hypothesis once the context had three or more members:
+  derived facts are stored in their `@acui` normal form and hypotheses as
+  written, so the two values of the binder differed. A bound binder now
+  accepts any value with the same `@acui` form.
+- Inference could fix a rule variable from a premise before the conclusion
+  did, and wrongly, when a `@rewrite` rule needs its argument free of a
+  bound variable: against `[x/z] p ↔ p`, an unknown `p: fml x` was taken to
+  be independent of `x`. The line then failed, though the conclusion fixes
+  every variable. An unknown variable may now depend on whatever its rule
+  lets it, so the premise waits for the conclusion. A witness that occurs
+  only under a substitution is read off the normal form too
+  (`[x/t] (P x)` against `P y` gives `t := y`), so such a rule needs no
+  `@view` to find it. `docs/view_recover.md` and the manual now give views
+  the job of choices a line does not force: a vacuous witness, a fresh
+  variable, a one-hole context.
+- A premise that matches only in its `@rewrite` normal form could fail even
+  with its variables given. `G , u ∊ A ⇒ (⟦ x / u ⟧ B) = (⟦ x / u ⟧ D)`,
+  cited as `⋃ (⟦ x / u ⟧ B) = ⋃ (⟦ x / u ⟧ D)`, was compared before the
+  conclusion fixed `x`, the comparison failed and left a wrong `G` behind,
+  and the conclusion then failed too. A failed comparison now leaves no
+  bindings behind, and what a part's literal structure forces is bound
+  first, so the normal forms are compared with it.
+- A premise holding a definition applied to variables
+  (`∀ y ∀ w (ra_add y z w ∈ lrel)`) did not match a rule's pattern once the
+  definition was unfolded, where the pattern meets one of its arguments
+  (`[x/z] p`'s `z`), so the line needed `p` given. A pattern now matches an
+  argument the unfolding leaves in place.
+- A `@view` that reads variables off a definition with many hidden
+  variables could fail with "theorem exceeded the 55 tracked
+  bound-variable dependency slots" unless they were given, though the
+  proof needs no new variable. Such a premise is now matched after the
+  conclusion.
+- `@recover` and `@abstract` cut their comparison through definitions off
+  at a depth of 32, so a line that wrote a definition folded where the
+  reference wrote its body failed once the definition held a deep enough
+  chain of definitions, with a message that the hole was missing from the
+  pattern. The two sides are now compared together and a definition is
+  unfolded only where they differ, with no limit. The message for a hole
+  with no value now says that no value of it makes the pattern match the
+  source.
+- Comparing numerals written as nested definitions could take seconds,
+  about eight times longer for each level: `ax` against a context holding
+  `x = ⟨ k6 , ∅ ⟩` and `x = ⟨ k7 , ∅ ⟩` took 12.7 s. A pair with no common
+  form is now remembered, and the line takes 0.03 s.
 
 ## [0.0.18] - 2026-10-17
 
@@ -2436,6 +2349,7 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 See the [0.0.1 release notes](RELEASE_NOTES.md) for further details.
 
+[0.0.19]: https://github.com/gleachkr/Aufbau/compare/v0.0.18...v0.0.19
 [0.0.18]: https://github.com/gleachkr/Aufbau/compare/v0.0.17...v0.0.18
 [0.0.17]: https://github.com/gleachkr/Aufbau/compare/v0.0.16...v0.0.17
 [0.0.16]: https://github.com/gleachkr/Aufbau/compare/v0.0.15...v0.0.16
