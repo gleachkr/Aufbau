@@ -567,31 +567,33 @@ forward saturation leaves `t` as a **universal metavariable** and stores a
 *family* fact: not "P at some particular `t`" but the schematic "P at every
 `t`", standing in for all of its instances at once.
 
-The metavariable is filled in later, by a **join**. When some other fact —
-or the goal — needs `P` at a specific value, it unifies against the family
-and reads off exactly the matching instance; the meta is solved *at the
-point of use*, not guessed up front. The same holds when backward search
-fills a rule's premise with a family: what the goal already fixes in that
-premise solves the meta, and the solved family supplies the parts the goal
-left open. The goal must meet some real structure of the family there, not
-only its metavariables: a family whose matched part is all metavariables
-fits every goal of that shape, so it is not offered. And because each
-layer of saturation can join against the previous layer's families,
-forward chaining composes buried witnesses that backward search would
-otherwise have to invent from nothing. A forward rule that never joins
+The metavariable is filled in later, by a **join**. When another forward
+rule's premise needs `P` at a specific value that a known fact supplies,
+it unifies against the family and reads off exactly the matching instance;
+the meta is solved *at the point of use*, not guessed up front. Families
+stay inside forward saturation: backward search takes only the derived
+facts with no metavariable left, never a family. And because each layer
+of saturation can join against the previous layer's families, forward
+chaining composes buried witnesses that backward search would otherwise
+have to invent from nothing. A forward rule that never joins
 anything is simply inert — it wastes a little budget, it does not corrupt
 anything.
 
 ### Rules the goal does not determine
 
-No annotation is needed to apply a rule whose conclusion leaves some of
-its binders open. The witness `t` of existential introduction appears
-only in the premise:
+No `@auto` annotation is needed to apply a rule whose conclusion leaves
+some of its binders open. The witness `t` of existential introduction
+appears only in the premise:
 
 ```mm0
+--| @view {x: nat} (g: ctx x) (t: nat x) (p: wff x) (q: wff): $ g ⊢ q $ > $ g ⊢ ∃ x p $
+--| @recover t q p x
 axiom ex_intro {x: nat} (g: ctx x) (t: nat x) (p: wff x):
   $ g ⊢ [x/t] p $ > $ g ⊢ ∃ x p $;
 ```
+
+The `@view` and `@recover` lines make `t` a **witness**: they say how to
+read `t` back off the proved premise.
 
 Backward from `g ⊢ ∃ x p`, the search leaves `t` as an **existential**
 unknown in the sub-goal `g ⊢ [x/t] p` and fills it in when a later step
@@ -603,11 +605,15 @@ forward case: a forward rule leaves an undetermined binder as a
 backward rule leaves it as an existential one, standing for some value
 the proof has yet to pin down.
 
-A premise binder that is not a quantifier witness (the middle formula of
-a transitivity rule, the antecedent of modus ponens, `or_elim`'s
-disjunction) is an unknown too, but a goal holding it unchosen may be
-proved only by a hypothesis, an axiom, or a rule whose conclusion fixes
-it. The search invents no formula for it, so a rule like
+Any other open binder, one no `@view` recovers, is a **cut**: the middle
+formula of a transitivity rule, the antecedent of modus ponens,
+`or_elim`'s disjunction, or a term binder in a rule without a view
+(`ex_intro` itself, with its two annotation lines removed). The role
+comes from the annotations, not from the sort. A goal holding an
+unchosen cut may be proved only by a fact, a rule with no premises, or a
+rule whose conclusion fixes the cut; any other rule passes the cut on to
+premises that only facts may close. The search invents no value for a
+cut, so a rule like
 
 ```mm0
 axiom or_elim (g h k: ctx) (a b c: wff):

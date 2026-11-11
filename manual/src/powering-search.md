@@ -33,24 +33,36 @@ A binder that matching does not determine, such as `?t` here, is a
 *metavariable*: it stands for a still-unknown expression, and a later match
 determines it.
 
-### Witnesses as metavariables
+### Witnesses and cuts
 
-Search applies ∃-introduction without any annotation, although the goal
-does not determine its witness:
+A metavariable is one of two kinds.
+
+- A **witness** is a binder that the rule's `@view` reads back with
+  `@recover` from a premise the view states as an instance (`q` for
+  `[x := t] p`). For example, the usual `ex_intro`'s `t` and `all_elim`'s `t` 
+  are witnesses.
+- Any other open binder is a **cut**: `imp_elim`'s antecedent `a`,
+  `or_elim`'s `a` and `b`, the middle formula of a transitivity rule.
+
+#### Witness metavariables
+
+In the `ex_intro` axiom:
 
 ```mm0
+--| @view {x: obj} (g: ctx) (t: obj x) (p: wff x) (q: wff): $ g ⊢ q $ > $ g ⊢ ∃ x p $
+--| @recover t q p x
 axiom ex_intro {x: obj} (g: ctx) (t: obj x) (p: wff x):
   $ g ⊢ [x := t] p $ > $ g ⊢ ∃ x p $;
 ```
 
-The witness `t` becomes a metavariable that the rest of the proof
-determines. Several metavariables may coexist, and any still undetermined
-after a proof is found receive witnesses from the `@vars` pool. The latter
-case occurs when a witness is introduced and eliminated entirely within the
-proof.
+The `@view` and `@recover` lines ([Views and recovery](views-and-recovery.md)) 
+make `t` a *witness*: they say how to read `t` back from the premise once the 
+premise is proved. When `t` is a witness metavariable, it can be carried 
+backwards during proof search until some earlier step determines a value for 
+it.
 
-Metavariables may nest. Two `ex_intro` steps can occur on one path while
-both metavariables remain open in the sub-goal pattern.
+Two `ex_intro` steps can occur on one path while both metavariables remain open 
+in the sub-goal pattern.
 
 ```aufbau-proof prelude=nd-base,nd-rules,fol-base,fol-rules
 @@mm0
@@ -78,9 +90,7 @@ The outer `ex_intro` creates a metavariable `?s` and the subgoal `_ ⊢ ∃ y (P
 determines `?s := c`, and matching `#2` determines `?t := d`. Search uses
 these values to complete both `ex_intro` applications.
 
-### Choosing an arbitrary witness
-
-Sometimes the proof does not determine a witness because any variable will
+Sometimes the proof does not determine a witness but any variable will
 do.
 
 ```aufbau-proof prelude=nd-base,nd-rules,fol-base,fol-rules
@@ -89,19 +99,18 @@ lemma wit {x: obj}: $ _ ⊢ ∃ x (P x → P x) $
 l1: $ _ ⊢ ∃ x (P x → P x) $ by auto?
 ```
 
-The suggestion is
+In this case, the suggestion is
 
 ```
 ex_intro [imp_intro [ax (g := $ _ $, a := $ P u $) []]]
 ```
 
-The search created a metavariable `?t`, proved the tautology `P ?t → P ?t`,
-and took the pool variable `u` as the witness for `?t`.
+The search created a witness metavariable `?t`, proved the tautology `P ?t → P 
+?t`, and took the pool variable `u` as the value for `?t`.
 
-### Rules that leave a formula open
+#### Cut Metavariables
 
-A metavariable for a formula, rather than a witness, is more constrained.
-Consider
+A cut is more constrained. Consider
 
 ```mm0
 axiom or_elim (g h i: ctx) (a b c: wff):
@@ -109,25 +118,31 @@ axiom or_elim (g h i: ctx) (a b c: wff):
 ```
 
 Any sequent goal can match `… ⊢ c`, but the goal does not determine `a` or
-`b`. Search does not guess them: while a goal holds such a metavariable, only
-a hypothesis, an axiom, or a rule whose conclusion determines it may prove
-that goal. So `or_elim` splits on a disjunction already at hand. Only when
-that search has run out of alternatives at every depth does search try once
-more without this restriction.
+`b`. In this case, in order to avoid an explosive backwards search, a goal
+holding an unchosen cut may be closed only by a fact (a hypothesis, an
+earlier line, or a fact from
+[forward search](#auto-forward)), by a rule with no
+premises, or by a rule whose conclusion fixes the cut. Any other rule passes
+the cut on, and its premises that hold the cut may then be closed only by
+facts. So `or_elim` splits on a disjunction already at hand. Only when that
+search has run out of alternatives at every depth does search try once more
+without this restriction.
 
-## `@auto forward`: enrich the pool first
+## `@auto forward`
 
 Use `@auto forward` for **elimination rules** and other rules that extract
-simpler facts from known ones. Before backward search begins, the engine
-repeatedly applies these rules to the reference pool and adds the derived
-facts as extra references, subject to its search limits.
+simpler facts from facts already available. Before backward search begins, the 
+engine repeatedly applies these rules to the reference pool and adds the 
+derived facts as extra references, subject to its search limits.
 
 A forward rule need not determine its entire output. Applying ∀-elimination
 to `∀ x p` produces an instance of `p`, but the premise does not determine
-the substituted term `t`. Rather than guess, search records `?t` as a
-*universal metavariable*: it represents a family of instances. Another rule
-can combine this family with a known fact to determine the needed instance.
-This matching operation is called a *join*.
+the substituted term `t`. Rather than guess, forward search records `?t` as a
+*universal metavariable*: it represents a family of instances. Another
+forward rule can combine this family with a known fact to determine the
+needed instance. This matching operation is called a *join*. Families stay
+inside forward search: backward search sees only the facts that joins
+determine, never a family itself.
 
 A Hilbert-style quantifier theory shows how it works:
 
@@ -193,10 +208,10 @@ l1: $ ∃ y (R y) $ by auto?
 
 The useful route to the existential goal is to derive `R c` from the two
 universal facts and `P c`. Forward saturation finds that route: `all_elim`
-turns `#1` into the family `P ?t → Q ?t`, and `mp` (enrolled forward, and
-applied backward like every rule) joins the family with `P c`, instantiating
-`t := c`. The derived `Q c` joins `#2`'s family the same way, giving `R c`,
-which determines the metavariable introduced by backward `ex_intro`. Search
+turns `#1` into the family `P ?t → Q ?t`, and `mp`, also enrolled forward,
+joins the family with `P c`, instantiating `t := c`. The derived `Q c` joins
+`#2`'s family the same way, giving `R c`. Backward search then proves the
+goal with `ex_intro`, and the fact `R c` determines its witness. Search
 suggests:
 
 ```
@@ -237,10 +252,10 @@ axiom rand (d: ctx) (a b: wff):
   $ ⊢ a , d $ > $ ⊢ b , d $ > $ ⊢ (a ∧ b) , d $;
 ```
 
-An eager rule is tried before the other rules, in priority order. Priority 1 is the default and
-runs first. One ordering comes before priority: a rule that splits the
-context between its premises, eager or not, is tried after every rule
-that does not.
+An eager rule is tried before the other rules, in priority order. Priority 1 is 
+the default and runs first. One ordering comes before priority: a rule that 
+splits the context between its premises, eager or not, is tried after every 
+rule that does not.
 
 Once an eager rule applies, search commits to it: if its premises cannot be
 proved, search does not try non-eager alternatives at that node. Eager
@@ -250,19 +265,19 @@ generally be "invertible" rules that can safely be applied without producing
 unprovable goals.
 
 The compiler cannot prove that a rule is invertible; the annotation is the
-theory author's choice, and search trusts it. A rule marked eager that is
-not invertible can make `auto?` miss proofs. The compiler does reject
+theory author's responsibility, and search trusts it. A rule marked eager that 
+is not invertible can make `auto?` miss proofs. The compiler does reject
 `@auto eager` if a premise mentions a binder absent from the conclusion,
 unless that binder is a fresh bound variable no other binder may depend on
 (the eigenvariable of a `∀`-introduction), which the step does not choose.
 
 ## `@auto bridge`: close with a rule, never search through it
 
-A structural rule such as weakening is cheap to close a goal with and
-ruinous to search through. Applied backward, weakening must choose which
-context members to forget, and every subset is a separate sub-search;
-yet all it is needed for is bridging a fact stated for a smaller context
-to a goal in a larger one.
+A structural rule such as weakening is often a cheap way to close a goal, but 
+is explosive in a general backwards search. Applied backward, weakening must 
+choose which context members to forget. As a result, every subset of the 
+context spawns a separate sub-search. Usually, it is only useful for bridging a 
+fact stated for a smaller context to a goal in a larger one.
 
 ```mm0
 --| @auto bridge
@@ -274,10 +289,7 @@ only from the reference pool and from facts the forward pass derived; it
 never generates a sub-proof for them. So `weak [#1]` still closes `Γ , q ⊢
 p` from a hypothesis `Γ ⊢ p` wherever that sub-goal arises, while the
 forgetting searches disappear. The annotation requires at least one
-hypothesis. A proof that must forget a context member *before* applying a
-rule with a bound binder (one that the member mentions) can no longer be
-found through a bridge rule; such proofs are rare, and the bench shows
-the trade.
+hypothesis.
 
 ## `@auto trigger`: seed leaf facts
 

@@ -173,22 +173,22 @@ calculus](lambda-calculus.md).
 ```
 
 One mode per line; a rule may carry several lines. Search applies every
-rule backward without an annotation; `forward` also runs the rule over the
-reference pool before backward search (elimination rules).
+rule backward; `forward` also runs the rule over the reference pool as part of 
+the saturation phase that occurs before backward search.
 
 `eager` marks a rule as invertible. Search tries it first, commits to it
 once applied, and does not count its applications toward the depth limit.
 The optional priority `N` is at least 1, defaults to 1, and runs earlier
 when smaller. An eager rule that splits the context between its premises
-is still tried after every rule that does not. The compiler checks that premises use only binders present in the conclusion,
-but cannot verify invertibility; a rule marked eager that is not invertible
-can make search miss proofs.
+is still tried after every rule that does not. The compiler checks that 
+premises use only binders present in the conclusion, but cannot verify 
+invertibility; a rule marked eager that is not invertible can make search miss 
+proofs.
 
 `bridge` keeps the rule as a backward candidate but fills its premises
-only from the reference pool and forward-derived facts, never by
-generating a sub-proof; weakening is the intended case, where a
-generating application would enumerate every subset of the context. The
-rule must have a hypothesis.
+only from the reference pool and forward-derived facts. This is intended to 
+accommodate weakening and similar rules , where a generating application would 
+enumerate every subset of the context. A bridge rule must have a hypothesis.
 
 `trigger` supplies a parenthesized prefix pattern over term names, rule
 binders, and `_`. Before searching, the engine matches it against subterms
