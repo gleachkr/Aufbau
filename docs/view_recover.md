@@ -150,9 +150,9 @@ matches it up to normalization. Without a view, the compiler binds omitted
 binders in this order: the cited premises in source order, then the
 conclusion, then one retry of any premise that did not match. Within a single
 premise or conclusion the walk is left to right, except that a subterm whose
-head has `@rewrite` rules (a substitution, say) and whose binders are still
-open is set aside until the rest of the formula has been matched; it is then
-instantiated and normalized against the concrete subterm. A binder still
+head has `@rewrite` rules (a substitution, say) and that does not match
+literally is set aside until the rest of the formula has been matched; it is
+then instantiated and normalized against the concrete subterm. A binder still
 unknown at that point stands in the normal form as a placeholder that may
 depend on the bound variables its declaration allows, so no rewrite that
 needs it free of one (`[x/t] p ↔ p`) fires early, and the normal form fixes

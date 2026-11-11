@@ -420,6 +420,22 @@ pub const RuleMatchSession = struct {
         );
     }
 
+    /// Bind what `template` forces outside its subterms with `@rewrite`
+    /// heads that do not match literally, which stay unmatched; see
+    /// `tryMatchTemplateUnsettledState`.
+    pub fn matchOutsideRewrites(
+        self: *RuleMatchSession,
+        template: TemplateExpr,
+        actual: ExprId,
+    ) anyerror!bool {
+        var symbolic_engine = self.engine();
+        return try symbolic_engine.tryMatchTemplateUnsettledState(
+            template,
+            actual,
+            &self.state,
+        );
+    }
+
     pub fn matchSemantic(
         self: *RuleMatchSession,
         template: TemplateExpr,

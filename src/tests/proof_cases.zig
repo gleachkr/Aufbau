@@ -754,6 +754,10 @@ const proof_cases = [_]ProofCase{
     // Lean0 11-09: two numerals as nested defs with no common target are
     // compared once per pair of partial unfoldings, not once per path.
     .{ .stem = "pass_def_numerals_no_common_target", .outcome = .pass },
+    // Lean0 11-09 (agent m1): a premise matched modulo rewrites before the
+    // conclusion leaves no bindings when it fails, and starts its normalized
+    // comparison from what the rest of the premise forces.
+    .{ .stem = "pass_normalized_premise_forced_bindings", .outcome = .pass },
     .{
         .stem = "fail_two_sort_eigen_smuggle",
         .outcome = .{ .fail = error.DepViolation },

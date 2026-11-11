@@ -1,0 +1,93 @@
+-- Lean0 11-09 (agent m1): a premise matched only modulo `@rewrite` rules is
+-- compared before the conclusion has fixed every binder. `rewritten_premise`:
+-- with `x` still open, `⟦ x / u ⟧ (un b)` cannot be rewritten, and the failed
+-- comparison used to leave a wrong `g` behind, so the conclusion failed and the
+-- premise was never retried. A failed comparison now leaves no bindings.
+-- `witness_from_context`: `z` is read off the context member `z = a`, and only
+-- then can `[x/z] p` be pushed under `A. y` (an open `z` might be `y`). The
+-- normalized comparison starts from what the rest of the premise forces.
+delimiter $ ( ) [ / ] { } | $;
+import "lib/ctx.mm0";
+
+sort nat;
+sort cls;
+
+term iff (p q: wff): wff;
+infixr iff: $↔$ prec 20;
+
+term mem (t: nat) (c: cls): wff;
+infixl mem: $∈$ prec 50;
+term ceq (a b: cls): wff;
+infixl ceq: $≡$ prec 50;
+term eq (s t: nat): wff;
+infixl eq: $=$ prec 50;
+term R (s t: nat): wff;
+term un (a: cls): cls;
+term all {y: nat} (p: wff y): wff;
+notation all {y: nat} (p: wff y): wff = ($A.$:41) y p;
+term cab {x: nat} (p: wff x): cls;
+notation cab {x: nat} (p: wff x): cls = (${$:max) x ($|$:0) p ($}$:0);
+term clam {x: nat} (a: cls) (b: cls x): cls;
+
+term sb_t {x: nat} (t: nat x) (s: nat x): nat;
+notation sb_t {x: nat} (t: nat x) (s: nat x): nat = ($subst$:41) x ($/$:0) t s;
+term sb_f {x: nat} (t: nat x) (p: wff x): wff;
+notation sb_f {x: nat} (t: nat x) (p: wff x): wff = ($[$:41) x ($/$:0) t ($]$:0) p;
+term sb_c {x: nat} (t: nat x) (a: cls x): cls;
+notation sb_c {x: nat} (t: nat x) (a: cls x): cls = ($⟦$:41) x ($/$:0) t ($⟧$:0) a;
+
+term nd (g: ctx) (p: wff): wff;
+infixl nd: $⊢$ prec 0;
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (p: wff): $ p ↔ p $;
+axiom iff_trans (p q r: wff): $ p ↔ q $ > $ q ↔ r $ > $ p ↔ r $;
+axiom iff_sym (p q: wff): $ p ↔ q $ > $ q ↔ p $;
+axiom iff_mp (p q: wff): $ p ↔ q $ > $ p $ > $ q $;
+--| @relation nat eq eq_refl eq_trans eq_sym _
+axiom eq_refl (s: nat): $ s = s $;
+axiom eq_trans (s t v: nat): $ s = t $ > $ t = v $ > $ s = v $;
+axiom eq_sym (s t: nat): $ s = t $ > $ t = s $;
+--| @relation cls ceq ceq_refl ceq_trans ceq_sym _
+axiom ceq_refl (a: cls): $ a ≡ a $;
+axiom ceq_trans (a b c: cls): $ a ≡ b $ > $ b ≡ c $ > $ a ≡ c $;
+axiom ceq_sym (a b: cls): $ a ≡ b $ > $ b ≡ a $;
+
+--| @congr
+axiom hyp_congr (p q: wff): $ p ↔ q $ > $ ctx_eq (hyp p) (hyp q) $;
+--| @congr
+axiom nd_congr (g h: ctx) (p q: wff): $ ctx_eq g h $ > $ p ↔ q $ > $ (g ⊢ p) ↔ (h ⊢ q) $;
+--| @congr
+axiom ceq_congr (a b c d: cls): $ a ≡ b $ > $ c ≡ d $ > $ (a ≡ c) ↔ (b ≡ d) $;
+--| @congr
+axiom un_congr (a b: cls): $ a ≡ b $ > $ un a ≡ un b $;
+--| @congr
+axiom R_congr (s t u v: nat): $ s = t $ > $ u = v $ > $ R s u ↔ R t v $;
+
+--| @congr
+axiom all_congr {y: nat} (p q: wff y): $ p ↔ q $ > $ A. y p ↔ A. y q $;
+
+--| @rewrite
+axiom sb_c_un {x: nat} (t: nat x) (a: cls x): $ (⟦ x / t ⟧ (un a)) ≡ un (⟦ x / t ⟧ a) $;
+--| @rewrite
+axiom sb_f_all {x y: nat} (t: nat x) (p: wff x y): $ [x/t] (A. y p) ↔ A. y ([x/t] p) $;
+--| @rewrite
+axiom sb_f_R {x: nat} (t: nat x) (s v: nat x): $ [x/t] (R s v) ↔ R (subst x / t s) (subst x / t v) $;
+--| @rewrite
+axiom sb_t_var {x: nat} (t: nat x): $ (subst x / t x) = t $;
+--| @rewrite
+axiom sb_t_irrel {x: nat} (t: nat x) (s: nat): $ (subst x / t s) = s $;
+
+axiom clam_sub {x u: nat} (g: ctx) (a: cls) (b d: cls x) (c: nat):
+  $ g , u ∈ a ⊢ (⟦ x / u ⟧ b) ≡ (⟦ x / u ⟧ d) $ > $ g ⊢ c ∈ clam x a b $ > $ g ⊢ c ∈ clam x a d $;
+axiom cab_intro {x z: nat} (g: ctx) (a: nat) (p: wff x):
+  $ g , z = a ⊢ [x/z] p $ > $ g ⊢ a ∈ {x | p} $;
+
+def rr (s t: nat): wff = $ R s t $;
+def kd (.x .y: nat): cls = $ {x | A. y R x y} $;
+
+theorem rewritten_premise {x u c: nat} (g: ctx) (a f: cls) (b d: cls x):
+  $ g , c ∈ f , u ∈ a ⊢ un (⟦ x / u ⟧ b) ≡ un (⟦ x / u ⟧ d) $ >
+  $ g , c ∈ f ⊢ c ∈ clam x a (un b) $ > $ g , c ∈ f ⊢ c ∈ clam x a (un d) $;
+theorem witness_from_context {x y z: nat} (g: ctx) (a: nat):
+  $ g , z = a ⊢ A. y rr z y $ > $ g ⊢ a ∈ kd $;

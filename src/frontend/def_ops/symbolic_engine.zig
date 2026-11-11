@@ -36,6 +36,8 @@ pub const SymbolicEngine = struct {
         TransparentMatch.matchTemplateRecState;
     pub const tryMatchTemplateStateDirect =
         TransparentMatch.tryMatchTemplateStateDirect;
+    pub const tryMatchTemplateUnsettledState =
+        TransparentMatch.tryMatchTemplateUnsettledState;
     pub const matchTemplateSemantic = SemanticSearch.matchTemplateSemantic;
     pub const hashMatchSessionReachable =
         SemanticSearch.hashMatchSessionReachable;

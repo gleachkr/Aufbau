@@ -724,11 +724,11 @@ pub fn matchTemplateRecState(
                 break :blk true;
             }
 
-            // A rewrite-head node with open binders proves nothing by
-            // mismatching structurally: `[x/t] p` cannot be matched until
-            // `x` and `p` are known. Defer it, let the siblings bind what they
-            // can, and settle it at the boundary by instantiation and
-            // normalization.
+            // A rewrite-head node proves nothing by mismatching structurally:
+            // `[x/t] p` may match only once rewritten, and cannot be rewritten
+            // until `x` and `p` are known. Defer it, let the siblings bind
+            // what they can, and settle it at the boundary by instantiation
+            // and normalization.
             break :blk try deferRewriteHeadMismatch(
                 self,
                 template,
@@ -750,27 +750,11 @@ fn deferRewriteHeadMismatch(
     if (state.deferral_suspended != 0) return false;
     const registry = self.shared.registry orelse return false;
     if (registry.getRewriteRules(app.term_id).len == 0) return false;
-    if (!templateHasUnsolvedBinder(template, state)) return false;
     try state.deferred.append(self.shared.allocator, .{
         .template = template,
         .actual = actual,
     });
     return true;
-}
-
-fn templateHasUnsolvedBinder(
-    template: TemplateExpr,
-    state: *const MatchSession,
-) bool {
-    return switch (template) {
-        .binder => |idx| state.bindings[idx] == null,
-        .app => |app| blk: {
-            for (app.args) |arg| {
-                if (templateHasUnsolvedBinder(arg, state)) break :blk true;
-            }
-            break :blk false;
-        },
-    };
 }
 
 /// Walk `template` against `actual` with sibling deferral, then settle every
@@ -1234,6 +1218,26 @@ pub fn tryMatchTemplateStateDirect(
     }
     try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
     return false;
+}
+
+/// Walk `template` against `actual` as `tryMatchTemplateStateDirect` does,
+/// but leave the nodes it sets aside unsettled: the result binds what the
+/// rest of the formula forces, for a normalized comparison to finish. On a
+/// mismatch outside those nodes the state is rolled back.
+pub fn tryMatchTemplateUnsettledState(
+    self: anytype,
+    template: TemplateExpr,
+    actual: ExprId,
+    state: *MatchSession,
+) anyerror!bool {
+    var snapshot = try WitnessState.saveMatchSnapshot(self, state);
+    defer WitnessState.deinitMatchSnapshot(self, &snapshot);
+    if (!try matchTemplateRecState(self, template, actual, state)) {
+        try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
+        return false;
+    }
+    state.deferred.shrinkRetainingCapacity(snapshot.deferred_len);
+    return true;
 }
 
 pub fn tryMatchSymbolicToExprDirect(

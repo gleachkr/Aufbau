@@ -18,10 +18,10 @@ pub const TrailEntry = union(enum) {
 };
 
 /// A template node the transparent walker skipped provisionally: its head
-/// has `@rewrite` rules and its subtree still had unsolved binders when the
-/// walk reached it, so a structural mismatch there proves nothing yet. The
-/// walker's public boundaries retry every deferred node by instantiation +
-/// normalization once the siblings have bound what they can.
+/// has `@rewrite` rules, so a structural mismatch there proves nothing until
+/// it is rewritten, which may need binders still open when the walk reached
+/// it. The walker's public boundaries retry every deferred node by
+/// instantiation + normalization once the siblings have bound what they can.
 pub const DeferredNode = struct {
     template: TemplateExpr,
     actual: ExprId,

@@ -1,0 +1,7 @@
+rewritten_premise
+-----------------
+l1: $ g , c ∈ f ⊢ c ∈ clam x a (un d) $ by clam_sub [#1, #2]
+
+witness_from_context
+--------------------
+l1: $ g ⊢ a ∈ kd $ by cab_intro (p := $ A. y R x y $) [#1]

@@ -90,11 +90,18 @@ pub fn matchTemplate(
         return err;
     };
     defer comparison.deinit();
-    return try finish(
+    // The comparison assigns the session's binders as it walks the normal
+    // forms, so a mismatch found later would leave the earlier ones behind,
+    // to mislead the parts matched after it.
+    var before = try session.saveSeedState();
+    defer before.deinit(session.shared.allocator);
+    if (try finish(
         allocator,
         env,
         registry,
         scratch,
         &comparison,
-    );
+    )) return true;
+    try session.restoreFromSeedState(&before);
+    return false;
 }

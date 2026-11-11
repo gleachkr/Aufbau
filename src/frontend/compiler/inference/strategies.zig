@@ -476,7 +476,7 @@ fn matchRulePartNormalized(
     );
 }
 
-fn matchRuleHypForInference(
+fn matchRulePartForInference(
     allocator: std.mem.Allocator,
     env: *const GlobalEnv,
     registry: *RewriteRegistry,
@@ -492,6 +492,17 @@ fn matchRuleHypForInference(
     // needs the same equivalence, otherwise a whole-line hole after a
     // normalized rule loses the structure needed to infer the next rule's
     // omitted binders.
+    //
+    // The walk above sets aside a subterm with `@rewrite` rules that does
+    // not match literally, and settles it once the rest of the part has
+    // bound what it forces. Where settling fails, the normal forms finish
+    // the match from those bindings: `G , z = A ⇒ [x/z] p` reads `z` off the
+    // context before `[x/z] p` is normalized, so no rewrite waits on a `z`
+    // that might be a variable bound inside `p`. A part the normal forms
+    // cannot settle yet keeps what its literal parts force, as a subterm
+    // set aside does, for the parts matched after it; the failed comparison
+    // itself leaves nothing behind.
+    _ = try session.matchOutsideRewrites(template, actual);
     return try matchRulePartNormalized(
         allocator,
         env,
@@ -609,7 +620,7 @@ fn finishRuleMatchSession(
     defer allocator.free(deferred);
     var deferred_len: usize = 0;
     for (rule.hyps, ref_exprs, 0..) |hyp, ref_expr, hyp_idx| {
-        if (try matchRuleHypForInference(
+        if (try matchRulePartForInference(
             allocator,
             env,
             registry,
@@ -622,28 +633,26 @@ fn finishRuleMatchSession(
         deferred_len += 1;
     }
 
-    if (!try session.matchTransparentOrSemantic(rule.concl, line_expr)) {
-        if (!try matchRulePartNormalized(
-            allocator,
-            env,
-            registry,
-            scratch,
-            session,
-            rule.concl,
-            line_expr,
-        )) {
-            if (deferred_len > 0) {
-                const hyp_idx = deferred[0];
-                return .{
-                    .no_match = hypothesisMismatch(hyp_idx, ref_exprs[hyp_idx]),
-                };
-            }
-            return .{ .no_match = conclusionMismatch() };
+    if (!try matchRulePartForInference(
+        allocator,
+        env,
+        registry,
+        scratch,
+        session,
+        rule.concl,
+        line_expr,
+    )) {
+        if (deferred_len > 0) {
+            const hyp_idx = deferred[0];
+            return .{
+                .no_match = hypothesisMismatch(hyp_idx, ref_exprs[hyp_idx]),
+            };
         }
+        return .{ .no_match = conclusionMismatch() };
     }
 
     for (deferred[0..deferred_len]) |hyp_idx| {
-        if (try matchRuleHypForInference(
+        if (try matchRulePartForInference(
             allocator,
             env,
             registry,
@@ -908,7 +917,7 @@ fn finishHoleyRuleMatchSession(
     const rule = context.rule;
 
     for (rule.hyps, ref_exprs, 0..) |hyp, ref_expr, hyp_idx| {
-        if (try matchRuleHypForInference(
+        if (try matchRulePartForInference(
             allocator,
             env,
             registry,
