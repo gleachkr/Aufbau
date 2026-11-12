@@ -189,6 +189,10 @@ fn fail(seed: harness.Seed, comptime format: []const u8, args: anytype) noreturn
     @panic("search oracle failed");
 }
 
+// Up to three markers each spend a budget of 1 (about a second of
+// ReleaseFast search, more on bag-heavy theories), and a Debug fuzz build
+// runs ten times slower or more; the limit covers that, so it stops only
+// a search the budget fails to bound.
 test "fuzz proof search" {
-    try harness.run("search", .{ .time_limit_s = 30 }, try harness.seeds(), search);
+    try harness.run("search", .{ .time_limit_s = 120 }, try harness.seeds(), search);
 }

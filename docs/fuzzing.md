@@ -15,9 +15,10 @@ toolchain and checks what comes back:
 | `theory` | a generated theory: sorts, terms with random arities and infix or prefix notations, definitions, axioms with hypotheses, and theorems that are substitution instances of the axioms, proved in one step with some bindings left to inference | the `compile` oracles, and every pair compiles, since each is valid by construction; the binary also passes mm0-c when it is on PATH |
 
 Every target must also not panic, leak, write after free, run longer than
-10 seconds on one input (30 for `search` and `lsp`, which run proof search
-on the larger proof cases), or hold more than 1 GiB at once. The fuzzer checks
-the first three. `tests/fuzz/harness.zig` adds a watchdog thread and a
+10 seconds on one input (30 for `lsp` and 120 for `search`, which run
+proof search on the larger proof cases; `search` allows for up to three
+markers each spending its whole budget in a Debug build), or hold more
+than 1 GiB at once. The fuzzer checks the first three. `tests/fuzz/harness.zig` adds a watchdog thread and a
 capped allocator for the last two, and both panic so the fuzzer saves the
 input like any other crash. A few known costs would trip the time limit at
 large sizes; the `shapes` target keeps those shapes small until the tasks
