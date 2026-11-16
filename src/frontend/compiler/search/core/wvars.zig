@@ -150,7 +150,9 @@ const Entry = union(enum) {
 
 pub const WVars = struct {
     allocator: std.mem.Allocator,
-    /// Owns capture lists; lives for the run.
+    /// Owns the wvars' capture and `fresh_in` lists, which outlive the
+    /// steps that make them: a wvar stays in `vars` after a rollback, and a
+    /// remembered proof reads it again (`Prover.reuse`). Lives for the run.
     arena: std.mem.Allocator,
     context: *const Context,
     theorem: *TheoremContext,
@@ -335,13 +337,18 @@ pub const WVars = struct {
         }
     }
 
+    /// A copy of `list` the wvars own.
+    fn ownList(self: *WVars, list: []const ExprId) Error![]const ExprId {
+        return if (list.len == 0) list else self.arena.dupe(ExprId, list);
+    }
+
     /// A new γ wvar, or cut wvar when `cut`.
     pub fn mint(self: *WVars, sort_name: []const u8, capture: []const ExprId, cut: bool) Error!ExprId {
         return self.add(.{
             .expr = undefined,
             .sort_name = sort_name,
             .level = self.eigen_count,
-            .capture = capture,
+            .capture = try self.ownList(capture),
             .cut = cut,
         });
     }
@@ -366,7 +373,7 @@ pub const WVars = struct {
             .level = self.eigen_count,
             .capture = &.{},
             .introduced_at = goal,
-            .fresh_in = fresh_in,
+            .fresh_in = if (fresh_in) |list| try self.ownList(list) else null,
         });
         self.eigen_count += 1;
         return expr;

@@ -9,7 +9,8 @@
 //! arena: `init`, `deinit`, `allocator`, `reset`, `child_allocator`.
 //!
 //! Like the std arena, `free` and `resize` act only on the most recent
-//! allocation; anything else is reclaimed when the arena is reset or freed.
+//! allocation; anything else is reclaimed when the arena is reset or freed,
+//! or rewound to a `mark` taken before it (a stack of allocations).
 
 const std = @import("std");
 
@@ -21,6 +22,8 @@ pub const ArenaAllocator = struct {
     /// Most recent chunk first; allocation bumps `end_index` in it.
     chunks: ?*Chunk = null,
     end_index: usize = 0,
+    /// Chunks a `rewind` emptied, smallest first, for the next ones needed.
+    spare: ?*Chunk = null,
 
     /// A chunk's header; its buffer follows it in the same allocation.
     const Chunk = struct {
@@ -43,11 +46,39 @@ pub const ArenaAllocator = struct {
     }
 
     pub fn deinit(self: ArenaAllocator) void {
-        var it = self.chunks;
+        self.freeList(self.chunks);
+        self.freeList(self.spare);
+    }
+
+    fn freeList(self: ArenaAllocator, first: ?*Chunk) void {
+        var it = first;
         while (it) |chunk| {
             it = chunk.next;
             self.child_allocator.rawFree(chunk.allocation(), chunk_alignment, @returnAddress());
         }
+    }
+
+    /// The arena's extent, to `rewind` to.
+    pub const Mark = struct {
+        chunk: ?*Chunk,
+        end_index: usize,
+    };
+
+    pub fn mark(self: *const ArenaAllocator) Mark {
+        return .{ .chunk = self.chunks, .end_index = self.end_index };
+    }
+
+    /// Forgets every allocation made since `to` was taken. Marks are a
+    /// stack: `to` must not predate a mark already rewound to, nor a reset.
+    /// The chunks emptied are kept for the allocations that follow.
+    pub fn rewind(self: *ArenaAllocator, to: Mark) void {
+        while (self.chunks != to.chunk) {
+            const chunk = self.chunks.?;
+            self.chunks = chunk.next;
+            chunk.next = self.spare;
+            self.spare = chunk;
+        }
+        self.end_index = to.end_index;
     }
 
     pub fn allocator(self: *ArenaAllocator) Allocator {
@@ -76,20 +107,29 @@ pub const ArenaAllocator = struct {
             .free_all => null,
             .retain_capacity => self.chunks,
         };
-        var it = if (keep) |chunk| chunk.next else self.chunks;
-        while (it) |chunk| {
-            it = chunk.next;
-            self.child_allocator.rawFree(chunk.allocation(), chunk_alignment, @returnAddress());
-        }
+        self.freeList(if (keep) |chunk| chunk.next else self.chunks);
+        self.freeList(self.spare);
+        self.spare = null;
         if (keep) |chunk| chunk.next = null;
         self.chunks = keep;
         self.end_index = 0;
         return true;
     }
 
-    /// Prepends a chunk with room for `minimum` bytes, growing geometrically
-    /// from the previous chunk's size.
+    /// Prepends a chunk with room for `minimum` bytes: the first spare chunk
+    /// that has it, after freeing the smaller ones before it, or a new one
+    /// growing geometrically from the previous chunk's size.
     fn addChunk(self: *ArenaAllocator, prev_len: usize, minimum: usize) ?*Chunk {
+        while (self.spare) |chunk| {
+            self.spare = chunk.next;
+            if (chunk.buffer().len >= minimum) {
+                chunk.next = self.chunks;
+                self.chunks = chunk;
+                self.end_index = 0;
+                return chunk;
+            }
+            self.child_allocator.rawFree(chunk.allocation(), chunk_alignment, @returnAddress());
+        }
         const big_enough = prev_len + minimum + @sizeOf(Chunk) + 16;
         const len = big_enough + big_enough / 2;
         const ptr = self.child_allocator.rawAlloc(len, chunk_alignment, @returnAddress()) orelse
@@ -194,4 +234,32 @@ test "arena frees and resizes only its most recent allocation" {
     a.free(grown);
     const third = try a.alloc(u8, 4);
     try std.testing.expectEqual(second.ptr, third.ptr);
+}
+
+test "arena rewinds to a mark and reuses the chunks it emptied" {
+    var arena = ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const kept = try a.alloc(u8, 16);
+    @memset(kept, 7);
+    const outer = arena.mark();
+    var round: usize = 0;
+    var first: ?[*]u8 = null;
+    while (round < 3) : (round += 1) {
+        const at = try a.alloc(u8, 8);
+        if (first) |ptr| try std.testing.expectEqual(ptr, at.ptr) else first = at.ptr;
+        const inner = arena.mark();
+        // Enough to need new chunks, which the next round takes again.
+        var total: usize = 0;
+        while (total < 50_000) : (total += 500) @memset(try a.alloc(u8, 500), 1);
+        arena.rewind(inner);
+        try std.testing.expectEqual(inner.end_index, arena.end_index);
+        arena.rewind(outer);
+    }
+    for (kept) |byte| try std.testing.expectEqual(7, byte);
+    // A request larger than every spare chunk frees them or grows in place.
+    @memset(try a.alloc(u8, 1 << 20), 2);
+    _ = arena.reset(.retain_capacity);
+    try std.testing.expect(arena.spare == null);
 }

@@ -288,11 +288,13 @@ Parsing, output, and debug helpers:
 splitting a UTF-8 character. `arena_allocator.zig` is the single-threaded
 arena every frontend arena uses; Zig 0.17's `std.heap.ArenaAllocator` pays
 for atomics on each allocation, which the compiler, on one thread, does not
-need. `src/trusted` keeps the std arena. `reclaiming_allocator.zig` backs
-one search call (`search/source.zig`): power-of-two size classes with free
-lists over that arena, so a long search reuses what it frees, and `deinit`
-releases whatever is still live. A free must name the allocator, length and
-alignment the block was allocated with; safe builds check this.
+need. It can also rewind to a mark, forgetting what was allocated since, for
+allocations that die in stack order. `src/trusted` keeps the std arena.
+`reclaiming_allocator.zig` backs one search call (`search/source.zig`):
+power-of-two size classes with free lists over that arena, so a long search
+reuses what it frees, and `deinit` releases whatever is still live. A free
+must name the allocator, length and alignment the block was allocated with;
+safe builds check this.
 
 `parse_recovery.zig` is the frontend's facade over the trusted MM0
 parser: it re-exports the core statement types, collects annotations,
@@ -1318,6 +1320,12 @@ The important lifetimes are:
   This match-local state must not allocate theorem dummies merely to compare.
 - Persistent generation caches use scope-stable expression content, not raw
   `ExprId`s minted inside discardable child scopes.
+- The search core keeps what a run remembers (memos, answer tables, naming
+  pools, witness-variable constraint lists) in one arena for the run, and the
+  records of the proof attempt it is on in a second arena that each step
+  rewinds as it returns. A record that outlives its step is copied out: a
+  remembered proof to the run's arena, an answer to its goal's frame until
+  the goal's table copies it.
 - `SearchCounters` is a value-only statistics sink. The generation call's
   memos and pruning switches travel separately as a `SearchRuntime`, so an
   observer block can be reused across calls or omitted without affecting

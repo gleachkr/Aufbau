@@ -146,6 +146,7 @@ pub fn run(request: Request) !Result {
     var prover = Prover{
         .allocator = request.scratch,
         .arena = arena.allocator(),
+        .records = ArenaAllocator.init(request.scratch),
         .context = request.context,
         .terms = &terms,
         .wvars = &wvars,

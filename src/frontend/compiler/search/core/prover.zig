@@ -161,6 +161,7 @@ const TermIndex = term_index.TermIndex;
 const AcuiBag = @import("../../../acui_bag.zig");
 const DerivedBindings = @import("../../../derived_bindings.zig");
 const AbstractDecl = DerivedBindings.AbstractDecl;
+const ArenaAllocator = @import("../../../arena_allocator.zig").ArenaAllocator;
 
 pub const Error = terms_mod.Error || error{
     SearchBudgetExhausted,
@@ -247,9 +248,13 @@ const Frame = struct {
     key: []const u8 = &.{},
     order: []const u32 = &.{},
     /// The proofs of the goal reached so far, while each has only bound
-    /// the goal's wvars (`tabulable`); owned by the prover's allocator.
+    /// the goal's wvars (`tabulable`); the list is owned by the prover's
+    /// allocator, the records by `store`.
     answers: std.ArrayListUnmanaged(Answer) = .empty,
     tabulable: bool = true,
+    /// Owns the records of `answers` while the goal is open; its table
+    /// keeps copies (`keepAnswers`). Made for the first answer.
+    store: ?*ArenaAllocator = null,
 };
 
 /// One proof of a goal holding wvars: its record with every binding
@@ -388,8 +393,15 @@ const no_prune = std.math.maxInt(usize);
 
 pub const Prover = struct {
     allocator: std.mem.Allocator,
-    /// Owns the proof record; lives for the run.
+    /// Owns what the run remembers: the memos, the answer tables and the
+    /// naming pools.
     arena: std.mem.Allocator,
+    /// Owns the records of the steps being tried. Each `apply`, and each
+    /// try of a remembered or tabled proof, rewinds it as it returns, so it
+    /// holds only the records of the proof the run is on. What outlives
+    /// that is copied: a remembered proof to `arena`, an answer to its
+    /// frame's `store`.
+    records: ArenaAllocator,
     context: *const Context,
     terms: *Terms,
     wvars: *WVars,
@@ -474,6 +486,7 @@ pub const Prover = struct {
         self.answers_open.deinit(self.allocator);
         self.answers_shared.deinit(self.allocator);
         self.pools.deinit(self.allocator);
+        self.records.deinit();
         self.* = undefined;
     }
 
@@ -605,6 +618,8 @@ pub const Prover = struct {
             const rejects = self.stats.rejects;
             const mark = self.wvars.mark();
             defer self.wvars.rollback(mark);
+            const records = self.records.mark();
+            defer self.records.rewind(records);
             goal.slot.* = (try self.reuse(proof, order)) orelse break :reused;
             const outcome = try self.run(next);
             // As for the W5 prune: the proof bound nothing older, so no
@@ -636,6 +651,9 @@ pub const Prover = struct {
             while (it.next()) |sig| self.allocator.free(sig.*);
             frame.seen.deinit(self.allocator);
             frame.answers.deinit(self.allocator);
+            // Out of line, as in `apply`: inlined, it grows this frame,
+            // which each goal of a proof adds to the stack (`charge`).
+            if (frame.store) |store| @call(.never_inline, dropStore, .{ self, store });
         }
         self.next_frame += 1;
         const close = Agenda{ .item = .{ .close = &frame }, .next = next };
@@ -661,7 +679,7 @@ pub const Prover = struct {
             gop.value_ptr.* = .{
                 .depth = goal.depth,
                 .positions = try self.arena.dupe(u32, order),
-                .answers = try self.arena.dupe(Answer, frame.answers.items),
+                .answers = try self.keepAnswers(frame.answers.items),
             };
             return .failed;
         }
@@ -704,6 +722,8 @@ pub const Prover = struct {
             const rejects = self.stats.rejects;
             const mark = self.wvars.mark();
             defer self.wvars.rollback(mark);
+            const records = self.records.mark();
+            defer self.records.rewind(records);
             const bound = for (answer.values, order) |value, idx| {
                 const made = value orelse continue;
                 if (self.wvars.vars.items[idx].value != null) break false;
@@ -732,7 +752,13 @@ pub const Prover = struct {
         };
         var held = std.ArrayListUnmanaged(u32).empty;
         defer held.deinit(self.allocator);
-        const values = try self.arena.alloc(?ExprId, frame.order.len);
+        if (frame.store == null) {
+            const made = try self.allocator.create(ArenaAllocator);
+            made.* = ArenaAllocator.init(self.allocator);
+            frame.store = made;
+        }
+        const store = frame.store.?.allocator();
+        const values = try store.alloc(?ExprId, frame.order.len);
         for (frame.order, values) |idx, *out| {
             const value = self.wvars.vars.items[idx].value orelse {
                 out.* = null;
@@ -741,7 +767,7 @@ pub const Prover = struct {
             out.* = try self.wvars.deref(value, null);
             try self.wvars.collectUnbound(self.allocator, out.*.?, &held);
         }
-        const node = try self.resolveNode(frame.goal.slot.*.?, &held);
+        const node = try self.resolveNode(store, frame.goal.slot.*.?, &held);
         for (held.items) |idx| {
             if (std.mem.indexOfScalar(u32, frame.order, idx) == null) return;
         }
@@ -759,7 +785,7 @@ pub const Prover = struct {
 
         var leftovers = std.ArrayListUnmanaged(u32).empty;
         defer leftovers.deinit(self.allocator);
-        const node = try self.resolveNode(frame.goal.slot.*.?, &leftovers);
+        const node = try self.resolveNode(self.arena, frame.goal.slot.*.?, &leftovers);
         std.mem.sort(u32, leftovers.items, {}, std.sort.asc(u32));
         var internals = std.ArrayListUnmanaged(Internal).empty;
         for (leftovers.items) |idx| {
@@ -797,23 +823,58 @@ pub const Prover = struct {
         }
     }
 
-    /// A copy of `node` with every binding resolved; the unbound wvars it
-    /// holds go to `leftovers`.
-    fn resolveNode(self: *Prover, node: *const Node, leftovers: *std.ArrayListUnmanaged(u32)) Error!*const Node {
-        const copy = try self.arena.create(Node);
-        const children = try self.arena.alloc(?*const Node, node.children.len);
-        for (children, node.children) |*out, child| out.* = try self.resolveNode(child.?, leftovers);
+    /// A copy of `node` on `allocator` with every binding resolved; the
+    /// unbound wvars it holds go to `leftovers`.
+    fn resolveNode(
+        self: *Prover,
+        allocator: std.mem.Allocator,
+        node: *const Node,
+        leftovers: *std.ArrayListUnmanaged(u32),
+    ) Error!*const Node {
+        const copy = try allocator.create(Node);
+        const children = try allocator.alloc(?*const Node, node.children.len);
+        for (children, node.children) |*out, child| out.* = try self.resolveNode(allocator, child.?, leftovers);
         copy.* = .{ .step = node.step, .children = children };
         switch (node.step) {
             .ref => {},
             .rule => |step| {
-                const bindings = try self.arena.alloc(ExprId, step.bindings.len);
+                const bindings = try allocator.alloc(ExprId, step.bindings.len);
                 for (bindings, step.bindings) |*out, value| {
                     out.* = try self.wvars.deref(value, null);
                     try self.wvars.collectUnbound(self.allocator, out.*, leftovers);
                 }
                 copy.step = .{ .rule = .{ .rule_id = step.rule_id, .bindings = bindings } };
             },
+        }
+        return copy;
+    }
+
+    fn dropStore(self: *Prover, store: *ArenaAllocator) void {
+        store.deinit();
+        self.allocator.destroy(store);
+    }
+
+    /// A copy of a goal's `answers` for its table, which lives for the run.
+    fn keepAnswers(self: *Prover, answers: []const Answer) Error![]const Answer {
+        const kept = try self.arena.alloc(Answer, answers.len);
+        for (kept, answers) |*out, answer| out.* = .{
+            .node = try copyNode(self.arena, answer.node),
+            .values = try self.arena.dupe(?ExprId, answer.values),
+        };
+        return kept;
+    }
+
+    fn copyNode(allocator: std.mem.Allocator, node: *const Node) Error!*const Node {
+        const copy = try allocator.create(Node);
+        const children = try allocator.alloc(?*const Node, node.children.len);
+        for (children, node.children) |*out, child| out.* = try copyNode(allocator, child.?);
+        copy.* = .{ .step = node.step, .children = children };
+        switch (node.step) {
+            .ref => {},
+            .rule => |step| copy.step = .{ .rule = .{
+                .rule_id = step.rule_id,
+                .bindings = try allocator.dupe(ExprId, step.bindings),
+            } },
         }
         return copy;
     }
@@ -848,8 +909,9 @@ pub const Prover = struct {
             const at = internal.introduced_at orelse continue;
             const copy = &self.wvars.vars.items[self.wvars.of(map.get(internal.wvar).?).?];
             copy.introduced_at = try self.rename(at, &map, &memo);
+            // The copy keeps the list after the rollback (`WVars.arena`).
             copy.fresh_in = if (internal.fresh_in) |exprs| blk: {
-                const renamed = try self.arena.alloc(ExprId, exprs.len);
+                const renamed = try self.wvars.arena.alloc(ExprId, exprs.len);
                 for (renamed, exprs) |*out, expr| out.* = try self.rename(expr, &map, &memo);
                 break :blk renamed;
             } else null;
@@ -885,14 +947,15 @@ pub const Prover = struct {
         map: *const std.AutoHashMapUnmanaged(u32, ExprId),
         memo: *std.AutoHashMapUnmanaged(ExprId, ExprId),
     ) Error!*const Node {
-        const copy = try self.arena.create(Node);
-        const children = try self.arena.alloc(?*const Node, node.children.len);
+        const records = self.records.allocator();
+        const copy = try records.create(Node);
+        const children = try records.alloc(?*const Node, node.children.len);
         for (children, node.children) |*out, child| out.* = try self.renameNode(child.?, map, memo);
         copy.* = .{ .step = node.step, .children = children };
         switch (node.step) {
             .ref => {},
             .rule => |step| {
-                const bindings = try self.arena.alloc(ExprId, step.bindings.len);
+                const bindings = try records.alloc(ExprId, step.bindings.len);
                 for (bindings, step.bindings) |*out, value| out.* = try self.rename(value, map, memo);
                 copy.step = .{ .rule = .{ .rule_id = step.rule_id, .bindings = bindings } };
             },
@@ -1359,13 +1422,17 @@ pub const Prover = struct {
     fn apply(self: *Prover, applier: *Applier, bindings: []const ?ExprId) Error!Outcome {
         const start = self.wvars.mark();
         defer self.wvars.rollback(start);
+        const records = self.records.mark();
+        // Out of line: inlined, it grows this frame, which each step of a
+        // proof adds to the stack (`charge`).
+        defer @call(.never_inline, ArenaAllocator.rewind, .{ &self.records, records });
         var step: Step = undefined;
         var premises: []const TemplateExpr = &.{};
         var values: []const ExprId = &.{};
         var split: ?Split = null;
         var checks: []const Check = &.{};
         var abstract: ?Abstract = null;
-        // On the arena, as the step's other records are.
+        // On `records`, as the step's other records are.
         var reads = std.ArrayListUnmanaged(Recover).empty;
         var frees = std.ArrayListUnmanaged(Free).empty;
         if (!try self.sharesFit()) return .failed;
@@ -1380,11 +1447,11 @@ pub const Prover = struct {
                     if (entry.cuts.len != 0 and !self.relaxed) return .failed;
                     applier.pass = applier.frame.cuts;
                 }
-                const full = try self.arena.alloc(ExprId, bindings.len);
+                const full = try self.records.allocator().alloc(ExprId, bindings.len);
                 for (full, bindings) |*value, binding| value.* = binding orelse undefined;
                 premises = entry.premises;
                 values = full;
-                const filled = try self.arena.alloc(bool, bindings.len);
+                const filled = try self.records.allocator().alloc(bool, bindings.len);
                 for (filled, bindings) |*known, binding| known.* = binding != null;
                 // A share goes before the eigenvariables the step
                 // introduces, so none can end up in it, unless it depends
@@ -1424,7 +1491,7 @@ pub const Prover = struct {
                     abstract = .{ .abstraction = abstraction, .values = full };
                 }
                 if (shares.items.len != 0) {
-                    const fitted = try self.arena.alloc(?ExprId, shares.items.len);
+                    const fitted = try self.records.allocator().alloc(?ExprId, shares.items.len);
                     @memset(fitted, null);
                     split = .{ .shares = shares.items, .bag = self.terms.split.?, .outer = self.splits, .fitted = fitted };
                 }
@@ -1438,9 +1505,9 @@ pub const Prover = struct {
         std.debug.assert(invented == null or (applier.how == .rule and applier.how.rule.role == .unsafe));
         if (invented) |first| {
             var list = std.ArrayListUnmanaged(u32).empty;
-            try list.appendSlice(self.arena, applier.pass);
+            try list.appendSlice(self.records.allocator(), applier.pass);
             var cell: ?*const terms_mod.Invented = first;
-            while (cell) |c| : (cell = c.next) try list.append(self.arena, c.wvar);
+            while (cell) |c| : (cell = c.next) try list.append(self.records.allocator(), c.wvar);
             applier.pass = list.items;
         }
         // The cuts the step leaves open, passed on from the goal or
@@ -1449,8 +1516,8 @@ pub const Prover = struct {
         // so would any fact closing a bare one.
         var instantiated: ?[]const ExprId = null;
         if (applier.pass.len != 0) {
-            const exprs = try self.arena.alloc(ExprId, premises.len);
-            const held = try self.arena.alloc(bool, applier.pass.len);
+            const exprs = try self.records.allocator().alloc(ExprId, premises.len);
+            const held = try self.records.allocator().alloc(bool, applier.pass.len);
             @memset(held, false);
             var open = std.ArrayListUnmanaged(u32).empty;
             defer open.deinit(self.allocator);
@@ -1478,9 +1545,9 @@ pub const Prover = struct {
         applier.matched = true;
 
         const frame = applier.frame;
-        const children = try self.arena.alloc(?*const Node, premises.len);
+        const children = try self.records.allocator().alloc(?*const Node, premises.len);
         @memset(children, null);
-        const node = try self.arena.create(Node);
+        const node = try self.records.allocator().create(Node);
         node.* = .{ .step = step, .children = children };
         frame.goal.slot.* = node;
 
@@ -1624,7 +1691,7 @@ pub const Prover = struct {
         var count: usize = 0;
         var at: ?*const terms_mod.Postponed = list;
         while (at) |node| : (at = node.next) count += 1;
-        const checks = try self.arena.alloc(Check, count);
+        const checks = try self.records.allocator().alloc(Check, count);
         at = list;
         for (checks) |*made| {
             const node = at.?;
@@ -1745,7 +1812,7 @@ pub const Prover = struct {
     /// The binder values `full` of a step by `entry`, an abstraction, over
     /// the view's binders, as the rule's.
     fn ruleBindings(self: *Prover, entry: *const catalog_mod.Rule, full: []const ExprId) Error![]const ExprId {
-        const out = try self.arena.alloc(ExprId, self.context.env.rules.items[entry.rule_id].args.len);
+        const out = try self.records.allocator().alloc(ExprId, self.context.env.rules.items[entry.rule_id].args.len);
         for (entry.abstraction.?.view.binder_map, full) |arg, value| {
             if (arg) |idx| out[idx] = value;
         }
@@ -1960,7 +2027,7 @@ pub const Prover = struct {
     ) Error![]ExprId {
         const rule = &self.context.env.rules.items[entry.rule_id];
         // Null for a witness whose pattern or hole a cut fills.
-        const patterns = try self.arena.alloc(?ExprId, entry.witnesses.len);
+        const patterns = try self.records.allocator().alloc(?ExprId, entry.witnesses.len);
         for (entry.witnesses, patterns) |w, *pattern| {
             const known = filled[w.pattern] and filled[w.hole];
             pattern.* = if (known) try self.wvars.deref(full[w.pattern], null) else null;
@@ -1968,7 +2035,7 @@ pub const Prover = struct {
             switch (w.kind) {
                 .gamma => {
                     var capture = std.ArrayListUnmanaged(ExprId).empty;
-                    if (pattern.*) |at| try self.terms.boundAround(self.arena, at, full[w.hole], &capture);
+                    if (pattern.*) |at| try self.terms.boundAround(self.records.allocator(), at, full[w.hole], &capture);
                     full[w.arg] = try self.wvars.mint(sort_name, capture.items, false);
                 },
                 // Kept out of the goal, or, when an argument may hold it
@@ -1981,14 +2048,14 @@ pub const Prover = struct {
             }
             filled[w.arg] = true;
         }
-        const values = try self.arena.alloc(ExprId, view.num_binders);
+        const values = try self.records.allocator().alloc(ExprId, view.num_binders);
         for (entry.witnesses, patterns) |w, pattern| {
             if (pattern) |at| if (try self.terms.swap(at, full[w.hole], full[w.arg])) |instance| {
                 values[w.source] = instance;
                 continue;
             };
             values[w.source] = try self.wvars.mint(view.arg_infos[w.source].sort_name, &.{}, true);
-            try reads.append(self.arena, .{
+            try reads.append(self.records.allocator(), .{
                 .witness = w,
                 .values = full,
                 .source = values[w.source],
@@ -2012,7 +2079,7 @@ pub const Prover = struct {
             for (args, full, 0..) |other, value, idx| {
                 if (idx == w.arg or other.deps & args[w.arg].deps != 0) continue;
                 if (self.freshens(entry.rule_id, idx, w.arg)) {
-                    try frees.append(self.arena, .{ .eigen = full[w.arg], .value = value });
+                    try frees.append(self.records.allocator(), .{ .eigen = full[w.arg], .value = value });
                 } else try others.append(self.allocator, value);
             }
             if (!try self.wvars.bar(self.wvars.of(full[w.arg]).?, others.items)) return false;
@@ -2090,7 +2157,7 @@ pub const Prover = struct {
             if (filled[arg] or (args[arg].deps & eigen_deps != 0) != dependent) continue;
             full[arg] = try self.wvars.mint(args[arg].sort_name, &.{}, false);
             filled[arg] = true;
-            try shares.append(self.arena, self.wvars.of(full[arg]).?);
+            try shares.append(self.records.allocator(), self.wvars.of(full[arg]).?);
         }
     }
 
@@ -2442,7 +2509,7 @@ pub const Prover = struct {
                         if (arg.deps & other.deps != 0) continue;
                         const variable = try self.wvars.deref(value, null);
                         if (self.terms.theorem.interner.node(variable).* != .variable) continue;
-                        try capture.append(self.arena, variable);
+                        try capture.append(self.records.allocator(), variable);
                     }
                     break :blk try self.wvars.mint(arg.sort_name, capture.items, true);
                 },
@@ -2452,8 +2519,8 @@ pub const Prover = struct {
                     for (args, full, filled, 0..) |other, value, known, idx| {
                         if (!known or idx == c.arg or other.deps & arg.deps != 0) continue;
                         if (entry.abstraction == null and self.freshens(entry.rule_id, idx, c.arg)) {
-                            try frees.append(self.arena, .{ .eigen = undefined, .value = value });
-                        } else try fresh_in.append(self.arena, value);
+                            try frees.append(self.records.allocator(), .{ .eigen = undefined, .value = value });
+                        } else try fresh_in.append(self.records.allocator(), value);
                     }
                     const eigen = try self.wvars.introduce(arg.sort_name, goal, fresh_in.items);
                     for (frees.items[first..]) |*free| free.eigen = eigen;
