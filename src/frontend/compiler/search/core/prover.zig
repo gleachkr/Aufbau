@@ -265,6 +265,19 @@ const Answer = struct {
     values: []const ?ExprId,
 };
 
+/// Answer values compared by content (`Prover.replay`).
+const ValuesContext = struct {
+    pub fn hash(_: ValuesContext, values: []const ?ExprId) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        for (values) |value| std.hash.autoHash(&hasher, value);
+        return hasher.final();
+    }
+
+    pub fn eql(_: ValuesContext, a: []const ?ExprId, b: []const ?ExprId) bool {
+        return std.mem.eql(?ExprId, a, b);
+    }
+};
+
 /// Every proof of a goal at `depth`, in the order the search found them,
 /// over the goal's wvars `positions` in key order.
 const Answers = struct {
@@ -715,10 +728,10 @@ pub const Prover = struct {
         defer memo.deinit(self.allocator);
         // As the search did (W5 dedupe): an answer binding as an earlier one
         // did whose continuation failed fails the same way.
-        var failed = std.ArrayListUnmanaged([]const ?ExprId).empty;
+        var failed = std.HashMapUnmanaged([]const ?ExprId, void, ValuesContext, std.hash_map.default_max_load_percentage).empty;
         defer failed.deinit(self.allocator);
-        answers: for (table.answers) |answer| {
-            for (failed.items) |values| if (std.mem.eql(?ExprId, values, answer.values)) continue :answers;
+        for (table.answers) |answer| {
+            if (failed.contains(answer.values)) continue;
             const rejects = self.stats.rejects;
             const mark = self.wvars.mark();
             defer self.wvars.rollback(mark);
@@ -733,7 +746,7 @@ pub const Prover = struct {
             goal.slot.* = try self.renameNode(answer.node, &map, &memo);
             const outcome = try self.run(next);
             if (outcome != .failed) return outcome;
-            if (self.stats.rejects == rejects) try failed.append(self.allocator, answer.values);
+            if (self.stats.rejects == rejects) try failed.put(self.allocator, answer.values, {});
         }
         return .failed;
     }
@@ -2246,8 +2259,8 @@ pub const Prover = struct {
         var members: ?AcuiBag.ExprBag = null;
         for (split.shares) |idx| {
             const value = self.wvars.vars.items[idx].value orelse continue;
-            const held = bag.combiner.flatten(self.terms.theorem, try self.terms.resolveGoal(value)) orelse
-                return error.Unsupported;
+            var held: AcuiBag.ExprBag = undefined;
+            try self.terms.bagMembers(bag.combiner, try self.terms.resolveGoal(value), &held);
             for (held.slice()) |member| {
                 const part = self.wvars.of(member) orelse continue;
                 if (!std.mem.eql(u8, self.wvars.vars.items[part].sort_name, sort)) continue;
@@ -2326,8 +2339,8 @@ pub const Prover = struct {
         // shares count.
         for (split.shares) |idx| {
             const value = self.wvars.vars.items[idx].value orelse continue;
-            const held = bag.combiner.flatten(self.terms.theorem, try self.terms.resolveGoal(value)) orelse
-                return error.Unsupported;
+            var held: AcuiBag.ExprBag = undefined;
+            try self.terms.bagMembers(bag.combiner, try self.terms.resolveGoal(value), &held);
             held: for (held.slice()) |member| {
                 var known = false;
                 for (all.slice(), 0..) |candidate, at| {
@@ -2378,8 +2391,8 @@ pub const Prover = struct {
                         if (try self.wvars.holdsWVar(resolved)) ground = false;
                     }
                 }
-                const held = split.bag.combiner.flatten(self.terms.theorem, try self.terms.resolveGoal(value)) orelse
-                    return error.Unsupported;
+                var held: AcuiBag.ExprBag = undefined;
+                try self.terms.bagMembers(split.bag.combiner, try self.terms.resolveGoal(value), &held);
                 for (held.slice()) |member| {
                     if (std.mem.indexOfScalar(ExprId, members.slice(), member) != null) continue;
                     for (members.slice()) |other| {
@@ -2418,7 +2431,8 @@ pub const Prover = struct {
         defer strays.deinit(self.allocator);
         for (split.shares) |idx| {
             const value = try self.terms.resolveGoal(self.wvars.vars.items[idx].expr);
-            const held = bag.combiner.flatten(self.terms.theorem, value) orelse return error.Unsupported;
+            var held: AcuiBag.ExprBag = undefined;
+            try self.terms.bagMembers(bag.combiner, value, &held);
             for (held.slice()) |member| {
                 if (std.mem.indexOfScalar(ExprId, members.slice(), member) == null) try strays.append(self.allocator, member);
             }

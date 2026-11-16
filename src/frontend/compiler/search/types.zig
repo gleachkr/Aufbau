@@ -346,6 +346,11 @@ pub const core_compare_weight: u64 = 14;
 pub const core_match_weight: u64 = 31;
 pub const core_wvar_weight: u64 = 9;
 pub const core_key_weight: u64 = 5;
+/// The bag work, fit on searches over long sums and products (Cardano),
+/// where it is most of the cost: resolving an expression under the current
+/// bindings, which mostly finds it ground, and reading a member of a bag.
+pub const core_resolve_weight: u64 = 7;
+pub const core_member_weight: u64 = 12;
 
 /// The budget's cost unit: weighted ticks.
 pub fn weightedTicks(

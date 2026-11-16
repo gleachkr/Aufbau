@@ -39,6 +39,7 @@
 
 const std = @import("std");
 const expr_mod = @import("../../../expr.zig");
+const AcuiBag = @import("../../../acui_bag.zig");
 const ExprId = expr_mod.ExprId;
 const Terms = @import("./terms.zig").Terms;
 const terms_mod = @import("./terms.zig");
@@ -199,7 +200,8 @@ pub const Keys = struct {
             .placeholder => if (self.wvars.of(expr)) |idx| try self.order.append(self.allocator, idx),
             .app => |app| {
                 if (self.terms.bagFor(app.term_id)) |combiner| {
-                    const members = combiner.flatten(self.terms.theorem, expr) orelse return error.Unsupported;
+                    var members: AcuiBag.ExprBag = undefined;
+                    try self.terms.bagMembers(combiner, expr, &members);
                     const sorted = try self.allocator.dupe(ExprId, members.slice());
                     defer self.allocator.free(sorted);
                     const shapes = try self.allocator.alloc(u64, sorted.len);
@@ -251,7 +253,8 @@ pub const Keys = struct {
                     for (app.args) |arg| try self.write(arg, out);
                     return;
                 };
-                const members = combiner.flatten(self.terms.theorem, expr) orelse return error.Unsupported;
+                var members: AcuiBag.ExprBag = undefined;
+                try self.terms.bagMembers(combiner, expr, &members);
                 const written = try self.allocator.alloc([]u8, members.len);
                 var done: usize = 0;
                 defer {
@@ -298,7 +301,8 @@ pub const Keys = struct {
                 hasher.update("a");
                 hasher.update(std.mem.asBytes(&app.term_id));
                 if (self.terms.bagFor(app.term_id)) |combiner| {
-                    const members = combiner.flatten(self.terms.theorem, expr) orelse return error.Unsupported;
+                    var members: AcuiBag.ExprBag = undefined;
+                    try self.terms.bagMembers(combiner, expr, &members);
                     const shapes = try self.allocator.alloc(u64, members.len);
                     defer self.allocator.free(shapes);
                     for (members.slice(), shapes) |member, *out| out.* = try self.shape(member);

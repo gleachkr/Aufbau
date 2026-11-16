@@ -565,7 +565,8 @@ pub const Terms = struct {
             .variable, .placeholder => expr,
             .app => |app| blk: {
                 if (self.bagFor(app.term_id)) |combiner| {
-                    const members = combiner.flatten(self.theorem, expr) orelse return error.Unsupported;
+                    var members: AcuiBag.ExprBag = undefined;
+                    try self.bagMembers(combiner, expr, &members);
                     var out: AcuiBag.ExprBag = .{};
                     for (members.slice()) |member| {
                         if (!out.append(try self.canonical(member))) return error.Unsupported;
@@ -597,8 +598,15 @@ pub const Terms = struct {
 
     /// `expr` with the current bindings applied, canonical.
     pub fn resolveGoal(self: *Terms, expr: ExprId) Error!ExprId {
+        expr_mod.work_ticks_core +%= types.core_resolve_weight;
         if (!try self.wvars.holdsWVar(expr)) return expr;
         return self.canonical(try self.wvars.deref(expr, null));
+    }
+
+    /// The members of `expr` as `combiner`'s bag, into `out`.
+    pub fn bagMembers(self: *Terms, combiner: AcuiBag.Combiner, expr: ExprId, out: *AcuiBag.ExprBag) Error!void {
+        if (!combiner.flattenInto(self.theorem, expr, out)) return error.Unsupported;
+        expr_mod.work_ticks_core +%= types.core_member_weight * out.len;
     }
 
     /// Whether `a` and `b` are equal under the current bindings.
@@ -777,7 +785,8 @@ pub const Terms = struct {
                     var out: AcuiBag.ExprBag = .{};
                     for (parts.slice()) |part| {
                         const value = try self.instantiate(part, bindings);
-                        const members = combiner.flatten(self.theorem, value) orelse return error.Unsupported;
+                        var members: AcuiBag.ExprBag = undefined;
+                        try self.bagMembers(combiner, value, &members);
                         for (members.slice()) |member| {
                             if (!out.append(member)) return error.Unsupported;
                         }
@@ -1431,8 +1440,10 @@ fn Matcher(comptime Sink: type) type {
         /// can make them equal. When exactly one bag holds one unbound wvar
         /// of the bag's sort, that bag is `a` and the wvar its `absorb`.
         fn preparePairing(self: *Self, combiner: AcuiBag.Combiner, lhs: ExprId, rhs: ExprId) Error!?BagPairing {
-            var a = combiner.flatten(self.terms.theorem, lhs) orelse return error.Unsupported;
-            var b = combiner.flatten(self.terms.theorem, rhs) orelse return error.Unsupported;
+            var a: AcuiBag.ExprBag = undefined;
+            try self.terms.bagMembers(combiner, lhs, &a);
+            var b: AcuiBag.ExprBag = undefined;
+            try self.terms.bagMembers(combiner, rhs, &b);
             const a_part = self.partOf(combiner, a.slice());
             const b_part = self.partOf(combiner, b.slice());
             var absorb: ?ExprId = null;
@@ -1567,7 +1578,8 @@ fn Matcher(comptime Sink: type) type {
         /// stays on the stack for the rest of the proof, so it holds only
         /// these slices.
         fn prepareBag(self: *Self, combiner: AcuiBag.Combiner, template: TemplateExpr, expr: ExprId) Error!BagState {
-            const members = combiner.flatten(self.terms.theorem, expr) orelse return error.Unsupported;
+            var members: AcuiBag.ExprBag = undefined;
+            try self.terms.bagMembers(combiner, expr, &members);
             return self.prepareParts(combiner, template, members.slice());
         }
 
@@ -1707,7 +1719,8 @@ fn Matcher(comptime Sink: type) type {
         /// `state.used` with a goal member taken for each member of
         /// `value`, or null when one has none.
         fn takeAll(self: *Self, state: BagState, value: ExprId) Error!?u64 {
-            const members = state.combiner.flatten(self.terms.theorem, value) orelse return error.Unsupported;
+            var members: AcuiBag.ExprBag = undefined;
+            try self.terms.bagMembers(state.combiner, value, &members);
             var used = state.used;
             for (members.slice()) |member| {
                 used |= (try self.takeMember(state.combiner, state.goal, used, member)) orelse return null;
@@ -1773,8 +1786,8 @@ fn Matcher(comptime Sink: type) type {
         /// of the fixed-capacity bags as `prepareBag` does.
         fn prepareSeq(self: *Self, combiner: AcuiBag.Combiner, template: TemplateExpr, expr: ExprId) Error!SeqState {
             const parts = combiner.flattenTemplate(template) orelse return error.Unsupported;
-            const members = combiner.flatten(self.terms.theorem, try self.terms.resolveGoal(expr)) orelse
-                return error.Unsupported;
+            var members: AcuiBag.ExprBag = undefined;
+            try self.terms.bagMembers(combiner, try self.terms.resolveGoal(expr), &members);
             const allocator = self.terms.allocator;
             const owned = try allocator.dupe(TemplateExpr, parts.slice());
             errdefer allocator.free(owned);
@@ -1847,8 +1860,10 @@ fn Matcher(comptime Sink: type) type {
         /// bags; null when no pairing can make the sequences equal.
         fn prepareSeqPairing(self: *Self, combiner: AcuiBag.Combiner, lhs: ExprId, rhs: ExprId) Error!?SeqPairing {
             const theorem = self.terms.theorem;
-            var a = combiner.flatten(theorem, try self.terms.resolveGoal(lhs)) orelse return error.Unsupported;
-            var b = combiner.flatten(theorem, try self.terms.resolveGoal(rhs)) orelse return error.Unsupported;
+            var a: AcuiBag.ExprBag = undefined;
+            try self.terms.bagMembers(combiner, try self.terms.resolveGoal(lhs), &a);
+            var b: AcuiBag.ExprBag = undefined;
+            try self.terms.bagMembers(combiner, try self.terms.resolveGoal(rhs), &b);
             const a_part = self.partOf(combiner, a.slice());
             const b_part = self.partOf(combiner, b.slice());
             const allocator = self.terms.allocator;

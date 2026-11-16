@@ -173,8 +173,8 @@ core; `exact?` and `apply?` draw from the same kind of budget. The unit is
 probe levels (one per copy-on-write base-chain hop), def-eq symbolic-node
 allocations, non-interning tree-walk node visits, a fixed charge per
 `spendCandidate` (the clone and setup overhead of one checker attempt), and
-the core's own comparisons, matcher steps and walks, which add their weights
-to `work_ticks_core` directly. Units ≈ ns of calibrated wall, so the default
+the core's own comparisons, matcher steps, walks, resolves and bag members
+read, which add their weights to `work_ticks_core` directly. Units ≈ ns of calibrated wall, so the default
 reads as "≈2.3 s of work".
 
 The budget is checked at each goal the core expands (`Prover.charge`) and at

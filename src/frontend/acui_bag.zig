@@ -309,21 +309,35 @@ pub const Combiner = struct {
         theorem: *const TheoremContext,
         expr: ExprId,
     ) ?ExprBag {
-        var fill: Fill(ExprId) = .{};
+        var bag: ExprBag = .{};
+        return if (self.flattenInto(theorem, expr, &bag)) bag else null;
+    }
+
+    /// `flatten` into `out`, which it empties first; false on overflow. For
+    /// hot paths: a returned bag is copied whole, `capacity` members.
+    pub fn flattenInto(
+        self: Combiner,
+        theorem: *const TheoremContext,
+        expr: ExprId,
+        out: *ExprBag,
+    ) bool {
+        out.len = 0;
+        var fill: Fill(ExprId) = .{ .bag = out };
         self.spine().visit(theorem, expr, &fill);
-        return if (fill.overflow) null else fill.bag;
+        return !fill.overflow;
     }
 
     /// `flatten` for a rule template. Binders are members.
     pub fn flattenTemplate(self: Combiner, template: TemplateExpr) ?TemplateBag {
-        var fill: Fill(TemplateExpr) = .{};
+        var bag: TemplateBag = .{};
+        var fill: Fill(TemplateExpr) = .{ .bag = &bag };
         self.spine().visitTemplate(template, &fill);
-        return if (fill.overflow) null else fill.bag;
+        return if (fill.overflow) null else bag;
     }
 
     fn Fill(comptime T: type) type {
         return struct {
-            bag: Members(T) = .{},
+            bag: *Members(T),
             overflow: bool = false,
 
             pub fn leaf(self: *@This(), item: T) void {
