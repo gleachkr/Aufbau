@@ -25,7 +25,6 @@ const UnresolvedDummyRoot = Types.UnresolvedDummyRoot;
 const MaterializedDummyAssignment =
     Types.MaterializedDummyAssignment;
 const MatchSession = MatchState.MatchSession;
-const default_semantic_match_budget: usize = 8;
 
 pub const OptionalBindingSnapshot = struct {
     bindings: []?ExprId,
@@ -436,31 +435,18 @@ pub const RuleMatchSession = struct {
         );
     }
 
-    pub fn matchSemantic(
+    /// `matchTransparent` modulo `@rewrite` normal forms
+    /// (`MatchSession.rewrites`).
+    pub fn matchModuloRewrites(
         self: *RuleMatchSession,
         template: TemplateExpr,
         actual: ExprId,
-        budget: usize,
     ) anyerror!bool {
         var symbolic_engine = self.engine();
-        return try symbolic_engine.matchTemplateSemanticState(
+        return try symbolic_engine.matchTemplateModuloRewrites(
             template,
             actual,
             &self.state,
-            budget,
-        );
-    }
-
-    pub fn matchTransparentOrSemantic(
-        self: *RuleMatchSession,
-        template: TemplateExpr,
-        actual: ExprId,
-    ) anyerror!bool {
-        if (try self.matchTransparent(template, actual)) return true;
-        return try self.matchSemantic(
-            template,
-            actual,
-            default_semantic_match_budget,
         );
     }
 
@@ -842,7 +828,6 @@ pub const RuleMatchSession = struct {
         actual: ExprId,
         hole_idx: usize,
         target_idx: usize,
-        budget: usize,
     ) !bool {
         if (pattern_idx >= self.state.bindings.len or
             hole_idx >= self.state.bindings.len or
@@ -886,11 +871,10 @@ pub const RuleMatchSession = struct {
             hole_expr,
             replacement,
         );
-        return try symbolic_engine.matchSymbolicToExprSemantic(
+        return try symbolic_engine.matchSymbolicToExprModuloRewrites(
             guided,
             actual,
             &self.state,
-            budget,
         );
     }
 
@@ -898,7 +882,6 @@ pub const RuleMatchSession = struct {
         self: *RuleMatchSession,
         idx: usize,
         actual: ExprId,
-        budget: usize,
     ) !bool {
         if (idx >= self.state.bindings.len) {
             return error.TemplateBinderOutOfRange;
@@ -915,18 +898,16 @@ pub const RuleMatchSession = struct {
                 const symbolic = try symbolic_engine.allocSymbolic(.{
                     .fixed = expr_id,
                 });
-                break :blk try symbolic_engine.matchSymbolicToExprSemantic(
+                break :blk try symbolic_engine.matchSymbolicToExprModuloRewrites(
                     symbolic,
                     actual,
                     &self.state,
-                    budget,
                 );
             },
-            .symbolic => |symbolic| try symbolic_engine.matchSymbolicToExprSemantic(
+            .symbolic => |symbolic| try symbolic_engine.matchSymbolicToExprModuloRewrites(
                 symbolic.expr,
                 actual,
                 &self.state,
-                budget,
             ),
         };
     }

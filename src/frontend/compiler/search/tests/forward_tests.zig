@@ -630,10 +630,11 @@ test "auto names a binder def's hidden variables from the @vars pool" {
     );
     defer suggestions.deinit();
 
-    // Unused pool tokens name the unfolded dummies, in both recipe layers.
+    // Unused pool tokens name the unfolded dummies. The outer layer's
+    // binding is trimmed: the checker reads it off the inner layer's
+    // conclusion at its rewrite normal form.
     try expectOffered(suggestions.items, &.{
-        "all_elim (p := $ pair f u = pair f a → u = a $) " ++
-            "[all_elim (t := $ u $, p := $ ∀ a (pair f b = pair f a → b = a) $) [#1]]",
+        "all_elim [all_elim (t := $ u $, p := $ ∀ a (pair f b = pair f a → b = a) $) [#1]]",
     });
 }
 

@@ -13,20 +13,10 @@ const Context = DefOps.Context;
 const Testing = DefOps.Testing;
 const MatchSession = Testing.MatchSession;
 const SymbolicExpr = Testing.SymbolicExpr;
-const SemanticStepCandidate = DefOps.SemanticStepCandidate;
-const SemanticStepFixture = Fixtures.SemanticStepFixture;
-const SemanticAcuiExposureFixture = Fixtures.SemanticAcuiExposureFixture;
-const SemanticWrappedAcuiDefFixture =
-    Fixtures.SemanticWrappedAcuiDefFixture;
-const SemanticQuantifiedAcuiDefFixture =
-    Fixtures.SemanticQuantifiedAcuiDefFixture;
-const allocNoneSeeds = Fixtures.allocNoneSeeds;
-const hasConcreteUnfold = Fixtures.hasConcreteUnfold;
-const hasSymbolicUnfold = Fixtures.hasSymbolicUnfold;
-const hasRewriteRule = Fixtures.hasRewriteRule;
+const RewriteFixture = Fixtures.RewriteFixture;
 
 test "rewrite application works on concrete roots" {
-    var fixture = try SemanticStepFixture.init();
+    var fixture = try RewriteFixture.init();
     defer fixture.deinit();
 
     var ctx = Context.initWithRegistry(
@@ -87,7 +77,7 @@ test "rewrite application works on concrete roots" {
 }
 
 test "rewrite application keeps hidden dummies symbolic" {
-    var fixture = try SemanticStepFixture.init();
+    var fixture = try RewriteFixture.init();
     defer fixture.deinit();
 
     var ctx = Context.initWithRegistry(
@@ -178,7 +168,7 @@ test "rewrite application keeps hidden dummies symbolic" {
 }
 
 test "failed rewrite application restores witness state" {
-    var fixture = try SemanticStepFixture.init();
+    var fixture = try RewriteFixture.init();
     defer fixture.deinit();
 
     var ctx = Context.initWithRegistry(
@@ -236,7 +226,7 @@ test "failed rewrite application restores witness state" {
 }
 
 test "rewrite application ignores placeholder roots" {
-    var fixture = try SemanticStepFixture.init();
+    var fixture = try RewriteFixture.init();
     defer fixture.deinit();
 
     var ctx = Context.initWithRegistry(

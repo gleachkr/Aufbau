@@ -714,7 +714,7 @@ pub const Solver = struct {
         );
         defer session.deinit();
 
-        if (!try session.matchTransparentOrSemantic(
+        if (!try session.matchModuloRewrites(
             constraint.template,
             constraint.actual,
         )) {

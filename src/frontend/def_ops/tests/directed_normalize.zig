@@ -8,10 +8,10 @@ const Context = DefOps.Context;
 const Testing = DefOps.Testing;
 const MatchSession = Testing.MatchSession;
 const SymbolicExpr = Testing.SymbolicExpr;
-const SemanticStepFixture = Fixtures.SemanticStepFixture;
+const RewriteFixture = Fixtures.RewriteFixture;
 
 test "big-step normalization opens nested fixed subtrees" {
-    var fixture = try SemanticStepFixture.init();
+    var fixture = try RewriteFixture.init();
     defer fixture.deinit();
 
     var ctx = Context.initWithRegistry(
@@ -54,9 +54,8 @@ test "big-step normalization opens nested fixed subtrees" {
         &state,
     )) orelse return error.BigStepMissedNestedFixed;
 
-    // (g o f) o alpha reduces to g o (f o alpha) under comp_assoc; budget 0
-    // permits no further semantic steps, so this is a structural match of
-    // the normal form.
+    // (g o f) o alpha reduces to g o (f o alpha) under comp_assoc; the
+    // normal form matches the expected expression structurally.
     const f = fixture.theorem.theorem_vars.items[0];
     const alpha = fixture.theorem.theorem_vars.items[2];
     const foa = try fixture.theorem.interner.internApp(
@@ -71,17 +70,16 @@ test "big-step normalization opens nested fixed subtrees" {
         mor_eq_term_id,
         &[_]ExprId{ nf, g },
     );
-    try std.testing.expect(try Testing.matchSymbolicToExprSemantic(
+    try std.testing.expect(try Testing.matchSymbolicToExprModuloRewrites(
         &ctx,
         reduced,
         expected,
         &state,
-        0,
     ));
 
-    // The semantic search must OFFER that big-step at mor_eq, despite
-    // mor_eq itself having no rewrite rules. One step cannot both descend
-    // into its child and rewrite there. Cover symbolic and fixed roots.
+    // Matching modulo rewrites must reach that normal form from mor_eq,
+    // although mor_eq itself has no rewrite rules: the redex sits in its
+    // child. Cover symbolic and fixed roots.
     const concrete = try fixture.theorem.interner.internApp(
         mor_eq_term_id,
         &.{ fixture.comp_expr, g },
@@ -93,12 +91,70 @@ test "big-step normalization opens nested fixed subtrees" {
             0,
         );
         defer search_state.deinit(fixture.arena.allocator());
-        try std.testing.expect(try Testing.matchSymbolicToExprSemantic(
+        try std.testing.expect(try Testing.matchSymbolicToExprModuloRewrites(
             &ctx,
             original,
             expected,
             &search_state,
-            1,
         ));
+    }
+}
+
+test "normalization that takes all the fuel still reaches its normal form" {
+    // Right-associating a left comb of n leaves takes (n-1)(n-2)/2
+    // `comp_assoc` steps: 28 for 9 leaves and 36 for 10, so
+    // `L9 ~ L10` uses exactly the 64 units of fuel. Its last step leaves
+    // `comp` apps where no rule fires: that is a normal form, not a fuel
+    // stop. `L10 ~ L10` needs 72 and is cut off.
+    var fixture = try RewriteFixture.init();
+    defer fixture.deinit();
+
+    var ctx = Context.initWithRegistry(
+        fixture.arena.allocator(),
+        &fixture.theorem,
+        &fixture.env,
+        &fixture.registry,
+    );
+    defer ctx.deinit();
+
+    const mor_eq_term_id = fixture.env.term_names.get("mor_eq") orelse {
+        return error.MissingTerm;
+    };
+    // f, g, alpha in turn: no two neighbours are equal, so `dup_left`
+    // never fires.
+    const leaves = fixture.theorem.theorem_vars.items[0..3];
+    const comb = struct {
+        fn left(fx: *RewriteFixture, ls: []const ExprId, n: usize) !ExprId {
+            var acc = ls[0];
+            for (1..n) |i| {
+                acc = try fx.theorem.interner.internApp(
+                    fx.comp_term_id,
+                    &[_]ExprId{ acc, ls[i % ls.len] },
+                );
+            }
+            return acc;
+        }
+    }.left;
+
+    const Row = struct { lhs: usize, rhs: usize, exhausted: bool };
+    for ([_]Row{
+        .{ .lhs = 9, .rhs = 10, .exhausted = false },
+        .{ .lhs = 10, .rhs = 10, .exhausted = true },
+    }) |row| {
+        const expr = try fixture.theorem.interner.internApp(
+            mor_eq_term_id,
+            &[_]ExprId{
+                try comb(&fixture, leaves, row.lhs),
+                try comb(&fixture, leaves, row.rhs),
+            },
+        );
+        var state = try MatchSession.init(fixture.arena.allocator(), 0);
+        defer state.deinit(fixture.arena.allocator());
+        _ = try Testing.bigStepSymbolic(
+            &ctx,
+            try Testing.allocSymbolic(&ctx, .{ .fixed = expr }),
+            &state,
+        ) orelse return error.NoReduction;
+        try std.testing.expectEqual(row.exhausted, state.rewrite_fuel_exhausted);
     }
 }

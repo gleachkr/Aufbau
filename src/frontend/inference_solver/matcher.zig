@@ -194,7 +194,7 @@ fn matchBinderSymbolically(
     var session = try def_ops.beginRuleMatchFromSeedState(args, seed_state);
     defer session.deinit();
 
-    if (!try session.matchTransparentOrSemantic(.{ .binder = idx }, actual)) {
+    if (!try session.matchModuloRewrites(.{ .binder = idx }, actual)) {
         return null;
     }
 

@@ -756,10 +756,9 @@ fn expectNestedView(
         };
         var session = try def_ops.beginRuleMatch(view.arg_infos, &seeds);
         defer session.deinit();
-        try std.testing.expect(try session.matchSemantic(
+        try std.testing.expect(try session.matchModuloRewrites(
             view.concl,
             line_expr,
-            DefOps.default_semantic_match_budget,
         ));
 
         const bad_line = try parser.parseFormulaText(
@@ -770,10 +769,9 @@ fn expectNestedView(
         const bad_expr = try theorem.internParsedExpr(bad_line);
         var bad_session = try def_ops.beginRuleMatch(view.arg_infos, &seeds);
         defer bad_session.deinit();
-        try std.testing.expect(!try bad_session.matchSemantic(
+        try std.testing.expect(!try bad_session.matchModuloRewrites(
             view.concl,
             bad_expr,
-            DefOps.default_semantic_match_budget,
         ));
     }
 }

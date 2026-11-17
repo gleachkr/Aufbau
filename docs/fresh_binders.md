@@ -28,7 +28,7 @@ that readers understand to be variables of a particular sort, without
 needing each theorem to redeclare them.
 
 The same pools also back hidden-dummy finalization. Advanced matching and
-semantic def exposure keep bound hidden witnesses symbolic for most of
+def exposure keep bound hidden witnesses symbolic for most of
 elaboration. Final rule instantiation, or the narrow proof-producing
 conclusion-normalization fallback, may still need to materialize a witness as
 a real theorem-local variable. Those escape paths reuse the sort's `@vars`

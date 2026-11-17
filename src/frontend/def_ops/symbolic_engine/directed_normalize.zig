@@ -1,15 +1,12 @@
 //! Directed rewrite normalization over symbolic expressions.
 //!
-//! Big-step reduction for the semantic def-eq search (task #181, subsuming
-//! the task-#180 conclusion fallback). After `beta` matches `Y · g` by
-//! opening `Y`, its conclusion's `[x := a] e` side holds symbolic values
-//! carrying unmaterialized def dummies — the strict normalizer cannot touch
-//! it (not concrete), and pricing each `@rewrite` reduction as its own
-//! semantic step makes a substitution ladder unpayable within the search
-//! budget. Here the `@rewrite` rules are applied to a fixpoint as ONE
-//! semantic step, dummies staying in place; the search's ordinary direct
-//! match of the normal form is what forces each dummy's witness (e.g. the
-//! stated line's bound variable).
+//! An opened def body can hold symbolic values carrying unmaterialized def
+//! dummies (after `beta` matches `Y · g` by opening `Y`, its conclusion's
+//! `[x := a] e` side does), which the concrete normalizer cannot touch. Here
+//! the `@rewrite` rules are applied to a fixpoint with the dummies left in
+//! place; the deterministic matcher then compares the normal form directly,
+//! and that match is what forces each dummy's witness (e.g. the stated
+//! line's bound variable).
 
 const std = @import("std");
 const ExprId = @import("../../expr.zig").ExprId;
@@ -20,17 +17,17 @@ const RewriteApplication = @import("./rewrite_application.zig");
 const SymbolicExpr = Types.SymbolicExpr;
 const MatchSession = MatchState.MatchSession;
 
-/// Rule applications allowed per big-step. The reductions this path exists
-/// for (substitution ladders under a def unfold) take a few dozen steps; the
-/// cap only guards non-terminating rule sets.
+/// Rule applications allowed per normalization. The reductions this path
+/// exists for (substitution ladders under a def unfold) take a few dozen
+/// steps; the cap only guards non-terminating rule sets.
 const directed_normalize_fuel: usize = 64;
 
 pub const Fuel = struct {
     remaining: usize = directed_normalize_fuel,
-    /// Set when the cap was hit while rewrite rules remained to try, so a
-    /// failed match may be a fuel artifact rather than a real mismatch.
-    /// Recorded as `MatchSession.rewrite_fuel_exhausted` by the big-step
-    /// entry points and surfaced as a `--debug inference` trace upstream.
+    /// Set when a rule would fire with no fuel left, so a failed match may
+    /// be a fuel artifact rather than a real mismatch.
+    /// Recorded as `MatchSession.rewrite_fuel_exhausted` by `bigStepSymbolic`
+    /// and `normalForm`, and surfaced as a `--debug inference` trace upstream.
     exhausted: bool = false,
 };
 
@@ -55,9 +52,9 @@ pub fn normalizeSymbolicRewrites(
             .app => |app| app,
             .binder, .dummy => return current,
             // Nested fixed subtrees (rule-rhs substitution entries, def
-            // expansions) can hold rewritable redexes; open and reduce them
-            // like `bigStepExpr` does at the root. Keep the original node
-            // when nothing fires so no-op passes preserve identity.
+            // expansions) can hold rewritable redexes; open and reduce them.
+            // Keep the original node when nothing fires so no-op passes
+            // preserve identity.
             .fixed => |expr_id| {
                 const registry = self.shared.registry orelse return current;
                 const opened = (try openExprForNormalize(
@@ -104,16 +101,19 @@ pub fn normalizeSymbolicRewrites(
             else => return current,
         };
         for (registry.getRewriteRules(head)) |rule| {
-            if (fuel.remaining == 0) {
-                fuel.exhausted = true;
-                return current;
-            }
             if (try RewriteApplication.applyRewriteRuleToSymbolic(
                 self,
                 rule,
                 current,
                 state,
             )) |next| {
+                // Out of fuel only when a rule would still fire: a term
+                // that reaches its fixpoint on the last unit has a normal
+                // form.
+                if (fuel.remaining == 0) {
+                    fuel.exhausted = true;
+                    return current;
+                }
                 fuel.remaining -= 1;
                 current = try RewriteApplication.resolveBoundBinderSymbolic(
                     self,
@@ -127,10 +127,9 @@ pub fn normalizeSymbolicRewrites(
     }
 }
 
-/// One semantic-search big-step over a symbolic expression: reduce it to a
-/// directed-rewrite fixpoint, priced by the caller as a single step. Returns
-/// null when no rule applied anywhere — the step is a no-op and must not be
-/// recursed on as progress.
+/// Reduce a symbolic expression to a directed-rewrite fixpoint (or as far as
+/// the fuel allows). Returns null when no rule applied anywhere, so the
+/// caller keeps its original node.
 pub fn bigStepSymbolic(
     self: anytype,
     symbolic: *const SymbolicExpr,
@@ -143,28 +142,35 @@ pub fn bigStepSymbolic(
     return next;
 }
 
-/// One semantic-search big-step over a concrete expression. App nodes above
-/// a rewritable head are opened into symbolic apps so the bottom-up
-/// recursion can reduce nested redexes; subtrees with no rewritable head
-/// anywhere stay `.fixed` (nothing in them can reduce, and rule-lhs matching
-/// reads through fixed nodes concretely). Returns null when no rule applied.
-pub fn bigStepExpr(
+pub const NormalForm = struct {
+    expr: *const SymbolicExpr,
+    /// A rule fired somewhere: `expr` differs from the input.
+    changed: bool,
+};
+
+/// `symbolic` at its rewrite normal form. Null when the fuel ran out before
+/// a fixpoint: there is no normal form to compare, and comparing the partial
+/// reduct again would only reduce it further.
+pub fn normalForm(
     self: anytype,
-    expr_id: ExprId,
+    symbolic: *const SymbolicExpr,
     state: *MatchSession,
-) anyerror!?*const SymbolicExpr {
-    const registry = self.shared.registry orelse return null;
-    const opened = (try openExprForNormalize(
-        self,
-        registry,
-        expr_id,
-    )) orelse return null;
-    return try bigStepSymbolic(self, opened, state);
+) anyerror!?NormalForm {
+    var fuel = Fuel{};
+    const next = try normalizeSymbolicRewrites(self, symbolic, state, &fuel);
+    if (fuel.exhausted) {
+        state.rewrite_fuel_exhausted = true;
+        return null;
+    }
+    return .{ .expr = next, .changed = fuel.remaining != directed_normalize_fuel };
 }
 
 /// Convert a concrete expression into the symbolic shape the normalizer can
-/// reduce. Returns null when the subtree contains no rewritable head — the
-/// caller keeps it `.fixed` (or skips the big-step entirely at the root).
+/// reduce: app nodes above a rewritable head are opened into symbolic apps so
+/// the bottom-up recursion can reduce nested redexes. Returns null when the
+/// subtree contains no rewritable head — the caller keeps it `.fixed`
+/// (nothing in it can reduce, and rule-lhs matching reads through fixed
+/// nodes concretely).
 fn openExprForNormalize(
     self: anytype,
     registry: anytype,

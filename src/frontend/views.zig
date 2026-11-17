@@ -20,8 +20,6 @@ const Idents = @import("./idents.zig");
 
 const findRuleArgIndex = Idents.findRuleArgIndex;
 
-const recover_guidance_match_budget: usize = 8;
-
 const ViewSignature = struct {
     arg_names: []const ?[]const u8,
     arg_infos: []const ArgInfo,
@@ -599,13 +597,11 @@ fn guideRecoverBindingsTowardSources(
                 source_expr,
                 recover.hole_view_idx,
                 recover.target_view_idx,
-                recover_guidance_match_budget,
             )
         else
             try session.guideBindingTowardExpr(
                 recover.pattern_view_idx,
                 source_expr,
-                recover_guidance_match_budget,
             );
         if (made_progress) {
             if (debug_views) {
@@ -856,7 +852,7 @@ fn matchHypRef(
     trace: bool,
 ) !bool {
     if (!trace) {
-        return try session.matchTransparentOrSemantic(hyp_template, ref_expr);
+        return try session.matchModuloRewrites(hyp_template, ref_expr);
     }
     const allocator = session.shared.allocator;
     const ref_text = try ViewTrace.formatExpr(
@@ -866,20 +862,9 @@ fn matchHypRef(
         ref_expr,
     );
     defer allocator.free(ref_text);
-    if (try session.matchTransparent(hyp_template, ref_expr)) {
+    if (try session.matchModuloRewrites(hyp_template, ref_expr)) {
         ViewTrace.printMessage(
-            "hyps-first: hyp {d} matched transparently: {s}",
-            .{ hyp_idx, ref_text },
-        );
-        return true;
-    }
-    if (try session.matchSemantic(
-        hyp_template,
-        ref_expr,
-        DefOps.default_semantic_match_budget,
-    )) {
-        ViewTrace.printMessage(
-            "hyps-first: hyp {d} matched semantically: {s}",
+            "hyps-first: hyp {d} matched: {s}",
             .{ hyp_idx, ref_text },
         );
         return true;
@@ -1251,20 +1236,9 @@ fn matchViewConclusionDebug(
                 line_expr,
             );
             defer allocator.free(concl_text);
-            if (try session.matchTransparent(view.concl, line_expr)) {
+            if (try matchConcreteViewConclusion(session, view, line_expr)) {
                 ViewTrace.printMessage(
-                    "view conclusion matched transparently: {s}",
-                    .{concl_text},
-                );
-                return true;
-            }
-            if (try session.matchSemantic(
-                view.concl,
-                line_expr,
-                DefOps.default_semantic_match_budget,
-            )) {
-                ViewTrace.printMessage(
-                    "view conclusion matched semantically: {s}",
+                    "view conclusion matched: {s}",
                     .{concl_text},
                 );
                 return true;
@@ -1302,7 +1276,7 @@ fn matchConcreteViewConclusion(
     view: *const ViewDecl,
     line_expr: ExprId,
 ) !bool {
-    return try session.matchTransparentOrSemantic(view.concl, line_expr);
+    return try session.matchModuloRewrites(view.concl, line_expr);
 }
 
 /// Match a view conclusion against a holey line, its line holes matching
@@ -1499,7 +1473,7 @@ fn matchViewHypsAgainstConcreteExprs(
     ref_exprs: []const ExprId,
 ) !void {
     for (view.hyps, ref_exprs) |hyp_template, ref_expr| {
-        if (!try session.matchTransparentOrSemantic(
+        if (!try session.matchModuloRewrites(
             hyp_template,
             ref_expr,
         )) {
@@ -1974,20 +1948,9 @@ fn matchViewHypsAgainstConcreteExprsDebug(
             ref_expr,
         );
         defer allocator.free(ref_text);
-        if (try session.matchTransparent(hyp_template, ref_expr)) {
+        if (try session.matchModuloRewrites(hyp_template, ref_expr)) {
             ViewTrace.printMessage(
-                "{s}: hyp {d} matched transparently: {s}",
-                .{ phase, hyp_idx, ref_text },
-            );
-            continue;
-        }
-        if (try session.matchSemantic(
-            hyp_template,
-            ref_expr,
-            DefOps.default_semantic_match_budget,
-        )) {
-            ViewTrace.printMessage(
-                "{s}: hyp {d} matched semantically: {s}",
+                "{s}: hyp {d} matched: {s}",
                 .{ phase, hyp_idx, ref_text },
             );
             continue;

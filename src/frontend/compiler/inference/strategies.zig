@@ -485,7 +485,7 @@ fn matchRulePartForInference(
     template: TemplateExpr,
     actual: ExprId,
 ) !bool {
-    if (try session.matchTransparentOrSemantic(template, actual)) return true;
+    if (try session.matchModuloRewrites(template, actual)) return true;
     // This intentionally mirrors `Matching.tryMatchHypothesis`: a referenced
     // line may be stored in the raw form produced by its rule, while final
     // validation can transport it to the expected hypothesis. Binder inference
@@ -892,7 +892,7 @@ fn matchRulePartHoleyInterned(
 
     var snapshot = try session.saveSeedState();
     defer snapshot.deinit(allocator);
-    if (try session.matchTransparentOrSemantic(template, holey_id)) return true;
+    if (try session.matchModuloRewrites(template, holey_id)) return true;
     try session.restoreFromSeedState(&snapshot);
     return false;
 }

@@ -114,6 +114,25 @@ pub fn concreteExprsMatchMode(
     return try self.shared.meetThroughDefs(lhs_compare, rhs_compare);
 }
 
+/// Two concrete expressions equal modulo `@rewrite`: their normal forms
+/// (ACUI members sorted) are the same, or meet transparently. Unlike
+/// `.normalized` comparison this does not open a common-target search
+/// through defs: a matcher comparing modulo rewriting asks it at every
+/// mismatch of a repeated binder or fixed subterm.
+pub fn concreteExprsMatchModuloRewrites(
+    self: anytype,
+    lhs: ExprId,
+    rhs: ExprId,
+    state: *MatchSession,
+) anyerror!bool {
+    const lhs_repr = try chooseRepresentativeSymbolic(self, lhs, state, .normalized);
+    const rhs_repr = try chooseRepresentativeSymbolic(self, rhs, state, .normalized);
+    if (symbolicExprEql(self, lhs_repr, rhs_repr)) return true;
+    const lhs_compare = (try symbolicToConcreteIfPlain(self, lhs_repr, state)) orelse lhs;
+    const rhs_compare = (try symbolicToConcreteIfPlain(self, rhs_repr, state)) orelse rhs;
+    return (try TransparentMatch.compareTransparent(self, lhs_compare, rhs_compare)) != null;
+}
+
 pub fn concreteBindingMatchesExpr(
     self: anytype,
     concrete: ConcreteBinding,
@@ -145,7 +164,12 @@ pub fn concreteBindingMatchesExpr(
         state,
         concrete.mode,
     );
-    return symbolicExprEql(self, concrete.repr, actual_repr);
+    if (symbolicExprEql(self, concrete.repr, actual_repr)) return true;
+    // A repeated binder meets its value modulo `@rewrite`: both sides at
+    // their normal forms, ACUI members sorted, equal or meeting
+    // transparently (`concreteExprsMatchModuloRewrites`).
+    if (state.rewrites != .all or self.shared.registry == null) return false;
+    return try concreteExprsMatchModuloRewrites(self, concrete_expr, actual, state);
 }
 
 fn matchSymbolicToExprWithConcreteFallback(
@@ -176,13 +200,10 @@ fn matchSymbolicToExprWithConcreteFallback(
         symbolic,
         state,
     ) orelse return false;
-    return try concreteExprsMatchMode(
-        self,
-        symbolic_expr,
-        actual,
-        state,
-        mode,
-    );
+    if (state.rewrites == .all and self.shared.registry != null) {
+        if (try concreteExprsMatchModuloRewrites(self, symbolic_expr, actual, state)) return true;
+    }
+    return try concreteExprsMatchMode(self, symbolic_expr, actual, state, mode);
 }
 
 pub fn boundValueMatchesSymbolic(

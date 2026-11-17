@@ -9,6 +9,7 @@ const Types = @import("./def_ops/types.zig");
 const MatchState = @import("./def_ops/match_state.zig");
 const SharedContext = @import("./def_ops/shared_context.zig").SharedContext;
 const SymbolicEngine = @import("./def_ops/symbolic_engine.zig").SymbolicEngine;
+pub const LaterSide = @import("./def_ops/symbolic_engine.zig").LaterSide;
 const NormalizedMatch = @import("./def_ops/normalized_match.zig");
 const ArgInfo = @import("parse_recovery.zig").ArgInfo;
 
@@ -20,9 +21,6 @@ pub const UnresolvedDummyRoot = Types.UnresolvedDummyRoot;
 pub const MaterializedDummyAssignment =
     Types.MaterializedDummyAssignment;
 pub const HiddenWitnessProvider = Types.HiddenWitnessProvider;
-pub const SemanticStepCandidate =
-    @import("./def_ops/symbolic_engine.zig").SemanticStepCandidate;
-pub const default_semantic_match_budget: usize = 8;
 pub const RuleMatchSession = NormalizedMatch.RuleMatchSession;
 pub const NormalizedComparison =
     NormalizedMatch.NormalizedComparison;
@@ -111,32 +109,25 @@ pub const Context = struct {
         return try symbolic_engine.planDefCoversItem(def_expr, item_expr);
     }
 
-    pub fn instantiateDefTowardExpr(
+    /// See `SymbolicEngine.unfoldDefToward`.
+    pub fn unfoldDefToward(
         self: *Context,
         def_expr: ExprId,
         target_expr: ExprId,
+        rewrites: bool,
+        provider: ?HiddenWitnessProvider,
     ) anyerror!?ExprId {
         var symbolic_engine = self.symbolicEngine();
-        return try symbolic_engine.instantiateDefTowardExpr(
-            def_expr,
-            target_expr,
-        );
+        return try symbolic_engine.unfoldDefToward(def_expr, target_expr, rewrites, provider);
     }
 
-    pub fn instantiateDefTowardExprWithProvider(
-        self: *Context,
-        def_expr: ExprId,
-        target_expr: ExprId,
-        provider: HiddenWitnessProvider,
-    ) anyerror!?ExprId {
-        if (try self.instantiateDefTowardExpr(def_expr, target_expr)) |witness| {
-            return witness;
-        }
+    /// Which of two heads the deterministic comparison unfolds: the later
+    /// def (see `SymbolicEngine.laterDef`).
+    pub fn laterDef(self: *Context, lhs: ExprId, rhs: ExprId) ?LaterSide {
         var symbolic_engine = self.symbolicEngine();
-        return try symbolic_engine.instantiateDefTowardExprWithProvider(
-            def_expr,
-            target_expr,
-            provider,
+        return symbolic_engine.laterDef(
+            symbolic_engine.exprHead(lhs),
+            symbolic_engine.exprHead(rhs),
         );
     }
 
@@ -154,12 +145,14 @@ pub const Context = struct {
         def_expr: ExprId,
         item_expr: ExprId,
         head_term_id: u32,
+        rewrites: bool,
     ) anyerror!?ExprId {
         var symbolic_engine = self.symbolicEngine();
         return try symbolic_engine.instantiateDefTowardAcuiItem(
             def_expr,
             item_expr,
             head_term_id,
+            rewrites,
         );
     }
 
@@ -202,46 +195,6 @@ pub const Context = struct {
         );
     }
 
-    pub fn matchTemplateSemantic(
-        self: *Context,
-        template: TemplateExpr,
-        actual: ExprId,
-        bindings: []?ExprId,
-        budget: usize,
-    ) anyerror!bool {
-        var symbolic_engine = self.symbolicEngine();
-        return try symbolic_engine.matchTemplateSemantic(
-            template,
-            actual,
-            bindings,
-            budget,
-        );
-    }
-
-    fn collectSemanticStepCandidatesExpr(
-        self: *Context,
-        expr_id: ExprId,
-        out: *std.ArrayListUnmanaged(SemanticStepCandidate),
-    ) anyerror!void {
-        var symbolic_engine = self.symbolicEngine();
-        return try symbolic_engine.collectSemanticStepCandidatesExpr(
-            expr_id,
-            out,
-        );
-    }
-
-    fn collectSemanticStepCandidatesSymbolic(
-        self: *Context,
-        symbolic: *const SymbolicExpr,
-        out: *std.ArrayListUnmanaged(SemanticStepCandidate),
-    ) anyerror!void {
-        var symbolic_engine = self.symbolicEngine();
-        return try symbolic_engine.collectSemanticStepCandidatesSymbolic(
-            symbolic,
-            out,
-        );
-    }
-
     fn applyRewriteRuleToExpr(
         self: *Context,
         rule: RewriteRule,
@@ -267,54 +220,6 @@ pub const Context = struct {
             rule,
             symbolic,
             state,
-        );
-    }
-
-    fn matchTemplateSemanticState(
-        self: *Context,
-        template: TemplateExpr,
-        actual: ExprId,
-        state: *MatchSession,
-        budget: usize,
-    ) anyerror!bool {
-        var symbolic_engine = self.symbolicEngine();
-        return try symbolic_engine.matchTemplateSemanticState(
-            template,
-            actual,
-            state,
-            budget,
-        );
-    }
-
-    fn matchSymbolicToExprSemantic(
-        self: *Context,
-        symbolic: *const SymbolicExpr,
-        actual: ExprId,
-        state: *MatchSession,
-        budget: usize,
-    ) anyerror!bool {
-        var symbolic_engine = self.symbolicEngine();
-        return try symbolic_engine.matchSymbolicToExprSemantic(
-            symbolic,
-            actual,
-            state,
-            budget,
-        );
-    }
-
-    fn matchSymbolicToSymbolicSemantic(
-        self: *Context,
-        lhs: *const SymbolicExpr,
-        rhs: *const SymbolicExpr,
-        state: *MatchSession,
-        budget: usize,
-    ) anyerror!bool {
-        var symbolic_engine = self.symbolicEngine();
-        return try symbolic_engine.matchSymbolicToSymbolicSemantic(
-            lhs,
-            rhs,
-            state,
-            budget,
         );
     }
 
@@ -456,22 +361,6 @@ pub const Testing = struct {
         return try symbolic_engine.expandConcreteDef(expr_id, state);
     }
 
-    pub fn collectSemanticStepCandidatesExpr(
-        ctx: *Context,
-        expr_id: ExprId,
-        out: *std.ArrayListUnmanaged(SemanticStepCandidate),
-    ) anyerror!void {
-        return try ctx.collectSemanticStepCandidatesExpr(expr_id, out);
-    }
-
-    pub fn collectSemanticStepCandidatesSymbolic(
-        ctx: *Context,
-        symbolic: *const Types.SymbolicExpr,
-        out: *std.ArrayListUnmanaged(SemanticStepCandidate),
-    ) anyerror!void {
-        return try ctx.collectSemanticStepCandidatesSymbolic(symbolic, out);
-    }
-
     pub fn applyRewriteRuleToExpr(
         ctx: *Context,
         rule: RewriteRule,
@@ -499,19 +388,24 @@ pub const Testing = struct {
         return try symbolic_engine.bigStepSymbolic(symbolic, state);
     }
 
-    pub fn matchSymbolicToExprSemantic(
+    pub fn matchSymbolicToExprModuloRewrites(
         ctx: *Context,
         symbolic: *const Types.SymbolicExpr,
         actual: ExprId,
         state: *MatchState.MatchSession,
-        budget: usize,
     ) anyerror!bool {
-        return try ctx.matchSymbolicToExprSemantic(
-            symbolic,
-            actual,
-            state,
-            budget,
-        );
+        var symbolic_engine = ctx.symbolicEngine();
+        return try symbolic_engine.matchSymbolicToExprModuloRewrites(symbolic, actual, state);
+    }
+
+    pub fn matchSymbolicToSymbolic(
+        ctx: *Context,
+        lhs: *const Types.SymbolicExpr,
+        rhs: *const Types.SymbolicExpr,
+        state: *MatchState.MatchSession,
+    ) anyerror!bool {
+        var symbolic_engine = ctx.symbolicEngine();
+        return try symbolic_engine.matchSymbolicToSymbolicState(lhs, rhs, state);
     }
 
     pub fn chooseRepresentativeSymbolic(

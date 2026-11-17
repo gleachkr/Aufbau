@@ -44,6 +44,7 @@ pub const restoreMatchSnapshot = MatchSnapshot.restoreMatchSnapshot;
 pub const deinitMatchSnapshot = MatchSnapshot.deinitMatchSnapshot;
 pub const boundValueMatchesExpr = BoundValueMatch.boundValueMatchesExpr;
 pub const concreteExprsMatchMode = BoundValueMatch.concreteExprsMatchMode;
+pub const concreteExprsMatchModuloRewrites = BoundValueMatch.concreteExprsMatchModuloRewrites;
 pub const concreteBindingMatchesExpr = BoundValueMatch.concreteBindingMatchesExpr;
 pub const boundValueMatchesSymbolic =
     BoundValueMatch.boundValueMatchesSymbolic;

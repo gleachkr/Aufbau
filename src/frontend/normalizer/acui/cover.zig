@@ -64,6 +64,7 @@ pub fn buildConcreteToDefCoverProof(
         def_expr,
         concrete_expr,
         acui.head_term_id,
+        self.rewrites,
     ) orelse return null;
     const def_to_witness = try ProofEmit.emitTransparentRelationProof(
         self,

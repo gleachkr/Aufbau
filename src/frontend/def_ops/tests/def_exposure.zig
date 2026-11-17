@@ -1,26 +1,15 @@
 const std = @import("std");
 const DefOps = @import("../../def_ops.zig");
 const Fixtures = @import("./fixtures.zig");
-const RewriteRule = @import("../../rewrite_registry.zig").RewriteRule;
 const ExprId = @import("../../expr.zig").ExprId;
 const Context = DefOps.Context;
 const Testing = DefOps.Testing;
-const MatchSession = Testing.MatchSession;
-const SymbolicExpr = Testing.SymbolicExpr;
-const SemanticStepCandidate = DefOps.SemanticStepCandidate;
-const SemanticStepFixture = Fixtures.SemanticStepFixture;
-const SemanticAcuiExposureFixture = Fixtures.SemanticAcuiExposureFixture;
-const SemanticWrappedAcuiDefFixture =
-    Fixtures.SemanticWrappedAcuiDefFixture;
-const SemanticQuantifiedAcuiDefFixture =
-    Fixtures.SemanticQuantifiedAcuiDefFixture;
-const allocNoneSeeds = Fixtures.allocNoneSeeds;
-const hasConcreteUnfold = Fixtures.hasConcreteUnfold;
-const hasSymbolicUnfold = Fixtures.hasSymbolicUnfold;
-const hasRewriteRule = Fixtures.hasRewriteRule;
+const AcuiExposureFixture = Fixtures.AcuiExposureFixture;
+const WrappedAcuiDefFixture = Fixtures.WrappedAcuiDefFixture;
+const QuantifiedAcuiDefFixture = Fixtures.QuantifiedAcuiDefFixture;
 
-test "semantic ACUI leaf exposure rewrites before matching the leaf" {
-    var fixture = try SemanticAcuiExposureFixture.init(true, true);
+test "ACUI leaf exposure rewrites before matching the leaf" {
+    var fixture = try AcuiExposureFixture.init(true, true);
     defer fixture.deinit();
 
     var ctx = Context.initWithRegistry(
@@ -35,17 +24,51 @@ test "semantic ACUI leaf exposure rewrites before matching the leaf" {
         fixture.pre_ctx_expr,
         fixture.bound_item_expr,
         fixture.join_term_id,
+        true,
     ) orelse return error.MissingWitness;
 
     try std.testing.expectEqual(fixture.expected_bound_witness, witness);
 }
 
-test "semantic ACUI exposure treats parenthesized dot-binders as bound" {
+test "ACUI leaf exposure compares the body as it stands without rewriting" {
+    // A bag compared without rewriting holds `box (hyp (u = x))` as it is:
+    // `box_flat` must not turn the def's body into `emp , hyp (u = x)`
+    // first, or the literal member is missed.
+    var fixture = try AcuiExposureFixture.init(true, true);
+    defer fixture.deinit();
+
+    var ctx = Context.initWithRegistry(
+        fixture.arena.allocator(),
+        &fixture.theorem,
+        &fixture.env,
+        &fixture.registry,
+    );
+    defer ctx.deinit();
+
+    const witness = try ctx.instantiateDefTowardAcuiItem(
+        fixture.pre_ctx_expr,
+        fixture.expected_bound_witness,
+        fixture.join_term_id,
+        false,
+    ) orelse return error.MissingWitness;
+    try std.testing.expectEqual(fixture.expected_bound_witness, witness);
+
+    // Modulo rewriting the body is compared at its normal form, whose
+    // members are `emp` and `hyp (u = x)`.
+    try std.testing.expect(try ctx.instantiateDefTowardAcuiItem(
+        fixture.pre_ctx_expr,
+        fixture.bound_item_expr,
+        fixture.join_term_id,
+        true,
+    ) != null);
+}
+
+test "ACUI exposure treats parenthesized dot-binders as bound" {
     // `(.x: obj)` and `{.x: obj}` both declare a bound hidden dummy (the
     // parser treats every dot-binder as bound, matching MMB `UDummy`
     // semantics), so a non-bound theorem arg can never witness it and the
     // exposure must refuse rather than fabricate an unsound unfolding.
-    var fixture = try SemanticAcuiExposureFixture.init(false, false);
+    var fixture = try AcuiExposureFixture.init(false, false);
     defer fixture.deinit();
 
     var ctx = Context.initWithRegistry(
@@ -60,13 +83,14 @@ test "semantic ACUI exposure treats parenthesized dot-binders as bound" {
         fixture.pre_ctx_expr,
         fixture.free_item_expr,
         fixture.join_term_id,
+        true,
     );
 
     try std.testing.expectEqual(@as(?ExprId, null), witness);
 }
 
-test "semantic ACUI exposure keeps bound hidden witnesses strict" {
-    var fixture = try SemanticAcuiExposureFixture.init(true, false);
+test "ACUI exposure keeps bound hidden witnesses strict" {
+    var fixture = try AcuiExposureFixture.init(true, false);
     defer fixture.deinit();
 
     var ctx = Context.initWithRegistry(
@@ -81,13 +105,14 @@ test "semantic ACUI exposure keeps bound hidden witnesses strict" {
         fixture.pre_ctx_expr,
         fixture.free_item_expr,
         fixture.join_term_id,
+        true,
     );
 
     try std.testing.expectEqual(@as(?ExprId, null), witness);
 }
 
-test "semantic def exposure matches wrapped ACUI witness" {
-    var fixture = try SemanticWrappedAcuiDefFixture.init(false, true, true);
+test "def exposure matches wrapped ACUI witness" {
+    var fixture = try WrappedAcuiDefFixture.init(false, true, true);
     defer fixture.deinit();
 
     var ctx = Context.initWithRegistry(
@@ -101,9 +126,11 @@ test "semantic def exposure matches wrapped ACUI witness" {
     const start_dummy_id = fixture.theorem.next_dummy_id;
     const start_dummy_dep = fixture.theorem.next_dummy_dep;
 
-    const witness = try ctx.instantiateDefTowardExpr(
+    const witness = try ctx.unfoldDefToward(
         fixture.pre_ctx_expr,
         fixture.target_expr,
+        true,
+        null,
     ) orelse return error.MissingWitness;
 
     try std.testing.expectEqual(fixture.expected_witness, witness);
@@ -114,8 +141,8 @@ test "semantic def exposure matches wrapped ACUI witness" {
     );
 }
 
-test "semantic def exposure matches wrapped full ACUI witness" {
-    var fixture = try SemanticWrappedAcuiDefFixture.init(true, true, true);
+test "def exposure matches wrapped full ACUI witness" {
+    var fixture = try WrappedAcuiDefFixture.init(true, true, true);
     defer fixture.deinit();
 
     var ctx = Context.initWithRegistry(
@@ -129,9 +156,11 @@ test "semantic def exposure matches wrapped full ACUI witness" {
     const start_dummy_id = fixture.theorem.next_dummy_id;
     const start_dummy_dep = fixture.theorem.next_dummy_dep;
 
-    const witness = try ctx.instantiateDefTowardExpr(
+    const witness = try ctx.unfoldDefToward(
         fixture.pre_ctx_expr,
         fixture.target_expr,
+        true,
+        null,
     ) orelse return error.MissingWitness;
 
     try std.testing.expectEqual(fixture.expected_witness, witness);
@@ -142,8 +171,8 @@ test "semantic def exposure matches wrapped full ACUI witness" {
     );
 }
 
-test "semantic def exposure matches quantified wrapped ACUI witness" {
-    var fixture = try SemanticQuantifiedAcuiDefFixture.init(false);
+test "def exposure matches quantified wrapped ACUI witness" {
+    var fixture = try QuantifiedAcuiDefFixture.init(false);
     defer fixture.deinit();
 
     var ctx = Context.initWithRegistry(
@@ -157,9 +186,11 @@ test "semantic def exposure matches quantified wrapped ACUI witness" {
     const start_dummy_id = fixture.theorem.next_dummy_id;
     const start_dummy_dep = fixture.theorem.next_dummy_dep;
 
-    const witness = try ctx.instantiateDefTowardExpr(
+    const witness = try ctx.unfoldDefToward(
         fixture.pre_ctx_expr,
         fixture.target_expr,
+        true,
+        null,
     ) orelse return error.MissingWitness;
 
     try std.testing.expectEqual(fixture.expected_witness, witness);
@@ -170,8 +201,8 @@ test "semantic def exposure matches quantified wrapped ACUI witness" {
     );
 }
 
-test "semantic def exposure matches quantified wrapped full ACUI witness" {
-    var fixture = try SemanticQuantifiedAcuiDefFixture.init(true);
+test "def exposure matches quantified wrapped full ACUI witness" {
+    var fixture = try QuantifiedAcuiDefFixture.init(true);
     defer fixture.deinit();
 
     var ctx = Context.initWithRegistry(
@@ -185,9 +216,11 @@ test "semantic def exposure matches quantified wrapped full ACUI witness" {
     const start_dummy_id = fixture.theorem.next_dummy_id;
     const start_dummy_dep = fixture.theorem.next_dummy_dep;
 
-    const witness = try ctx.instantiateDefTowardExpr(
+    const witness = try ctx.unfoldDefToward(
         fixture.pre_ctx_expr,
         fixture.target_expr,
+        true,
+        null,
     ) orelse return error.MissingWitness;
 
     try std.testing.expectEqual(fixture.expected_witness, witness);
@@ -198,8 +231,8 @@ test "semantic def exposure matches quantified wrapped full ACUI witness" {
     );
 }
 
-test "semantic def exposure keeps wrapped bound witnesses unresolved" {
-    var fixture = try SemanticWrappedAcuiDefFixture.init(false, true, false);
+test "def exposure keeps wrapped bound witnesses unresolved" {
+    var fixture = try WrappedAcuiDefFixture.init(false, true, false);
     defer fixture.deinit();
 
     var ctx = Context.initWithRegistry(
@@ -213,9 +246,11 @@ test "semantic def exposure keeps wrapped bound witnesses unresolved" {
     const start_dummy_id = fixture.theorem.next_dummy_id;
     const start_dummy_dep = fixture.theorem.next_dummy_dep;
 
-    const witness = try ctx.instantiateDefTowardExpr(
+    const witness = try ctx.unfoldDefToward(
         fixture.pre_ctx_expr,
         fixture.target_expr,
+        true,
+        null,
     );
 
     try std.testing.expectEqual(@as(?ExprId, null), witness);
@@ -261,14 +296,14 @@ const RecordingProvider = struct {
     }
 };
 
-test "provider materializes semantic hidden witness without caching it" {
+test "provider materializes a hidden witness the match leaves open" {
     // Matching pre_ctx's expansion against pre_ctx2's aligns the two hidden
     // dummies without pinning either to a concrete witness, so the match
     // succeeds with an unresolved root — the shape that consults the
     // hidden-witness provider (the @vars pool in production). The provided
-    // materialization must not be cached: plain queries keep returning null
-    // and each provider call re-invokes the provider.
-    var fixture = try SemanticWrappedAcuiDefFixture.init(false, true, false);
+    // materialization is not remembered: a query without the provider keeps
+    // returning null, and each query with it asks the provider again.
+    var fixture = try WrappedAcuiDefFixture.init(false, true, false);
     defer fixture.deinit();
 
     var ctx = Context.initWithRegistry(
@@ -284,36 +319,37 @@ test "provider materializes semantic hidden witness without caching it" {
     };
     try std.testing.expectEqual(
         @as(?ExprId, null),
-        try ctx.instantiateDefTowardExpr(
+        try ctx.unfoldDefToward(
             fixture.pre_ctx_expr,
             fixture.pre_ctx2_expr,
+            true,
+            null,
         ),
     );
     try std.testing.expectEqual(@as(usize, 0), provider_state.calls);
-    const cache_count = fixture.theorem.instantiate_def_cache.count();
 
-    const witness = try ctx.instantiateDefTowardExprWithProvider(
+    const witness = try ctx.unfoldDefToward(
         fixture.pre_ctx_expr,
         fixture.pre_ctx2_expr,
+        true,
         provider_state.provider(),
     ) orelse return error.MissingWitness;
     try std.testing.expectEqual(fixture.expected_witness, witness);
     try std.testing.expectEqual(@as(usize, 1), provider_state.calls);
-    try std.testing.expectEqual(
-        cache_count,
-        fixture.theorem.instantiate_def_cache.count(),
-    );
 
     try std.testing.expectEqual(
         @as(?ExprId, null),
-        try ctx.instantiateDefTowardExpr(
+        try ctx.unfoldDefToward(
             fixture.pre_ctx_expr,
             fixture.pre_ctx2_expr,
+            true,
+            null,
         ),
     );
-    _ = try ctx.instantiateDefTowardExprWithProvider(
+    _ = try ctx.unfoldDefToward(
         fixture.pre_ctx_expr,
         fixture.pre_ctx2_expr,
+        true,
         provider_state.provider(),
     );
     try std.testing.expectEqual(@as(usize, 2), provider_state.calls);

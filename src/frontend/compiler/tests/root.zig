@@ -11,4 +11,5 @@ comptime {
     _ = @import("./normalization_tests.zig");
     _ = @import("./analyze_tests.zig");
     _ = @import("./pipeline_tests.zig");
+    _ = @import("./def_scaling_tests.zig");
 }

@@ -51,8 +51,8 @@ way. Different subsystems ask for different strengths of comparison:
   defined and expanded forms when comparing a proof line against the cited
   rule's instantiated conclusion or hypotheses, and when comparing the final
   proof line against the theorem statement.
-- **`@view` matching:** yes. View matching is def-aware and may also use the
-  same semantic comparison machinery that higher-level inference uses.
+- **`@view` matching:** yes. View matching is def-aware and compares modulo
+  `@rewrite` normal forms, as higher-level inference does.
 - **`@recover` / `@abstract`:** partially. They first compare the resolved
   view expressions structurally. If that fails, they retry walking both sides
   together: a pair that differs is canonicalized, and a pair whose heads still
@@ -67,6 +67,36 @@ way. Different subsystems ask for different strengths of comparison:
 
 This still applies to **all** defs at theorem-application boundaries, but the
 hidden-dummy cases remain witness-driven rather than eager or global.
+
+### How a comparison decides
+
+A comparison through defs takes one path. It never tries one unfolding order,
+rewrite or rearrangement and then another.
+
+- **The later def unfolds.** When the two sides have different heads, only the
+  side whose head is the later def is unfolded. A def's body names only
+  earlier terms, so the later head can meet the other side only by being
+  unfolded. When neither head is a def, the sides differ.
+- **Determined arguments decide.** When both sides have the same head, their
+  arguments are compared in order. A mismatch at an argument the head
+  determines (a constructor's argument, or a def parameter that reaches one)
+  is final; the head is not unfolded to look further.
+- **Modulo `@rewrite`, normal forms decide.** Rule matching for inference and
+  `@view` compares modulo `@rewrite`: it walks the two sides as a transparent
+  match does and takes `@rewrite` normal forms (the first rule that applies
+  wins) only where they mismatch:
+  - Two sides that mismatch are compared once more at their normal forms.
+  - Each def body the comparison opens is normalized before it is compared.
+  - A binder that occurs twice meets its second occurrence by normal forms,
+    so `eq_refl` matches `e = e'` when `e` and `e'` agree only after
+    rewriting.
+  - A template subterm with a rewrite head, such as `[x := t] p`, waits until
+    the rest of the template has bound its binders. It is then instantiated,
+    normalized and compared. A redex whose binders nothing binds stays
+    unmatched; it is not guessed.
+
+  The normalizer's own comparison through a def normalizes the def's body and
+  the target the same way.
 
 ### Basic conclusion example
 
@@ -406,15 +436,15 @@ written `tree t1 t2` whose body holds `φ`. The checker proves such a line by
 opening the defs that stand in bags on both sides and moving the members
 out of place, rather than sorting both bags.
 
-There is one further conclusion-only path. If semantic def exposure and
-rewrite matching succeed but an erased bound hidden witness remains symbolic,
+There is one further conclusion-only path. If def exposure and rewrite
+matching succeed but an erased bound hidden witness remains symbolic,
 proof-producing conclusion normalization may materialize it from the sort's
-`@vars` pool. The pure `(def, target)` query stays cached independently; the
-selected theorem-local witness is never cached.
+`@vars` pool. The selected theorem-local witness is never remembered between
+comparisons.
 
 The normalizer itself still does **not** generally unfold defs first in order
 to discover more rewrites. Rewriting works on the visible instantiated
-expression, on the narrow semantic def-exposure path above, or on an explicitly
+expression, on the narrow def-exposure path above, or on an explicitly
 folded intermediate chosen by the checker's comparison.
 
 Broader witness recovery after unfold / rewrite alignment is still usually a

@@ -712,17 +712,19 @@ The important consequence is that `@view`, `@recover`, and `@abstract` are not
 an optional postprocessing step. They are part of how the solver gets its
 starting information.
 
-### 2. View matching is def-aware, and may use semantic steps
+### 2. View matching is def-aware, and compares modulo rewriting
 
 The initial view pass matches:
 
 - the view conclusion against the user's proof line assertion, and
 - each view hypothesis against the cited reference expression for that slot.
 
-Each part first tries transparent matching. If that fails, the matcher may use
-semantic search. In practice this means the view layer can look through
-transparent defs and can also follow registered rewrite / structural steps when
+Each part is matched transparently and modulo `@rewrite` normal forms (see
+"How a comparison decides" in
+[transparent_defs.md](transparent_defs.md)). In practice this means the view
+layer can look through transparent defs and can follow registered rewrites when
 those are needed to relate the view shape to the concrete proof expression.
+The comparison does not search: it takes one path.
 
 So, for example, a view can match a user-facing expression that only appears
 *after* a def body is unfolded and a rewrite is applied.

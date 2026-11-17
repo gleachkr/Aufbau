@@ -1858,19 +1858,20 @@ test "LSP fill-holes code action replays the checks of an edit" {
 
 /// The fill on the second line of pass_prawitz_holes, `$ _ctx ⊢ ∀ z … $`
 /// by `all_elim [l1]`, where `l1` proves the unreduced substitution
-/// `[x/w] ∀ y …`. With `congr`, the theory declares `sb_f_congr` as a
-/// congruence; without it, the written-out line does not check.
+/// `[x/w] ∀ y …`. With `congr`, the theory declares `all_congr` as a
+/// congruence; without it, the substitution cannot be pushed under the
+/// outer `∀`, so the written-out line does not check.
 fn prawitzCitingLineFill(arena: std.mem.Allocator, congr: bool) !?types.CodeAction {
     const mm0_uri = "file:///tmp/lsp-fill-holes-sb.mm0";
     const proof_uri = "file:///tmp/lsp-fill-holes-sb.auf";
     const fixture_mm0 = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/proof_cases/pass_prawitz_holes.mm0", arena, .unlimited);
     const proof_text = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/proof_cases/pass_prawitz_holes.auf", arena, .unlimited);
-    const annotated = "--| @congr\naxiom sb_f_congr";
+    const annotated = "--| @congr\naxiom all_congr";
     if (std.mem.indexOf(u8, fixture_mm0, annotated) == null) return error.FixtureChanged;
     const mm0_text = if (congr)
         fixture_mm0
     else
-        try std.mem.replaceOwned(u8, arena, fixture_mm0, annotated, "axiom sb_f_congr");
+        try std.mem.replaceOwned(u8, arena, fixture_mm0, annotated, "axiom all_congr");
 
     var transport_state: TestTransport = .{};
     var handler = Handler.init(std.testing.allocator, std.testing.io, &transport_state.transport);

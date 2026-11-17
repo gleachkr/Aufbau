@@ -892,6 +892,13 @@ A rule-match session can:
 - keep hidden-dummy witnesses symbolic until the whole match succeeds
 - compare normalized forms for conclusions and hypothesis references when
   the same normalized conversion is available to final validation
+- match modulo `@rewrite` normal forms (`matchModuloRewrites`): the
+  transparent walk with `MatchSession.rewrites = .all`, which takes normal
+  forms only where the walk mismatches: two mismatching sides are compared
+  again at their normal forms, every def body it opens is normalized, a
+  repeated binder meets its value by normal forms
+  (`concreteExprsMatchModuloRewrites`), and deferred rewrite-head template
+  nodes are settled once their binders are bound
 
 This is the current semantic center for binder-aware, def-aware
 matching. It is intentionally stronger than exact unify replay, but it
@@ -1037,6 +1044,13 @@ The central design principles here are:
 - hidden-dummy defs are only exposed toward a concrete witness problem
 - plain normalization does not unfold defs merely to create new rewrite
   redexes
+- comparison is deterministic: of two different heads only the later def
+  unfolds (`laterDef`), a mismatch at a determined argument is final, and
+  rewriting enters only as normal forms (first rule wins), so no comparison
+  searches over unfolding orders or rewrite steps. The
+  normalizer's def unfolding (`unfoldDefToward`) compares at
+  `MatchSession.rewrites = .unfoldings`: the opened body and the target are
+  normalized, and nothing nested escalates to `.all`
 - theorem-conclusion checking may fold selected raw def bodies before
   normalization, but the fold is still ordinary transparent conversion
 

@@ -27,6 +27,20 @@ pub const DeferredNode = struct {
     actual: ExprId,
 };
 
+pub const Rewriting = enum {
+    /// Transparent comparison: defs unfold, nothing rewrites.
+    none,
+    /// Each def body the matchers open is normalized before it is compared.
+    /// For the common-target search, which normalizes the pair it compares
+    /// itself.
+    unfoldings,
+    /// Everything is compared modulo normal forms: opened bodies are
+    /// normalized, two sides that mismatch are compared again as normal
+    /// forms, and concrete sides (a bound binder against its repeat, a fixed
+    /// subterm) meet as `.normalized` expressions.
+    all,
+};
+
 pub const MatchSession = struct {
     /// Never write a slot directly: use `setBinding` (trailed) once matching
     /// has begun, or `seedBinding` while seeding a fresh session. Direct
@@ -71,6 +85,10 @@ pub const MatchSession = struct {
     /// trailed, never hashed, never rolled back — it records that the cap
     /// fired at all, for the `--debug inference` trace upstream.
     rewrite_fuel_exhausted: bool = false,
+    /// How far the matchers compare modulo `@rewrite` normal forms (first
+    /// rule wins, dummies left open). Set for one comparison by its entry
+    /// point; never trailed.
+    rewrites: Rewriting = .none,
     /// Bumped by `invalidateRepresentativeCaches`. Snapshots record it so
     /// restore knows whether the representative caches were invalidated
     /// (and thus hold post-save entries that the rollback makes stale).

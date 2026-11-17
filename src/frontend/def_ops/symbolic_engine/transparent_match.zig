@@ -4,6 +4,7 @@ const head_class = @import("../../head_class.zig");
 const ExprId = @import("../../expr.zig").ExprId;
 const AcuiCacheKey = @import("../../expr.zig").AcuiCacheKey;
 const DefCacheKey = @import("../../expr.zig").DefCacheKey;
+const UnfoldCacheKey = @import("../../expr.zig").UnfoldCacheKey;
 const ExprApp = @import("../../expr.zig").ExprNode.App;
 const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 const AcuiSupport = @import("../../acui_support.zig");
@@ -18,7 +19,6 @@ const BindingMode = Types.BindingMode;
 const HiddenWitnessProvider = Types.HiddenWitnessProvider;
 const MatchSession = MatchState.MatchSession;
 const MatchSnapshot = MatchState.MatchSnapshot;
-const semantic_match_budget: usize = 8;
 
 /// Under `holes_match_anything`, an actual expression holding a meta is
 /// only partly known: it fixes no binder, dummy or fixed subterm it faces,
@@ -74,8 +74,9 @@ pub fn instantiateDefTowardAcuiItem(
     def_expr: ExprId,
     item_expr: ExprId,
     head_term_id: u32,
+    rewrites: bool,
 ) anyerror!?ExprId {
-    // Pure in (def_expr, item_expr, head_term_id) under the fixed env/registry
+    // Pure in (def_expr, item_expr, head_term_id, rewrites) under the fixed env/registry
     // invariant asserted here. This uses a fresh session per call, and
     // transient def_ops contexts re-issue it for every ACUI leaf-pair.
     assertCacheIdentity(self);
@@ -84,6 +85,7 @@ pub fn instantiateDefTowardAcuiItem(
         .item_expr = item_expr,
         .head_term_id = head_term_id,
         .has_registry = self.shared.registry != null,
+        .rewrites = rewrites,
         .holes_match_anything = holeyActual(self, def_expr) or holeyActual(self, item_expr),
     };
     if (self.shared.theorem.instantiate_acui_cache.get(key)) |cached| {
@@ -94,6 +96,7 @@ pub fn instantiateDefTowardAcuiItem(
         def_expr,
         item_expr,
         head_term_id,
+        rewrites,
     );
     try self.shared.theorem.instantiate_acui_cache.put(
         self.shared.theorem.allocator,
@@ -108,10 +111,15 @@ fn instantiateDefTowardAcuiItemUncached(
     def_expr: ExprId,
     item_expr: ExprId,
     head_term_id: u32,
+    rewrites: bool,
 ) anyerror!?ExprId {
     _ = getConcreteDef(self, def_expr) orelse return null;
     var session = try MatchSession.init(self.shared.allocator, 0);
     defer session.deinit(self.shared.allocator);
+    // A bag compared modulo rewriting holds normal forms: the def's body is
+    // compared at its normal form, like `unfoldDefToward`'s. Without
+    // rewriting, as it stands.
+    session.rewrites = if (rewrites) .unfoldings else .none;
     const symbolic = try expandConcreteDef(
         self,
         def_expr,
@@ -120,16 +128,10 @@ fn instantiateDefTowardAcuiItemUncached(
 
     if (!try matchSymbolicAcuiLeafToExprState(
         self,
-        symbolic,
+        try openedForMatch(self, symbolic, &session) orelse symbolic,
         item_expr,
         head_term_id,
         &session,
-    ) and !try self.matchSymbolicAcuiLeafToExprSemantic(
-        symbolic,
-        item_expr,
-        head_term_id,
-        &session,
-        semantic_match_budget,
     )) {
         return null;
     }
@@ -170,7 +172,7 @@ pub fn planDefToTarget(
     target_expr: ExprId,
     side: enum { lhs, rhs },
 ) anyerror!?*const ConversionPlan {
-    const witness = try instantiateDefTowardExpr(self, def_expr, target_expr) orelse {
+    const witness = try unfoldDefToward(self, def_expr, target_expr, false, null) orelse {
         return null;
     };
     const next = switch (side) {
@@ -189,6 +191,71 @@ pub fn planDefToTarget(
             .next = next,
         } }),
     };
+}
+
+/// The deterministic unfolding of `def_expr` toward `target_expr`: its
+/// body, with each dummy read off the target by the deterministic match, or
+/// by the target's guidance when the match leaves one open, or else asked
+/// of `provider`. A def without dummies has one unfolding. With `rewrites`,
+/// the body, the target, and every def body the match opens on either side
+/// are compared in their `@rewrite` normal forms (dummies left open, first
+/// rule wins), so a dummy the rules erase or move is read where it lands.
+/// Nothing here searches over rewrites or unfolding orders.
+pub fn unfoldDefToward(
+    self: anytype,
+    def_expr: ExprId,
+    target_expr: ExprId,
+    rewrites: bool,
+    provider: ?HiddenWitnessProvider,
+) anyerror!?ExprId {
+    // Pure in the key under the fixed env/registry invariant asserted here,
+    // except where `provider` supplies a witness the match left open: that
+    // result is not cached. The common target asks the same pair again for
+    // every comparison that reaches it.
+    assertCacheIdentity(self);
+    const key = UnfoldCacheKey{
+        .def_expr = def_expr,
+        .target_expr = target_expr,
+        .has_registry = self.shared.registry != null,
+        .rewrites = rewrites,
+        .holes_match_anything = holeyActual(self, def_expr) or holeyActual(self, target_expr),
+    };
+    const cache = &self.shared.theorem.unfold_toward_cache;
+    if (cache.get(key)) |cached| return cached;
+    var provided = false;
+    const result = try unfoldDefTowardUncached(self, def_expr, target_expr, rewrites, provider, &provided);
+    if (!provided) try cache.put(self.shared.theorem.allocator, key, result);
+    return result;
+}
+
+fn unfoldDefTowardUncached(
+    self: anytype,
+    def_expr: ExprId,
+    target_expr: ExprId,
+    rewrites: bool,
+    provider: ?HiddenWitnessProvider,
+    provided: *bool,
+) anyerror!?ExprId {
+    const def = getConcreteDef(self, def_expr) orelse return null;
+    if (def.term.dummy_args.len == 0) return try unfoldConcreteDef(self, def_expr);
+    var session = try MatchSession.init(self.shared.allocator, 0);
+    defer session.deinit(self.shared.allocator);
+    session.rewrites = if (rewrites) .unfoldings else .none;
+    const symbolic = try expandConcreteDef(self, def_expr, &session) orelse return null;
+    const compared = try openedForMatch(self, symbolic, &session) orelse symbolic;
+    const target = if (rewrites) try normalExpr(self, target_expr, &session) else target_expr;
+    const matched = try matchSymbolicToExprState(self, compared, target, &session);
+    if (matched) {
+        if (try WitnessState.materializeResolvedSymbolic(self, symbolic, &session)) |witness| {
+            return witness;
+        }
+    }
+    if (try unfoldByTargetGuidance(self, def_expr, target_expr, session.rewrites)) |witness| {
+        return witness;
+    }
+    if (!matched) return null;
+    provided.* = true;
+    return try provideUnresolvedWitnesses(self, symbolic, &session, provider orelse return null);
 }
 
 pub fn compareTransparent(
@@ -268,13 +335,62 @@ fn compareTransparentUncached(
         }
     }
 
-    if (try planDefToTarget(self, lhs, rhs, .lhs)) |plan| {
-        return plan;
+    return switch (laterDef(self, exprHead(self, lhs), exprHead(self, rhs)) orelse return null) {
+        .lhs => try planDefToTarget(self, lhs, rhs, .lhs),
+        .rhs => try planDefToTarget(self, rhs, lhs, .rhs),
+    };
+}
+
+pub const Side = enum { lhs, rhs };
+
+/// A def body a transparent matcher has just opened, in the form it is
+/// compared in: its `@rewrite` normal form when the session compares modulo
+/// rewriting (dummies left open, first rule wins), else as it stands.
+/// A concrete expression's `@rewrite` normal form, or the expression itself
+/// when no rule fires (or the rules run out of fuel).
+fn normalExpr(self: anytype, expr_id: ExprId, state: *MatchSession) anyerror!ExprId {
+    if (self.shared.registry == null) return expr_id;
+    const fixed = try self.allocSymbolic(.{ .fixed = expr_id });
+    const normal = try DirectedNormalize.normalForm(self, fixed, state) orelse return expr_id;
+    if (!normal.changed) return expr_id;
+    return try WitnessState.symbolicToConcreteIfPlain(self, normal.expr, state) orelse expr_id;
+}
+
+fn openedForMatch(
+    self: anytype,
+    opened: ?*const SymbolicExpr,
+    state: *MatchSession,
+) anyerror!?*const SymbolicExpr {
+    const body = opened orelse return null;
+    if (state.rewrites == .none) return body;
+    return try DirectedNormalize.bigStepSymbolic(self, body, state) orelse body;
+}
+
+/// Which side a comparison unfolds: the one whose head is the later def, or
+/// the left on a tie. A def's body mentions only earlier terms, so the later
+/// head can only meet the other side by being unfolded, and each comparison
+/// takes one path instead of searching over unfolding orders. Null when
+/// neither head is a def: the heads are fixed and the terms differ.
+pub fn laterDef(self: anytype, lhs_term: ?u32, rhs_term: ?u32) ?Side {
+    const lhs_def = openableHead(self, lhs_term);
+    const rhs_def = openableHead(self, rhs_term);
+    if (lhs_def) |l| {
+        if (rhs_def) |r| return if (l >= r) .lhs else .rhs;
+        return .lhs;
     }
-    if (try planDefToTarget(self, rhs, lhs, .rhs)) |plan| {
-        return plan;
-    }
-    return null;
+    return if (rhs_def != null) .rhs else null;
+}
+
+fn openableHead(self: anytype, term_id: ?u32) ?u32 {
+    const id = term_id orelse return null;
+    return if (getOpenableTerm(self, id) != null) id else null;
+}
+
+pub fn exprHead(self: anytype, expr_id: ExprId) ?u32 {
+    return switch (self.shared.theorem.interner.node(expr_id).*) {
+        .app => |app| app.term_id,
+        else => null,
+    };
 }
 
 pub fn matchTemplateTransparent(
@@ -320,82 +436,17 @@ pub fn matchTemplateTransparent(
     return true;
 }
 
-pub fn instantiateDefTowardExpr(
+/// `symbolic` with the dummies its match left open filled by `provider`.
+fn provideUnresolvedWitnesses(
     self: anytype,
-    def_expr: ExprId,
-    target_expr: ExprId,
-) anyerror!?ExprId {
-    // Pure memo: this query depends only on `(def_expr, target_expr)` under
-    // the fixed env/registry invariant asserted here. It builds a fresh empty
-    // session per attempt and takes no caller state. The transient ACUI def_ops
-    // contexts re-issue the same query millions of times, so cache on the
-    // shared, per-theorem interner context.
-    assertCacheIdentity(self);
-    const key = DefCacheKey{
-        .def_expr = def_expr,
-        .target_expr = target_expr,
-        .has_registry = self.shared.registry != null,
-        .holes_match_anything = holeyActual(self, def_expr) or holeyActual(self, target_expr),
-    };
-    if (self.shared.theorem.instantiate_def_cache.get(key)) |cached| {
-        return cached;
-    }
-
-    const result = try instantiateDefTowardExprUncached(
-        self,
-        def_expr,
-        target_expr,
-    );
-
-    try self.shared.theorem.instantiate_def_cache.put(
-        self.shared.theorem.allocator,
-        key,
-        result,
-    );
-    return result;
-}
-
-pub fn instantiateDefTowardExprWithProvider(
-    self: anytype,
-    def_expr: ExprId,
-    target_expr: ExprId,
+    symbolic: *const SymbolicExpr,
+    session: *MatchSession,
     provider: HiddenWitnessProvider,
 ) anyerror!?ExprId {
-    _ = getConcreteDef(self, def_expr) orelse return null;
-
-    var session = try MatchSession.init(self.shared.allocator, 0);
-    defer session.deinit(self.shared.allocator);
-    const symbolic = try expandConcreteDef(
-        self,
-        def_expr,
-        &session,
-    ) orelse return null;
-
-    if (!try matchSymbolicToExprState(
-        self,
-        symbolic,
-        target_expr,
-        &session,
-    ) and !try self.matchSymbolicToExprSemantic(
-        symbolic,
-        target_expr,
-        &session,
-        semantic_match_budget,
-    )) {
-        return null;
-    }
-    if (try WitnessState.materializeResolvedSymbolic(
-        self,
-        symbolic,
-        &session,
-    )) |witness| {
-        return witness;
-    }
-
     const roots = try WitnessState.collectUnresolvedRootsInSymbolicOwned(
         self,
         symbolic,
-        &session,
+        session,
     );
     defer self.shared.allocator.free(roots);
     if (roots.len == 0) return null;
@@ -405,7 +456,7 @@ pub fn instantiateDefTowardExprWithProvider(
         try WitnessState.collectConcreteDepsInSymbolicRoot(
             self,
             symbolic,
-            &session,
+            session,
         );
     const assignments = try provider.provide(
         self.shared.allocator,
@@ -415,13 +466,13 @@ pub fn instantiateDefTowardExprWithProvider(
     defer self.shared.allocator.free(assignments);
     try WitnessState.applyMaterializedDummyAssignments(
         self,
-        &session,
+        session,
         assignments,
     );
     return try WitnessState.materializeResolvedSymbolic(
         self,
         symbolic,
-        &session,
+        session,
     );
 }
 
@@ -437,67 +488,15 @@ fn sortUnresolvedRoots(roots: []Types.UnresolvedDummyRoot) void {
     }
 }
 
-fn instantiateDefTowardExprUncached(
+fn unfoldByTargetGuidance(
     self: anytype,
     def_expr: ExprId,
     target_expr: ExprId,
-) anyerror!?ExprId {
-    _ = getConcreteDef(self, def_expr) orelse return null;
-
-    if (try instantiateDefTowardExprViaSearch(
-        self,
-        def_expr,
-        target_expr,
-    )) |witness| {
-        return witness;
-    }
-    return try instantiateDefTowardExprViaTargetGuidance(
-        self,
-        def_expr,
-        target_expr,
-    );
-}
-
-pub fn instantiateDefTowardExprViaSearch(
-    self: anytype,
-    def_expr: ExprId,
-    target_expr: ExprId,
+    rewrites: MatchState.Rewriting,
 ) anyerror!?ExprId {
     var session = try MatchSession.init(self.shared.allocator, 0);
     defer session.deinit(self.shared.allocator);
-    const symbolic = try expandConcreteDef(
-        self,
-        def_expr,
-        &session,
-    ) orelse return null;
-
-    if (!try matchSymbolicToExprState(
-        self,
-        symbolic,
-        target_expr,
-        &session,
-    ) and !try self.matchSymbolicToExprSemantic(
-        symbolic,
-        target_expr,
-        &session,
-        semantic_match_budget,
-    )) {
-        return null;
-    }
-    return try WitnessState.materializeResolvedSymbolic(
-        self,
-        symbolic,
-        &session,
-    );
-}
-
-pub fn instantiateDefTowardExprViaTargetGuidance(
-    self: anytype,
-    def_expr: ExprId,
-    target_expr: ExprId,
-) anyerror!?ExprId {
-    var session = try MatchSession.init(self.shared.allocator, 0);
-    defer session.deinit(self.shared.allocator);
+    session.rewrites = rewrites;
     const symbolic = try expandConcreteDef(
         self,
         def_expr,
@@ -636,12 +635,6 @@ pub fn guideSymbolicWitnessesFromAcuiTarget(
             item_expr,
             acui.head_term_id,
             state,
-        ) and !try self.matchSymbolicAcuiLeafToExprSemantic(
-            symbolic,
-            item_expr,
-            acui.head_term_id,
-            state,
-            semantic_match_budget,
         )) {
             try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
             continue;
@@ -667,13 +660,10 @@ fn matchResolvedTemplateConcrete(
         symbolic,
         state,
     ) orelse return false;
-    return try WitnessState.concreteExprsMatchMode(
-        self,
-        resolved,
-        actual,
-        state,
-        .transparent,
-    );
+    if (state.rewrites == .all and self.shared.registry != null) {
+        if (try WitnessState.concreteExprsMatchModuloRewrites(self, resolved, actual, state)) return true;
+    }
+    return try WitnessState.concreteExprsMatchMode(self, resolved, actual, state, .transparent);
 }
 
 pub fn matchTemplateRecState(
@@ -721,6 +711,10 @@ pub fn matchTemplateRecState(
                 actual,
                 state,
             )) {
+                break :blk true;
+            }
+
+            if (try matchTemplateToNormalActual(self, template, actual, state)) {
                 break :blk true;
             }
 
@@ -788,15 +782,16 @@ fn drainDeferredNodes(
 ) anyerror!bool {
     state.deferral_suspended += 1;
     defer state.deferral_suspended -= 1;
+    // Settling a deferred node compares it modulo rewriting: its binders are
+    // bound now, so the redex can reduce.
+    const rewrites = state.rewrites;
+    state.rewrites = .all;
+    defer state.rewrites = rewrites;
     var idx = start;
     while (idx < state.deferred.items.len) : (idx += 1) {
         const node = state.deferred.items[idx];
-        if (!try self.matchTemplateSemanticState(
-            node.template,
-            node.actual,
-            state,
-            semantic_match_budget,
-        )) {
+        const symbolic = try symbolicFromTemplate(self, node.template);
+        if (!try tryMatchSymbolicToExprDirect(self, symbolic, node.actual, state)) {
             return false;
         }
     }
@@ -886,6 +881,20 @@ pub fn matchSymbolicToExprState(
     actual: ExprId,
     state: *MatchSession,
 ) anyerror!bool {
+    if (state.rewrites != .all) return try matchSymbolicToExprOnce(self, symbolic, actual, state);
+    var snapshot = try WitnessState.saveMatchSnapshot(self, state);
+    defer WitnessState.deinitMatchSnapshot(self, &snapshot);
+    if (try matchSymbolicToExprOnce(self, symbolic, actual, state)) return true;
+    try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
+    return try matchNormalForms(self, symbolic, try self.allocSymbolic(.{ .fixed = actual }), state);
+}
+
+fn matchSymbolicToExprOnce(
+    self: anytype,
+    symbolic: *const SymbolicExpr,
+    actual: ExprId,
+    state: *MatchSession,
+) anyerror!bool {
     if (holeyActual(self, actual) and (symbolic.* != .app or
         self.shared.theorem.isPlaceholder(actual))) return true;
     return switch (symbolic.*) {
@@ -899,7 +908,7 @@ pub fn matchSymbolicToExprState(
             );
         },
         .fixed => |expr_id| {
-            return (try compareTransparent(self, expr_id, actual)) != null;
+            return try fixedMatches(self, expr_id, actual, state);
         },
         .dummy => |slot| {
             const info = state.symbolic_dummy_infos.items[slot];
@@ -921,57 +930,61 @@ pub fn matchSymbolicToExprState(
                 if (actual_app.term_id == app.term_id and
                     actual_app.args.len == app.args.len)
                 {
-                    for (app.args, actual_app.args) |sym_arg, actual_arg| {
+                    const mismatch: ?usize = for (app.args, actual_app.args, 0..) |sym_arg, actual_arg, idx| {
                         if (!try matchSymbolicToExprState(
                             self,
                             sym_arg,
                             actual_arg,
                             state,
-                        )) {
-                            try WitnessState.restoreMatchSnapshot(
-                                self,
-                                &snapshot,
-                                state,
-                            );
-                            break;
-                        }
-                    } else {
-                        return true;
-                    }
+                        )) break idx;
+                    } else null;
+                    const idx = mismatch orelse return true;
+                    try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
+                    if (head_class.argDetermined(
+                        self.shared.env,
+                        self.shared.registry,
+                        app.term_id,
+                        idx,
+                    )) return false;
                 }
             }
 
-            try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
-
-            if (try expandSymbolicApp(self, app, state)) |expanded| {
-                if (try matchSymbolicToExprState(
+            const matched = switch (laterDef(self, app.term_id, exprHead(self, actual)) orelse return false) {
+                .lhs => try matchSymbolicToExprState(
                     self,
-                    expanded,
+                    try openedForMatch(self, try expandSymbolicApp(self, app, state), state) orelse return false,
                     actual,
                     state,
-                )) {
-                    return true;
-                }
-                try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
-            }
-
-            if (try expandConcreteDef(self, actual, state)) |expanded_actual| {
-                if (try matchSymbolicToSymbolicState(
+                ),
+                .rhs => try matchSymbolicToSymbolicState(
                     self,
                     symbolic,
-                    expanded_actual,
+                    try openedForMatch(self, try expandConcreteDef(self, actual, state), state) orelse return false,
                     state,
-                )) {
-                    return true;
-                }
-                try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
-            }
-            return false;
+                ),
+            };
+            if (!matched) try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
+            return matched;
         },
     };
 }
 
 pub fn matchExprToSymbolic(
+    self: anytype,
+    actual: ExprId,
+    symbolic: *const SymbolicExpr,
+    state: *MatchSession,
+    assign_mode: BindingMode,
+) anyerror!bool {
+    if (state.rewrites != .all) return try matchExprToSymbolicOnce(self, actual, symbolic, state, assign_mode);
+    var snapshot = try WitnessState.saveMatchSnapshot(self, state);
+    defer WitnessState.deinitMatchSnapshot(self, &snapshot);
+    if (try matchExprToSymbolicOnce(self, actual, symbolic, state, assign_mode)) return true;
+    try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
+    return try matchNormalForms(self, try self.allocSymbolic(.{ .fixed = actual }), symbolic, state);
+}
+
+fn matchExprToSymbolicOnce(
     self: anytype,
     actual: ExprId,
     symbolic: *const SymbolicExpr,
@@ -991,7 +1004,7 @@ pub fn matchExprToSymbolic(
             );
         },
         .fixed => |expr_id| {
-            return (try compareTransparent(self, actual, expr_id)) != null;
+            return try fixedMatches(self, actual, expr_id, state);
         },
         .dummy => |slot| {
             const info = state.symbolic_dummy_infos.items[slot];
@@ -1013,59 +1026,125 @@ pub fn matchExprToSymbolic(
                 if (actual_app.term_id == app.term_id and
                     actual_app.args.len == app.args.len)
                 {
-                    for (actual_app.args, app.args) |actual_arg, sym_arg| {
+                    const mismatch: ?usize = for (actual_app.args, app.args, 0..) |actual_arg, sym_arg, idx| {
                         if (!try matchExprToSymbolic(
                             self,
                             actual_arg,
                             sym_arg,
                             state,
                             assign_mode,
-                        )) {
-                            try WitnessState.restoreMatchSnapshot(
-                                self,
-                                &snapshot,
-                                state,
-                            );
-                            break;
-                        }
-                    } else {
-                        return true;
-                    }
+                        )) break idx;
+                    } else null;
+                    const idx = mismatch orelse return true;
+                    try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
+                    if (head_class.argDetermined(
+                        self.shared.env,
+                        self.shared.registry,
+                        app.term_id,
+                        idx,
+                    )) return false;
                 }
             }
 
-            try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
-
-            if (try expandConcreteDef(self, actual, state)) |expanded_actual| {
-                if (try matchSymbolicToSymbolicState(
+            const matched = switch (laterDef(self, exprHead(self, actual), app.term_id) orelse return false) {
+                .lhs => try matchSymbolicToSymbolicState(
                     self,
-                    expanded_actual,
+                    try openedForMatch(self, try expandConcreteDef(self, actual, state), state) orelse return false,
                     symbolic,
                     state,
-                )) {
-                    return true;
-                }
-                try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
-            }
-
-            if (try expandSymbolicApp(self, app, state)) |expanded| {
-                if (try matchExprToSymbolic(
+                ),
+                .rhs => try matchExprToSymbolic(
                     self,
                     actual,
-                    expanded,
+                    try openedForMatch(self, try expandSymbolicApp(self, app, state), state) orelse return false,
                     state,
                     assign_mode,
-                )) {
-                    return true;
-                }
-                try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
-            }
-            return false;
+                ),
+            };
+            if (!matched) try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
+            return matched;
         },
     };
 }
 
-const SemanticSearch = @import("./semantic_search.zig");
+const MatchMemoKey = @import("./match_memo_key.zig");
+const DirectedNormalize = @import("./directed_normalize.zig");
+
+/// Two concrete expressions: transparently equal, or, comparing modulo
+/// `@rewrite`, equal as `.normalized` concrete expressions (normal forms,
+/// ACUI rearrangement, a meet through defs).
+fn fixedMatches(self: anytype, lhs: ExprId, rhs: ExprId, state: *MatchSession) anyerror!bool {
+    if ((try compareTransparent(self, lhs, rhs)) != null) return true;
+    if (state.rewrites != .all or self.shared.registry == null) return false;
+    return try WitnessState.concreteExprsMatchModuloRewrites(self, lhs, rhs, state);
+}
+
+/// Comparing modulo `@rewrite`, a mismatch is final only between normal
+/// forms: compare the two sides again at their normal forms when either
+/// differs from what was compared. A normal form is a fixpoint, so the
+/// retry's own mismatch is final. Bound binders are read through the
+/// session; a redex over an unbound binder stays as it is.
+fn matchNormalForms(
+    self: anytype,
+    lhs: *const SymbolicExpr,
+    rhs: *const SymbolicExpr,
+    state: *MatchSession,
+) anyerror!bool {
+    if (self.shared.registry == null) return false;
+    const lhs_normal = try DirectedNormalize.normalForm(self, lhs, state) orelse return false;
+    const rhs_normal = try DirectedNormalize.normalForm(self, rhs, state) orelse return false;
+    if (!lhs_normal.changed and !rhs_normal.changed) return false;
+    return try matchSymbolicToSymbolicState(self, lhs_normal.expr, rhs_normal.expr, state);
+}
+
+/// A template node against the normal form of an actual it mismatched,
+/// comparing modulo `@rewrite`.
+fn matchTemplateToNormalActual(
+    self: anytype,
+    template: TemplateExpr,
+    actual: ExprId,
+    state: *MatchSession,
+) anyerror!bool {
+    if (state.rewrites != .all) return false;
+    const normal_expr = try normalExpr(self, actual, state);
+    if (normal_expr == actual) return false;
+    var snapshot = try WitnessState.saveMatchSnapshot(self, state);
+    defer WitnessState.deinitMatchSnapshot(self, &snapshot);
+    if (try matchTemplateRecState(self, template, normal_expr, state)) return true;
+    try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
+    return false;
+}
+
+/// Match `template` against `actual` modulo `@rewrite` (see
+/// `MatchSession.rewrites`): the transparent walk, with normal forms taken
+/// only where it mismatches. Deterministic: no rule choice, no unfolding
+/// order, nothing to search.
+pub fn matchTemplateModuloRewrites(
+    self: anytype,
+    template: TemplateExpr,
+    actual: ExprId,
+    state: *MatchSession,
+) anyerror!bool {
+    if (self.shared.registry == null) return try tryMatchTemplateStateDirect(self, template, actual, state);
+    const rewrites = state.rewrites;
+    state.rewrites = .all;
+    defer state.rewrites = rewrites;
+    return try tryMatchTemplateStateDirect(self, template, actual, state);
+}
+
+/// `matchTemplateModuloRewrites` for a symbolic pattern.
+pub fn matchSymbolicToExprModuloRewrites(
+    self: anytype,
+    symbolic: *const SymbolicExpr,
+    actual: ExprId,
+    state: *MatchSession,
+) anyerror!bool {
+    if (self.shared.registry == null) return try tryMatchSymbolicToExprDirect(self, symbolic, actual, state);
+    const rewrites = state.rewrites;
+    state.rewrites = .all;
+    defer state.rewrites = rewrites;
+    return try tryMatchSymbolicToExprDirect(self, symbolic, actual, state);
+}
 
 pub fn matchSymbolicToSymbolicState(
     self: anytype,
@@ -1073,10 +1152,9 @@ pub fn matchSymbolicToSymbolicState(
     rhs: *const SymbolicExpr,
     state: *MatchSession,
 ) anyerror!bool {
-    // Negative memo: this inner matcher does an unbudgeted bidirectional
-    // def-unfold and is invoked at every node of the outer semantic search,
-    // so it re-explores structurally-identical (lhs, rhs) pairs exponentially.
-    // The verdict is pure in (lhs, rhs) and the state they reach
+    // Negative memo: an unfolding shares the arguments it substitutes, so
+    // one pair is reached along every path to it, and a failing comparison
+    // would be repeated each time. The verdict is pure in (lhs, rhs) and the state they reach
     // (`hashMatchSessionReachable`); we cache only failures (success mutates
     // `state` and cannot be replayed from a key). Rollback-safe because the
     // key includes that state. Keying on the whole session would miss every
@@ -1089,20 +1167,29 @@ pub fn matchSymbolicToSymbolicState(
     // the thing `SymbolicExpr` interning would erase (O(1) keys), at which point
     // the structural hashes become id lookups; the memo logic is unchanged.
     const key = blk: {
-        const lh = SemanticSearch.hashSymbolicForSearch(self, lhs);
-        const rh = SemanticSearch.hashSymbolicForSearch(self, rhs);
-        const sh = try SemanticSearch.hashMatchSessionReachable(self, state, lhs, rhs);
+        const lh = Types.symbolicHash(lhs);
+        const rh = Types.symbolicHash(rhs);
+        const sh = try MatchMemoKey.hashMatchSessionReachable(self, state, lhs, rhs);
         var h = Types.mixHash(0xa1b2c3d4e5f60718, lh);
         h = Types.mixHash(h, rh);
         // A meta matches anything only under the flag: keep those
         // verdicts apart (`DefCacheKey`).
         if (self.shared.holes_match_anything) h = Types.mixHash(h, 1);
+        h = Types.mixHash(h, @backingInt(state.rewrites));
         break :blk Types.mixHash(h, sh);
     };
     if (state.sym_match_neg.contains(key)) {
         return false;
     }
-    const result = try matchSymbolicToSymbolicStateInner(self, lhs, rhs, state);
+    const result = if (state.rewrites != .all)
+        try matchSymbolicToSymbolicStateInner(self, lhs, rhs, state)
+    else blk: {
+        var snapshot = try WitnessState.saveMatchSnapshot(self, state);
+        defer WitnessState.deinitMatchSnapshot(self, &snapshot);
+        if (try matchSymbolicToSymbolicStateInner(self, lhs, rhs, state)) break :blk true;
+        try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
+        break :blk try matchNormalForms(self, lhs, rhs, state);
+    };
     if (!result) {
         try state.sym_match_neg.put(self.shared.allocator, key, {});
     }
@@ -1124,6 +1211,20 @@ fn matchSymbolicToSymbolicStateInner(
         return try matchSymbolicToExprState(self, lhs, rhs.fixed, state);
     }
     if (lhs.* != .app and holeySymbolicActual(self, rhs)) return true;
+    // Either side can hold the pattern: an actual whose def opened is
+    // compared on the left (`matchExprToSymbolic`). A binder or dummy on the
+    // right takes an app on the left as it is, as it would on the left.
+    if (lhs.* == .app) switch (rhs.*) {
+        .binder => |idx| return try WitnessState.assignBinderFromSymbolic(
+            self,
+            idx,
+            lhs,
+            state,
+            .transparent,
+        ),
+        .dummy => |slot| return try WitnessState.matchDummyToSymbolic(self, slot, lhs, state),
+        .app, .fixed => {},
+    };
     return switch (lhs.*) {
         .binder => |idx| blk: {
             break :blk try WitnessState.assignBinderFromSymbolic(
@@ -1155,57 +1256,42 @@ fn matchSymbolicToSymbolicStateInner(
                 if (lhs_app.term_id == rhs_app.term_id and
                     lhs_app.args.len == rhs_app.args.len)
                 {
-                    for (lhs_app.args, rhs_app.args) |lhs_arg, rhs_arg| {
+                    const mismatch: ?usize = for (lhs_app.args, rhs_app.args, 0..) |lhs_arg, rhs_arg, idx| {
                         if (!try matchSymbolicToSymbolicState(
                             self,
                             lhs_arg,
                             rhs_arg,
                             state,
-                        )) {
-                            try WitnessState.restoreMatchSnapshot(
-                                self,
-                                &snapshot,
-                                state,
-                            );
-                            break;
-                        }
-                    } else {
-                        return true;
-                    }
+                        )) break idx;
+                    } else null;
+                    const idx = mismatch orelse return true;
+                    try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
+                    if (head_class.argDetermined(
+                        self.shared.env,
+                        self.shared.registry,
+                        lhs_app.term_id,
+                        idx,
+                    )) return false;
                 }
             }
 
-            try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
-
-            if (try expandSymbolicApp(self, lhs_app, state)) |expanded_lhs| {
-                if (try matchSymbolicToSymbolicState(
+            const rhs_head: ?u32 = if (rhs.* == .app) rhs.app.term_id else null;
+            const matched = switch (laterDef(self, lhs_app.term_id, rhs_head) orelse return false) {
+                .lhs => try matchSymbolicToSymbolicState(
                     self,
-                    expanded_lhs,
+                    try openedForMatch(self, try expandSymbolicApp(self, lhs_app, state), state) orelse return false,
                     rhs,
                     state,
-                )) {
-                    return true;
-                }
-                try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
-            }
-            if (rhs.* == .app) {
-                if (try expandSymbolicApp(self, rhs.app, state)) |expanded_rhs| {
-                    if (try matchSymbolicToSymbolicState(
-                        self,
-                        lhs,
-                        expanded_rhs,
-                        state,
-                    )) {
-                        return true;
-                    }
-                    try WitnessState.restoreMatchSnapshot(
-                        self,
-                        &snapshot,
-                        state,
-                    );
-                }
-            }
-            return false;
+                ),
+                .rhs => try matchSymbolicToSymbolicState(
+                    self,
+                    lhs,
+                    try openedForMatch(self, try expandSymbolicApp(self, rhs.app, state), state) orelse return false,
+                    state,
+                ),
+            };
+            if (!matched) try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
+            return matched;
         },
     };
 }

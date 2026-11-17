@@ -1,8 +1,7 @@
 const SharedContext = @import("./shared_context.zig").SharedContext;
 const TransparentMatch =
     @import("./symbolic_engine/transparent_match.zig");
-const SemanticSearch =
-    @import("./symbolic_engine/semantic_search.zig");
+const MatchMemoKey = @import("./symbolic_engine/match_memo_key.zig");
 const RewriteApplication =
     @import("./symbolic_engine/rewrite_application.zig");
 const DirectedNormalize =
@@ -13,7 +12,7 @@ const Types = @import("./types.zig");
 const SymbolicExpr = Types.SymbolicExpr;
 const expr_mod = @import("../expr.zig");
 
-pub const SemanticStepCandidate = SemanticSearch.SemanticStepCandidate;
+pub const LaterSide = TransparentMatch.Side;
 
 pub const SymbolicEngine = struct {
     shared: *SharedContext,
@@ -26,39 +25,30 @@ pub const SymbolicEngine = struct {
     pub const compareTransparent = TransparentMatch.compareTransparent;
     pub const matchTemplateTransparent =
         TransparentMatch.matchTemplateTransparent;
-    pub const instantiateDefTowardExpr =
-        TransparentMatch.instantiateDefTowardExpr;
-    pub const instantiateDefTowardExprWithProvider =
-        TransparentMatch.instantiateDefTowardExprWithProvider;
     pub const expandConcreteDef = TransparentMatch.expandConcreteDef;
     pub const unfoldConcreteDef = TransparentMatch.unfoldConcreteDef;
+    pub const unfoldDefToward = TransparentMatch.unfoldDefToward;
+    pub const laterDef = TransparentMatch.laterDef;
+    pub const exprHead = TransparentMatch.exprHead;
     pub const matchTemplateRecState =
         TransparentMatch.matchTemplateRecState;
     pub const tryMatchTemplateStateDirect =
         TransparentMatch.tryMatchTemplateStateDirect;
     pub const tryMatchTemplateUnsettledState =
         TransparentMatch.tryMatchTemplateUnsettledState;
-    pub const matchTemplateSemantic = SemanticSearch.matchTemplateSemantic;
+    pub const matchTemplateModuloRewrites =
+        TransparentMatch.matchTemplateModuloRewrites;
+    pub const matchSymbolicToExprModuloRewrites =
+        TransparentMatch.matchSymbolicToExprModuloRewrites;
+    pub const matchSymbolicToSymbolicState =
+        TransparentMatch.matchSymbolicToSymbolicState;
     pub const hashMatchSessionReachable =
-        SemanticSearch.hashMatchSessionReachable;
-    pub const collectSemanticStepCandidatesExpr =
-        SemanticSearch.collectSemanticStepCandidatesExpr;
-    pub const collectSemanticStepCandidatesSymbolic =
-        SemanticSearch.collectSemanticStepCandidatesSymbolic;
-    pub const matchTemplateSemanticState =
-        SemanticSearch.matchTemplateSemanticState;
-    pub const matchSymbolicToExprSemantic =
-        SemanticSearch.matchSymbolicToExprSemantic;
-    pub const matchSymbolicToSymbolicSemantic =
-        SemanticSearch.matchSymbolicToSymbolicSemantic;
-    pub const matchSymbolicAcuiLeafToExprSemantic =
-        SemanticSearch.matchSymbolicAcuiLeafToExprSemantic;
+        MatchMemoKey.hashMatchSessionReachable;
     pub const applyRewriteRuleToExpr =
         RewriteApplication.applyRewriteRuleToExpr;
     pub const applyRewriteRuleToSymbolic =
         RewriteApplication.applyRewriteRuleToSymbolic;
     pub const bigStepSymbolic = DirectedNormalize.bigStepSymbolic;
-    pub const bigStepExpr = DirectedNormalize.bigStepExpr;
 
     pub const boundValueFromSeed = WitnessState.boundValueFromSeed;
     pub const chooseRepresentative = WitnessState.chooseRepresentative;

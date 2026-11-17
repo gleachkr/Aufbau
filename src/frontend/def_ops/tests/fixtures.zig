@@ -4,8 +4,6 @@ const ExprId = @import("../../expr.zig").ExprId;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
 const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
-const SemanticStepCandidate =
-    @import("../symbolic_engine.zig").SemanticStepCandidate;
 const BindingSeed = @import("../types.zig").BindingSeed;
 const ArgInfo = @import("../../parse_recovery.zig").ArgInfo;
 const AssertionStmt = @import("../../parse_recovery.zig").AssertionStmt;
@@ -111,7 +109,7 @@ pub const SessionWitnessFixture = struct {
     }
 };
 
-pub const SemanticStepFixture = struct {
+pub const RewriteFixture = struct {
     // Heap-allocated so the `arena.allocator()` values captured by the
     // parser/env/theorem during init stay valid after the fixture struct is
     // returned by value (an inline arena's captured self-pointer would
@@ -123,7 +121,7 @@ pub const SemanticStepFixture = struct {
     mono_expr: ExprId,
     comp_expr: ExprId,
     ctx_expr: ExprId,
-    semantic_target_expr: ExprId,
+    rewrite_target_expr: ExprId,
     mono_body: TemplateExpr,
     mono_term_id: u32,
     comp_term_id: u32,
@@ -132,7 +130,7 @@ pub const SemanticStepFixture = struct {
     dup_left_rule_id: u32,
     mor_sort_id: u8,
 
-    pub fn init() !SemanticStepFixture {
+    pub fn init() !RewriteFixture {
         const src =
             \\delimiter $ ( ) $;
             \\provable sort wff;
@@ -263,29 +261,29 @@ pub const SemanticStepFixture = struct {
             &[_]ExprId{gof},
         );
 
-        const semantic_lhs_inner = try theorem.interner.internApp(
+        const rewrite_lhs_inner = try theorem.interner.internApp(
             comp_term_id,
             &[_]ExprId{ gof, g },
         );
-        const semantic_lhs = try theorem.interner.internApp(
+        const rewrite_lhs = try theorem.interner.internApp(
             comp_term_id,
-            &[_]ExprId{ semantic_lhs_inner, alpha },
+            &[_]ExprId{ rewrite_lhs_inner, alpha },
         );
-        const semantic_rhs_inner = try theorem.interner.internApp(
+        const rewrite_rhs_inner = try theorem.interner.internApp(
             comp_term_id,
             &[_]ExprId{ g, alpha },
         );
-        const semantic_rhs_mid = try theorem.interner.internApp(
+        const rewrite_rhs_mid = try theorem.interner.internApp(
             comp_term_id,
-            &[_]ExprId{ f, semantic_rhs_inner },
+            &[_]ExprId{ f, rewrite_rhs_inner },
         );
-        const semantic_rhs = try theorem.interner.internApp(
+        const rewrite_rhs = try theorem.interner.internApp(
             comp_term_id,
-            &[_]ExprId{ g, semantic_rhs_mid },
+            &[_]ExprId{ g, rewrite_rhs_mid },
         );
-        const semantic_target_expr = try theorem.interner.internApp(
+        const rewrite_target_expr = try theorem.interner.internApp(
             env.term_names.get("mor_eq") orelse return error.MissingTerm,
-            &[_]ExprId{ semantic_lhs, semantic_rhs },
+            &[_]ExprId{ rewrite_lhs, rewrite_rhs },
         );
 
         const hp = try theorem.interner.internApp(
@@ -309,7 +307,7 @@ pub const SemanticStepFixture = struct {
             .mono_expr = mono_expr,
             .comp_expr = comp_expr,
             .ctx_expr = ctx_expr,
-            .semantic_target_expr = semantic_target_expr,
+            .rewrite_target_expr = rewrite_target_expr,
             .mono_body = env.terms.items[mono_term_id].body orelse {
                 return error.MissingTermBody;
             },
@@ -322,14 +320,14 @@ pub const SemanticStepFixture = struct {
         };
     }
 
-    pub fn deinit(self: *SemanticStepFixture) void {
+    pub fn deinit(self: *RewriteFixture) void {
         self.theorem.deinit();
         self.arena.deinit();
         std.testing.allocator.destroy(self.arena);
     }
 };
 
-pub const SemanticAcuiExposureFixture = struct {
+pub const AcuiExposureFixture = struct {
     // Heap-allocated so the `arena.allocator()` values captured by the
     // parser/env/theorem during init stay valid after the fixture struct is
     // returned by value (an inline arena's captured self-pointer would
@@ -348,7 +346,7 @@ pub const SemanticAcuiExposureFixture = struct {
     pub fn init(
         comptime hidden_bound: bool,
         comptime host_u_bound: bool,
-    ) !SemanticAcuiExposureFixture {
+    ) !AcuiExposureFixture {
         const hidden_binder = if (hidden_bound)
             "def pre_ctx (u: obj) {.x: obj}: ctx = $ box (hyp (u = x)) $;\n\n"
         else
@@ -493,14 +491,14 @@ pub const SemanticAcuiExposureFixture = struct {
         };
     }
 
-    pub fn deinit(self: *SemanticAcuiExposureFixture) void {
+    pub fn deinit(self: *AcuiExposureFixture) void {
         self.theorem.deinit();
         self.arena.deinit();
         std.testing.allocator.destroy(self.arena);
     }
 };
 
-pub const SemanticWrappedAcuiDefFixture = struct {
+pub const WrappedAcuiDefFixture = struct {
     // Heap-allocated so the `arena.allocator()` values captured by the
     // parser/env/theorem during init stay valid after the fixture struct is
     // returned by value (an inline arena's captured self-pointer would
@@ -518,7 +516,7 @@ pub const SemanticWrappedAcuiDefFixture = struct {
         comptime full_acui: bool,
         comptime hidden_bound: bool,
         comptime host_u_bound: bool,
-    ) !SemanticWrappedAcuiDefFixture {
+    ) !WrappedAcuiDefFixture {
         const hidden_binder = if (hidden_bound) "{.x: obj}" else "(.x: obj)";
         // pre_ctx2 duplicates pre_ctx so tests can compare two independent
         // expansions whose hidden dummies align without either being pinned
@@ -762,14 +760,14 @@ pub const SemanticWrappedAcuiDefFixture = struct {
         };
     }
 
-    pub fn deinit(self: *SemanticWrappedAcuiDefFixture) void {
+    pub fn deinit(self: *WrappedAcuiDefFixture) void {
         self.theorem.deinit();
         self.arena.deinit();
         std.testing.allocator.destroy(self.arena);
     }
 };
 
-pub const SemanticQuantifiedAcuiDefFixture = struct {
+pub const QuantifiedAcuiDefFixture = struct {
     // Heap-allocated so the `arena.allocator()` values captured by the
     // parser/env/theorem during init stay valid after the fixture struct is
     // returned by value (an inline arena's captured self-pointer would
@@ -782,7 +780,7 @@ pub const SemanticQuantifiedAcuiDefFixture = struct {
     target_expr: ExprId,
     expected_witness: ExprId,
 
-    pub fn init(comptime full_acui: bool) !SemanticQuantifiedAcuiDefFixture {
+    pub fn init(comptime full_acui: bool) !QuantifiedAcuiDefFixture {
         const def_body = if (full_acui)
             "def pre_ctx (u: obj) (r: wff) {.x: obj}: wff =\n" ++
                 "  $ A. x (((emp , hyp (u = x)) , (hyp r , " ++
@@ -982,7 +980,7 @@ pub const SemanticQuantifiedAcuiDefFixture = struct {
         };
     }
 
-    pub fn deinit(self: *SemanticQuantifiedAcuiDefFixture) void {
+    pub fn deinit(self: *QuantifiedAcuiDefFixture) void {
         self.theorem.deinit();
         self.arena.deinit();
         std.testing.allocator.destroy(self.arena);
@@ -998,77 +996,4 @@ pub fn allocNoneSeeds(
         seed.* = .none;
     }
     return seeds;
-}
-
-pub fn hasConcreteUnfold(
-    steps: []const SemanticStepCandidate,
-    expr_id: ExprId,
-    term_id: u32,
-) bool {
-    for (steps) |step| {
-        switch (step) {
-            .unfold_concrete_def => |unfold| {
-                if (unfold.expr_id == expr_id and unfold.term_id == term_id) {
-                    return true;
-                }
-            },
-            else => {},
-        }
-    }
-    return false;
-}
-
-pub fn hasSymbolicUnfold(
-    steps: []const SemanticStepCandidate,
-    term_id: u32,
-) bool {
-    for (steps) |step| {
-        switch (step) {
-            .unfold_symbolic_def => |unfold| {
-                if (unfold.term_id == term_id) return true;
-            },
-            else => {},
-        }
-    }
-    return false;
-}
-
-pub fn hasRewriteRule(
-    steps: []const SemanticStepCandidate,
-    rule_id: u32,
-    head_term_id: u32,
-) bool {
-    for (steps) |step| {
-        switch (step) {
-            .rewrite_rule => |rule| {
-                if (rule.rule_id == rule_id and rule.head_term_id == head_term_id) {
-                    return true;
-                }
-            },
-            else => {},
-        }
-    }
-    return false;
-}
-
-pub fn hasNormalizeBigStep(steps: []const SemanticStepCandidate) bool {
-    for (steps) |step| {
-        if (step == .normalize_rewrites) return true;
-    }
-    return false;
-}
-
-pub fn hasAcuiHead(
-    steps: []const SemanticStepCandidate,
-    head_term_id: u32,
-) bool {
-    for (steps) |step| {
-        switch (step) {
-            .acui => |acui| {
-                if (acui.head_term_id == head_term_id) return true;
-            },
-            else => {},
-        }
-    }
-    return false;
 }

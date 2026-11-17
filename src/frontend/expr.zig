@@ -411,11 +411,20 @@ pub const DefCacheKey = struct {
     holes_match_anything: bool,
 };
 
+pub const UnfoldCacheKey = struct {
+    def_expr: ExprId,
+    target_expr: ExprId,
+    has_registry: bool,
+    rewrites: bool,
+    holes_match_anything: bool,
+};
+
 pub const AcuiCacheKey = struct {
     def_expr: ExprId,
     item_expr: ExprId,
     head_term_id: u32,
     has_registry: bool,
+    rewrites: bool,
     holes_match_anything: bool,
 };
 
@@ -498,23 +507,24 @@ pub const TheoremContext = struct {
     def_ops_cache_env_addr: usize = 0,
     def_ops_cache_registry_addr: usize = 0,
 
-    /// Pure memo for `instantiateDefTowardExpr` (def_ops transparent match).
-    /// That query is pure in `(def_expr, target_expr)` under the fixed
-    /// env/registry invariant above. It spins up a fresh empty `MatchSession`
-    /// each call. Transient `def_ops.Context`s that ACUI common-target building
-    /// creates per leaf-pair otherwise re-derive the same answers millions of
-    /// times. Cleared on `clone` (correctness-neutral; drops memo benefit).
-    instantiate_def_cache: std.AutoHashMapUnmanaged(DefCacheKey, ?ExprId) = .empty,
-
     /// Negative memo for `compareTransparent`: set of `(lhs, rhs)` pairs known
     /// to be NOT def-equal under the fixed env/registry invariant above. The
     /// doomed-match verdict is the expensive, pure part; positive plans are
     /// recomputed (they are request-arena pointers). Cleared on `clone`.
     compare_transparent_neg: std.AutoHashMapUnmanaged(DefCacheKey, void) = .empty,
 
+    /// Memo for `unfoldDefToward`: the unfolding of a def toward a target,
+    /// pure in the key under the fixed env/registry invariant above when no
+    /// hidden-witness provider is consulted (those results are not stored).
+    /// Cleared on `clone`.
+    unfold_toward_cache: std.AutoHashMapUnmanaged(UnfoldCacheKey, ?ExprId) = .empty,
+
     /// Pure memo for `instantiateDefTowardAcuiItem` (def coverage of an ACUI
-    /// set member). Same rationale as `instantiate_def_cache`; keyed by the
-    /// def/item exprs plus the ACUI head term. Cleared on `clone`.
+    /// set member). Pure in the def/item exprs and the ACUI head term under
+    /// the fixed env/registry invariant above; it builds a fresh session per
+    /// call, and the transient `def_ops.Context`s that ACUI common-target
+    /// building creates per leaf pair would otherwise re-derive the same
+    /// answers many times. Cleared on `clone`.
     instantiate_acui_cache: std.AutoHashMapUnmanaged(AcuiCacheKey, ?ExprId) = .empty,
 
     /// Pure memo for `acui_support.Context.isDefBearing` ("does this expr
@@ -615,8 +625,8 @@ pub const TheoremContext = struct {
         self.theorem_dummies.deinit(self.allocator);
         self.theorem_placeholders.deinit(self.allocator);
         self.parser_vars.deinit(self.allocator);
-        self.instantiate_def_cache.deinit(self.allocator);
         self.compare_transparent_neg.deinit(self.allocator);
+        self.unfold_toward_cache.deinit(self.allocator);
         self.instantiate_acui_cache.deinit(self.allocator);
         self.def_bearing_cache.deinit(self.allocator);
         self.placeholder_scan_cache.deinit(self.allocator);

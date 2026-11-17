@@ -98,7 +98,7 @@ fn buildDefCommonTarget(
     // The two def-unfolding steps can only make progress through a
     // concrete def: `compareTransparent` on distinct interned exprs needs
     // a def-headed subterm to get past a structural mismatch, and
-    // `instantiateDefTowardExpr` bails unless its expr is def-headed.
+    // `unfoldDefToward` bails unless its expr is def-headed.
     // Hash-consing makes "distinct ids, no def anywhere" a proof that both
     // return null, so skip their per-pair cache probes entirely.
     const support = try self.support();
@@ -106,7 +106,7 @@ fn buildDefCommonTarget(
     if (try buildDirectTransparentCommonTarget(self, lhs, rhs)) |direct| {
         return direct;
     }
-    return try buildSemanticDefCommonTarget(self, lhs, rhs);
+    return try buildDefUnfoldingCommonTarget(self, lhs, rhs);
 }
 
 pub fn buildDirectTransparentCommonTarget(
@@ -144,44 +144,42 @@ pub fn buildDirectTransparentCommonTarget(
     return null;
 }
 
-pub fn buildSemanticDefCommonTarget(
+pub fn buildDefUnfoldingCommonTarget(
     self: anytype,
     lhs: ExprId,
     rhs: ExprId,
 ) anyerror!?CommonTargetResult {
     const relation = Support.relationFor(self, lhs) orelse return null;
-    if (try buildSemanticCommonTargetFromDef(self, lhs, rhs, relation)) |result| {
-        return result;
+    // Unfold the side with the later def head, and only that side (see
+    // `compareTransparent`): no search over which side opens first.
+    const def_ops = try self.defOps();
+    switch (def_ops.laterDef(lhs, rhs) orelse return null) {
+        .lhs => return try buildCommonTargetFromUnfolding(self, lhs, rhs, relation),
+        .rhs => {
+            const result = try buildCommonTargetFromUnfolding(self, rhs, lhs, relation) orelse
+                return null;
+            return .{
+                .target_expr = result.target_expr,
+                .lhs_conv_line_idx = result.rhs_conv_line_idx,
+                .rhs_conv_line_idx = result.lhs_conv_line_idx,
+            };
+        },
     }
-    if (try buildSemanticCommonTargetFromDef(self, rhs, lhs, relation)) |result| {
-        return .{
-            .target_expr = result.target_expr,
-            .lhs_conv_line_idx = result.rhs_conv_line_idx,
-            .rhs_conv_line_idx = result.lhs_conv_line_idx,
-        };
-    }
-    return null;
 }
 
-pub fn buildSemanticCommonTargetFromDef(
+pub fn buildCommonTargetFromUnfolding(
     self: anytype,
     def_expr: ExprId,
     other_expr: ExprId,
     relation: ResolvedRelation,
 ) anyerror!?CommonTargetResult {
     const def_ops = try self.defOps();
-    const witness = if (self.hidden_witness_provider) |provider|
-        try def_ops.instantiateDefTowardExprWithProvider(
-            def_expr,
-            other_expr,
-            provider,
-        )
-    else
-        try def_ops.instantiateDefTowardExpr(
-            def_expr,
-            other_expr,
-        );
-    const concrete_witness = witness orelse return null;
+    const concrete_witness = try def_ops.unfoldDefToward(
+        def_expr,
+        other_expr,
+        self.rewrites,
+        self.hidden_witness_provider,
+    ) orelse return null;
     const def_to_witness = try ProofEmit.emitTransparentRelationProof(
         self,
         relation,
