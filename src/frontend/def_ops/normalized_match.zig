@@ -1030,11 +1030,15 @@ pub const RuleMatchSession = struct {
                 .variable => false,
                 .placeholder => false,
                 .app => |actual_app| blk: {
-                    if (pattern_app.term_id != actual_app.term_id) {
-                        break :blk false;
-                    }
-                    if (pattern_app.args.len != actual_app.args.len) {
-                        break :blk false;
+                    if (pattern_app.term_id != actual_app.term_id or
+                        pattern_app.args.len != actual_app.args.len)
+                    {
+                        break :blk try self.matchConcreteToHoley(
+                            view,
+                            pattern_app,
+                            pattern_expr,
+                            actual_expr,
+                        );
                     }
                     for (pattern_app.args, actual_app.args) |pattern_arg, actual_arg| {
                         if (!try self.matchNormalizedPattern(
@@ -1049,6 +1053,44 @@ pub const RuleMatchSession = struct {
                 },
             },
         };
+    }
+
+    /// A concrete pattern facing an actual with another head that holds a
+    /// hole: the walk above cannot open a def, so the transparent matcher
+    /// compares them, opening the later def, with the actual's holes
+    /// matching anything (`holeyActual`). The pattern goes in as an
+    /// application, so its head is compared rather than accepted whole as
+    /// a fixed subterm facing a holey actual. False when the pattern holds
+    /// a binder or the actual holds anything but holes.
+    fn matchConcreteToHoley(
+        self: *RuleMatchSession,
+        view: *const NormalizedView,
+        pattern_app: ExprNode.App,
+        pattern_expr: ExprId,
+        actual_expr: ExprId,
+    ) anyerror!bool {
+        if (!view.holes_match_anything) return false;
+        if (!view.mirror.theorem.containsMetaLeaf(actual_expr)) return false;
+        if ((try self.mirrorExprToConcrete(pattern_expr, view)) == null) return false;
+        const actual = (try self.mirrorExprToSource(actual_expr, view, true)) orelse
+            return false;
+        var symbolic_engine = self.engine();
+        const args = try self.shared.allocator.alloc(*const SymbolicExpr, pattern_app.args.len);
+        errdefer self.shared.allocator.free(args);
+        for (pattern_app.args, args) |arg, *out| {
+            out.* = try symbolic_engine.allocSymbolic(.{
+                .fixed = (try self.mirrorExprToConcrete(arg, view)).?,
+            });
+        }
+        const pattern = try symbolic_engine.allocSymbolic(.{ .app = .{
+            .term_id = pattern_app.term_id,
+            .args = args,
+        } });
+        return try symbolic_engine.matchSymbolicToExprModuloRewrites(
+            pattern,
+            actual,
+            &self.state,
+        );
     }
 
     fn assignNormalizedTarget(
@@ -1140,9 +1182,22 @@ pub const RuleMatchSession = struct {
         expr_id: ExprId,
         view: *const NormalizedView,
     ) anyerror!?ExprId {
+        return try self.mirrorExprToSource(expr_id, view, false);
+    }
+
+    /// The source counterpart of mirror expression `expr_id`; with
+    /// `keep_holes`, a hole (`NormalizedPlaceholderTarget.hole`) copied from
+    /// the source maps back to its source meta. Null when it holds any other
+    /// placeholder.
+    fn mirrorExprToSource(
+        self: *RuleMatchSession,
+        expr_id: ExprId,
+        view: *const NormalizedView,
+        keep_holes: bool,
+    ) anyerror!?ExprId {
         var memo: ConcreteMemo = .{};
         defer memo.deinit(self.shared.allocator);
-        return self.mirrorExprToConcreteMemo(&memo, expr_id, view);
+        return self.mirrorExprToConcreteMemo(&memo, expr_id, view, keep_holes);
     }
 
     const ConcreteMemo = TheoremContext.DagMemo(?ExprId);
@@ -1152,6 +1207,7 @@ pub const RuleMatchSession = struct {
         memo: *ConcreteMemo,
         expr_id: ExprId,
         view: *const NormalizedView,
+        keep_holes: bool,
     ) anyerror!?ExprId {
         return switch (view.mirror.theorem.interner.node(expr_id).*) {
             .variable => |var_id| switch (var_id) {
@@ -1168,10 +1224,14 @@ pub const RuleMatchSession = struct {
                     break :blk view.mirror.mirror_dummy_map[idx];
                 },
             },
-            .placeholder => null,
+            .placeholder => blk: {
+                if (!keep_holes) break :blk null;
+                const target = view.placeholderTarget(expr_id) orelse break :blk null;
+                break :blk if (target == .hole) view.sourceExprForMirror(expr_id) else null;
+            },
             .app => |app| blk: {
                 if (memo.get(expr_id)) |concrete| break :blk concrete;
-                const concrete = try self.mirrorAppToConcrete(memo, app, view);
+                const concrete = try self.mirrorAppToConcrete(memo, app, view, keep_holes);
                 try memo.put(self.shared.allocator, expr_id, concrete);
                 break :blk concrete;
             },
@@ -1183,11 +1243,12 @@ pub const RuleMatchSession = struct {
         memo: *ConcreteMemo,
         app: ExprNode.App,
         view: *const NormalizedView,
+        keep_holes: bool,
     ) anyerror!?ExprId {
         const args = try self.shared.allocator.alloc(ExprId, app.args.len);
         errdefer self.shared.allocator.free(args);
         for (app.args, 0..) |arg, idx| {
-            args[idx] = (try self.mirrorExprToConcreteMemo(memo, arg, view)) orelse {
+            args[idx] = (try self.mirrorExprToConcreteMemo(memo, arg, view, keep_holes)) orelse {
                 self.shared.allocator.free(args);
                 return null;
             };

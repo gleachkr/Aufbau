@@ -1,0 +1,3 @@
+inline_weaken
+-------------
+l1: $ g , p , q |- both a b $ by args [weaken [#1], kr_ok []]

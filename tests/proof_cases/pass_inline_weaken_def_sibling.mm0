@@ -1,0 +1,67 @@
+import "lib/iff.mm0";
+
+-- An inline `weaken [#1]` whose expected premise holds a rule variable only
+-- a later sibling fixes (`K` in `args [...]`): the hint has a hole where `K`
+-- goes, and the cited premise reaches it only through a def (`rd`) and an
+-- opened context. Lean0 model-fold `tys_wf_single_closed`.
+
+sort ctx;
+sort fml;
+sort obj;
+
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+notation emp: ctx = ($E$:max);
+
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+
+term hyp (a: fml): ctx;
+coercion hyp: fml > ctx;
+term nd (g: ctx) (a: fml): wff;
+infixl nd: $|-$ prec 0;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx):
+  $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+axiom ctx_unit (g: ctx): $ ctx_eq (E , g) g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ >
+  $ ctx_eq (g1 , h1) (g2 , h2) $;
+term feq (a b: fml): wff;
+--| @relation fml feq feq_refl feq_trans feq_sym _
+axiom feq_refl (a: fml): $ feq a a $;
+axiom feq_trans (a b c: fml): $ feq a b $ > $ feq b c $ > $ feq a c $;
+axiom feq_sym (a b: fml): $ feq a b $ > $ feq b a $;
+
+--| @congr
+axiom nd_congr (g h: ctx) (a b: fml):
+  $ ctx_eq g h $ > $ feq a b $ > $ (g |- a) <-> (h |- b) $;
+
+axiom weaken (g h: ctx) (a: fml): $ g |- a $ > $ g , h |- a $;
+
+term z: obj;
+term s (a: obj): obj;
+term pr (a b: obj): obj;
+def kr: obj = $ s z $;
+def rd (a b: obj): obj = $ pr kr (pr a b) $;
+
+term good (a: obj): fml;
+term ok (a: obj): fml;
+term both (a b: obj): fml;
+
+axiom args (g: ctx) (k a b: obj):
+  $ g |- good (pr k (pr a b)) $ > $ g |- ok k $ > $ g |- both a b $;
+axiom kr_ok (g: ctx): $ g |- ok kr $;
+
+theorem inline_weaken (g: ctx) (a b: obj) (p q: fml):
+  $ g |- good (rd a b) $ > $ g , p , q |- both a b $;

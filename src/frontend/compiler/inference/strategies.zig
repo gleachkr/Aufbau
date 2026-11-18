@@ -602,7 +602,7 @@ fn finishRuleMatchSession(
     const scratch = context.scratch;
     const rule = context.rule;
 
-    // The directed-rewrite big-step inside the semantic matcher records fuel
+    // Directed-rewrite normalization during matching records fuel
     // exhaustion on the session; surface it on every exit path so a caller's
     // debug trace can flag a mismatch as a possible fuel artifact.
     defer if (rewrite_fuel_exhausted) |out| {
