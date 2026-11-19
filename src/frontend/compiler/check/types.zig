@@ -32,6 +32,7 @@ const CompilerContext = @import("../context.zig").CompilerContext;
 const HoleInferenceSink = @import("../context.zig").HoleInferenceSink;
 const InlineConclusionSink = @import("../context.zig").InlineConclusionSink;
 const DiagnosticSink = @import("../diagnostic_sink.zig").DiagnosticSink;
+const OpenGoals = @import("./open_goals.zig");
 const Normalize = @import("../normalize.zig");
 const ViewTrace = @import("../../view_trace.zig");
 const Diagnostic = CompilerDiag.Diagnostic;
@@ -216,6 +217,9 @@ pub const RuleApplyContext = struct {
     checked: *std.ArrayListUnmanaged(CheckedLine),
     diag_scratch: *CompilerDiag.Scratch,
     rule_unify_cache: *Inference.RuleUnifyCache,
+    /// The goals the line walk's check learns for the line's open goals;
+    /// null where no line is being reported (the search's contexts).
+    open_goals: ?*OpenGoals.Records = null,
 };
 
 pub fn buildTheoremVarMap(

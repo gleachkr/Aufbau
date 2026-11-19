@@ -497,6 +497,9 @@ pub const DiagnosticSink = struct {
                 .term_name = self.stableRequiredString(info.term_name),
             } },
             .expected_char => |info| .{ .expected_char = info },
+            .open_goal => |info| .{ .open_goal = .{
+                .goal = self.stableString(info.goal),
+            } },
         };
     }
 

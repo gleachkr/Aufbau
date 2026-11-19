@@ -98,6 +98,38 @@ instruction at that line only, so the verifier checks every other step; it
 names each admitted theorem and exits with status 3 as well. `sorry!` takes
 no bindings or references, and its goal may not contain holes.
 
+## Open goals
+
+A line justified by `?` is an open goal: a step still to be proved. The
+editor checks the rest of the block as if the line were admitted, so later
+lines may cite it, and reports the goal it stands for. A `?` may also fill a
+reference slot, where its goal is what the rule needs there, given the line's
+statement and the other references:
+
+```aufbau-proof
+@@mm0
+delimiter $ ( ) $;
+provable sort wff;
+term imp (a b: wff): wff; infixr imp: $->$ prec 25;
+axiom mp (a b: wff): $ a $ > $ a -> b $ > $ b $;
+theorem open_step (p q: wff): $ p $ > $ q $;
+@@auf
+open_step
+---------
+l1: $ q $ by mp [#1, ?]
+```
+
+Here the open goal is `p -> q`. Where the line fixes only part of a goal,
+the rest shows as the sort's hole token, and the line is checked no further
+until the open goal is filled in.
+
+A line may also name the facts a step uses before its rule is chosen:
+`by ? [#1, l2]`. The references are checked, but there is no rule yet to
+check them against. A `?` takes no bindings.
+
+Unlike `sorry!`, an open goal does not compile: the compiler reports every
+`?` with its goal, then how many remain.
+
 ## Layout and comments
 
 Within a proof line, line breaks may fall before or after `by`, inside binding

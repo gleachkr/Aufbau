@@ -652,7 +652,7 @@ pub fn isHoleyGoalHint(theorem: *const TheoremContext, hint: ExprId) bool {
 
 /// An open binder in a holey goal's hint is a line hole, like the line's own
 /// holes: a wildcard that spends no dependency slot.
-fn mintHintHole(
+pub fn mintHintHole(
     _: ?*anyopaque,
     theorem: *TheoremContext,
     sort_name: []const u8,

@@ -109,6 +109,8 @@ pub const DiagnosticKind = enum {
     unused_definition_parameter,
     sorry_line,
     sorry_line_arguments,
+    open_goal,
+    open_goal_bindings,
     cites_unfinished_line,
     proof_heap_large,
 };
@@ -217,6 +219,11 @@ pub const DiagnosticDetail = union(enum) {
     /// The heap entries a theorem's proof takes to verify.
     proof_heap: struct {
         heap_len: usize,
+    },
+    /// An open goal's statement, printed in source notation; null when the
+    /// line does not determine it.
+    open_goal: struct {
+        goal: ?[]const u8,
     },
 };
 
@@ -622,6 +629,8 @@ pub const DiagnosticError = error{
     RuleNotYetAvailable,
     SorryLine,
     SorryLineArguments,
+    OpenGoal,
+    OpenGoalBindings,
     CitesUnfinishedLine,
     SortMismatch,
     TermMismatch,
@@ -1393,6 +1402,8 @@ pub fn diagnosticSummary(diag: Diagnostic) []const u8 {
         .unused_definition_parameter => t("kind_unused_definition_parameter"),
         .sorry_line => t("kind_sorry_line"),
         .sorry_line_arguments => t("kind_sorry_line_arguments"),
+        .open_goal => t("kind_open_goal"),
+        .open_goal_bindings => t("kind_open_goal_bindings"),
         .cites_unfinished_line => t("kind_cites_unfinished_line"),
         .proof_heap_large => t("kind_proof_heap_large"),
     };
@@ -1669,6 +1680,8 @@ fn compilerErrorSummary(err: DiagnosticError) []const u8 {
         error.UnusedDefinitionParameter => t("kind_unused_definition_parameter"),
         error.SorryLine => t("kind_sorry_line"),
         error.SorryLineArguments => t("kind_sorry_line_arguments"),
+        error.OpenGoal => t("kind_open_goal"),
+        error.OpenGoalBindings => t("kind_open_goal_bindings"),
         error.CitesUnfinishedLine => t("kind_cites_unfinished_line"),
         error.ProofHeapLarge => t("kind_proof_heap_large"),
     };
@@ -2014,6 +2027,19 @@ fn writeDetailContextLines(
                 "detail_token",
                 .{info.token},
             );
+        },
+        .open_goal => |info| {
+            if (info.goal) |goal| {
+                try writeContextLine(
+                    writer,
+                    line_separator,
+                    "detail_goal",
+                    .{goal},
+                );
+            } else {
+                try writer.writeAll(line_separator);
+                try writer.writeAll(t("detail_goal_undetermined"));
+            }
         },
         .name_suggestion => |info| {
             try writeContextLine(

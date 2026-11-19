@@ -50,6 +50,8 @@ pub const cloneNameExprMap = @import("./check/types.zig").cloneNameExprMap;
 
 const ensureConcreteCheckedIrRange = @import("./check/checked_range.zig").ensureConcreteCheckedIrRange;
 const findSearchPlaceholder = @import("./check/suggest.zig").findSearchPlaceholder;
+const OpenGoals = @import("./check/open_goals.zig");
+const Apply = @import("./check/apply.zig");
 
 /// `checkTheoremBlock` behind the context's check memo, when one is
 /// attached (`CompilerContext.check_memo`): a hit replays the recorded
@@ -158,6 +160,9 @@ pub const LineWalk = struct {
     /// whose assertion has holes is unfinished, and so is a holey line that
     /// cites one.
     unfinished: std.ArrayListUnmanaged([]const u8) = .empty,
+    /// Analysis only: what the current line's check learned about its open
+    /// goals, reported once the line is done (`reportOpenGoals`).
+    open_goals: OpenGoals.Records = .empty,
     /// The last line with a statement, which the final reconciliation
     /// relates to the conclusion.
     last: ?LastLine = null,
@@ -208,6 +213,7 @@ pub const LineWalk = struct {
         CheckedIr.deinitLines(self.allocator, self.checked.items);
         self.checked.deinit(self.allocator);
         self.unfinished.deinit(self.allocator);
+        self.open_goals.deinit(self.allocator);
         self.diag_scratch.deinit();
         self.rule_unify_cache.deinit();
         self.labels.deinit();
@@ -219,8 +225,16 @@ pub const LineWalk = struct {
     /// is reported and its statement taken as written, so the walk goes on.
     pub fn step(self: *LineWalk, line: ProofLine) !Next {
         const checked_mark = self.checked.items.len;
-        return self.checkLine(line) catch |err| {
+        self.open_goals.clearRetainingCapacity();
+        const next = self.checkLine(line) catch |err| {
             if (err == error.OutOfMemory) return err;
+            // A step still to be proved (an open goal whose goal is not yet
+            // known) stops the line's check without failing it: the line
+            // stands as written.
+            if (err == error.UnfinishedLine) {
+                try self.admitUnfinishedLine(line, checked_mark);
+                return .next;
+            }
             // A failure the checks left undiagnosed still belongs to this
             // line, not to the theorem as a whole.
             if (self.compiler.getDiagnostic() == null) {
@@ -233,10 +247,26 @@ pub const LineWalk = struct {
                     .span = line.ruleApplicationSpan(),
                 });
             }
+            self.reportOpenGoals(line);
             const keep = self.compiler.keep_checking orelse return err;
             try self.admitFailedLine(keep, line, checked_mark);
             return .next;
         };
+        self.reportOpenGoals(line);
+        return next;
+    }
+
+    /// Report each open goal in `line` once, with what its check learned of
+    /// it. A compile refuses the first open goal instead (`checkLine`).
+    fn reportOpenGoals(self: *LineWalk, line: ProofLine) void {
+        if (line.incomplete or !OpenGoals.admitted(self.compiler)) return;
+        OpenGoals.reportLine(
+            self.compiler,
+            self.assertion.name,
+            line.label,
+            line.application,
+            self.open_goals.items,
+        );
     }
 
     fn checkLine(self: *LineWalk, line: ProofLine) !Next {
@@ -279,6 +309,24 @@ pub const LineWalk = struct {
             );
             compiler.setProof(diag);
             return error.UnknownRule;
+        }
+        // A compile has nothing to emit for an open goal. Analysis admits
+        // it below and reports each one.
+        if (!OpenGoals.admitted(compiler)) {
+            if (ProofScript.isOpenGoalRuleName(line.application.rule_name) and
+                OpenGoals.hasBindings(line.application))
+            {
+                return self.reportOpenGoalBindings(line);
+            }
+            if (ProofScript.findOpenGoal(line.application)) |marker| {
+                compiler.setProof(OpenGoals.diagnostic(
+                    assertion.name,
+                    line.label,
+                    marker,
+                    null,
+                ));
+                return error.OpenGoal;
+            }
         }
 
         if (self.labels.contains(line.label) or
@@ -377,7 +425,11 @@ pub const LineWalk = struct {
             .checked = &self.checked,
             .diag_scratch = &self.diag_scratch,
             .rule_unify_cache = &self.rule_unify_cache,
+            .open_goals = &self.open_goals,
         };
+        if (ProofScript.isOpenGoalRuleName(line.application.rule_name)) {
+            return try self.admitOpenGoalLine(&apply_context, line, parsed_assertion);
+        }
         const checked_mark = self.checked.items.len;
         const line_idx = try applyRuleApplication(
             compiler,
@@ -406,6 +458,58 @@ pub const LineWalk = struct {
 
         try self.admit(line, line_idx);
         return .next;
+    }
+
+    /// A line justified by `?`: its goal is the statement it writes, holes
+    /// and all. A concrete statement is admitted like `sorry!`, so later
+    /// lines can cite it; a holey one leaves the line unfinished.
+    ///
+    /// References, `? [l1, ?]`, say which facts the step uses, by some rule
+    /// not chosen yet: each is checked as far as it can be without one.
+    fn admitOpenGoalLine(
+        self: *LineWalk,
+        apply_context: *const RuleApplyContext,
+        line: ProofLine,
+        parsed_assertion: Holes.ParsedAssertion,
+    ) !Next {
+        const app = line.application;
+        if (OpenGoals.hasBindings(app)) return self.reportOpenGoalBindings(line);
+        try self.open_goals.append(self.allocator, .{
+            .at = app.rule_span.start,
+            .goal = std.mem.trim(u8, line.assertion.text, " \t\r\n"),
+        });
+        try checkOpenGoalRefs(
+            self.compiler,
+            apply_context,
+            ApplicationLine.fromLine(line),
+            app.refs,
+            self.unfinished.items,
+            self.theorem,
+            &self.theorem_vars,
+        );
+        switch (parsed_assertion) {
+            .concrete => |expr| try self.admit(
+                line,
+                try CheckedIr.appendSorryLine(&self.checked, self.allocator, expr),
+            ),
+            .holey => {
+                try self.unfinished.append(self.allocator, line.label);
+                self.ends_unfinished = true;
+            },
+        }
+        return .next;
+    }
+
+    fn reportOpenGoalBindings(self: *LineWalk, line: ProofLine) anyerror {
+        self.compiler.setProof(CompilerDiag.withPhase(.{
+            .kind = .open_goal_bindings,
+            .err = error.OpenGoalBindings,
+            .theorem_name = self.assertion.name,
+            .line_label = line.label,
+            .rule_name = line.application.rule_name,
+            .span = line.application.span,
+        }, .theorem_application));
+        return error.OpenGoalBindings;
     }
 
     /// `line`'s statement is `checked[line_idx]`: later lines may cite it.
@@ -440,7 +544,34 @@ pub const LineWalk = struct {
             if (keep.reports(previous)) compiler.addPrimaryDiagnostic(previous);
         }
         self.failure = diag;
+        try self.admitAsWritten(line);
+    }
 
+    /// A line whose check stopped at an open goal its position fixes only
+    /// part of: it fails nothing, and stands as written. The diagnostic the
+    /// check left is that open goal, with the part that is known.
+    fn admitUnfinishedLine(
+        self: *LineWalk,
+        line: ProofLine,
+        checked_mark: usize,
+    ) !void {
+        CheckedIr.deinitLines(self.allocator, self.checked.items[checked_mark..]);
+        self.checked.shrinkRetainingCapacity(checked_mark);
+        if (self.compiler.getDiagnostic()) |diag| switch (diag.detail) {
+            .open_goal => |info| try self.open_goals.append(self.allocator, .{
+                .at = diag.span.?.start,
+                .goal = info.goal,
+            }),
+            else => {},
+        };
+        self.compiler.restoreDiagnostic(null);
+        self.reportOpenGoals(line);
+        try self.admitAsWritten(line);
+    }
+
+    /// Admit a line its check did not finish by the statement it writes, so
+    /// later lines can cite it; a holey or unparseable one is unfinished.
+    fn admitAsWritten(self: *LineWalk, line: ProofLine) !void {
         // Unfinished unless its statement is admitted below. A repeated
         // label keeps its first line.
         self.ends_unfinished = true;
@@ -820,6 +951,61 @@ fn collectHoleInferencesRecursive(
             }
         },
     }
+}
+
+/// The references of an open goal line, `? [l1, #2, rule [..], ?]`: each
+/// must name something, and an inline application is checked on its own,
+/// with no goal from a rule. An open goal among them has no goal yet.
+fn checkOpenGoalRefs(
+    compiler: *CompilerContext,
+    context: *const RuleApplyContext,
+    line: ApplicationLine,
+    refs: []const ProofScript.Ref,
+    unfinished: []const []const u8,
+    theorem: *TheoremContext,
+    theorem_vars: *NameExprMap,
+) !void {
+    for (refs) |ref| switch (ref) {
+        .hyp => |hyp| {
+            const resolved = ProofScript.resolveHypRef(
+                theorem.theorem_hyp_names,
+                theorem.theorem_hyps.items.len,
+                hyp,
+            );
+            if (resolved == .index) continue;
+            return Apply.reportHypRef(
+                compiler,
+                context.assertion.name,
+                line.label,
+                hyp,
+                resolved == .ambiguous,
+            );
+        },
+        .line => |label| {
+            if (context.labels.contains(label.label)) continue;
+            if (ProofScript.containsLabel(unfinished, label.label)) continue;
+            return Apply.reportUnknownLabel(compiler, context, line.label, label);
+        },
+        .application => |inline_app| {
+            // Reported with the line; it has no goal to check against.
+            if (ProofScript.isOpenGoalRuleName(inline_app.rule_name)) continue;
+            _ = try applyRuleApplication(
+                compiler,
+                context,
+                inline_app,
+                .implicit_whole_conclusion,
+                null,
+                .{
+                    .theorem_name = context.assertion.name,
+                    .line_label = line.label,
+                    .span = inline_app.span,
+                },
+                line.forInline(inline_app),
+                theorem,
+                theorem_vars,
+            );
+        },
+    };
 }
 
 /// `by sorry!`: admit the stated goal with no rule. The line joins the

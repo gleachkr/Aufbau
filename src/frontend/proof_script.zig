@@ -767,6 +767,9 @@ pub const Parser = struct {
     fn parseRuleApplication(self: *Parser) ParseError!RuleApplication {
         self.skipProofWhitespace();
         const rule_start = self.pos;
+        if (try self.parseOpenGoal()) |name| {
+            return try self.parseRuleApplicationAfterName(rule_start, name);
+        }
         var rule_name = try self.parseIdentifier();
         if (isSearchPlaceholderBase(rule_name) and self.peek() == '?') {
             self.pos += 1;
@@ -779,6 +782,19 @@ pub const Parser = struct {
             rule_name = self.src[rule_start..self.pos];
         }
         return try self.parseRuleApplicationAfterName(rule_start, rule_name);
+    }
+
+    /// An open goal, `?`, at the current position: the marker's source text,
+    /// or null when the next character is not `?`. A name straight after the
+    /// `?` is rejected, not read as `?` and then a separate token.
+    fn parseOpenGoal(self: *Parser) ParseError!?[]const u8 {
+        if (self.peek() != '?') return null;
+        const start = self.pos;
+        self.pos += 1;
+        if (isIdentChar(self.peek())) {
+            return self.recordErrorAtPos(error.UnexpectedCharacter);
+        }
+        return self.src[start..self.pos];
     }
 
     fn parseRuleApplicationAfterName(
@@ -991,6 +1007,14 @@ pub const Parser = struct {
                     .end = self.pos,
                 },
             } };
+        }
+        if (try self.parseOpenGoal()) |name| {
+            return .{
+                .application = try self.parseRuleApplicationAfterName(
+                    start,
+                    name,
+                ),
+            };
         }
         var label = try self.parseIdentifier();
         if (isSearchPlaceholderBase(label) and self.peek() == '?') {
@@ -1623,6 +1647,15 @@ pub fn isSorryRuleName(name: []const u8) bool {
     return std.mem.eql(u8, name, sorry_name);
 }
 
+/// An open goal, `by ?` or `[?]` in a reference slot: a step still to be
+/// proved. Analysis admits it and reports its goal; a compile refuses it.
+/// `?` is not an identifier character, so no rule can have this name.
+pub const open_goal_name = "?";
+
+pub fn isOpenGoalRuleName(name: []const u8) bool {
+    return std.mem.eql(u8, name, open_goal_name);
+}
+
 fn isSearchPlaceholderBase(name: []const u8) bool {
     for (search_placeholder_bases) |base| {
         if (std.mem.eql(u8, name, base)) return true;
@@ -1635,6 +1668,21 @@ pub fn isSearchPlaceholderRuleName(name: []const u8) bool {
         if (std.mem.eql(u8, name, placeholder)) return true;
     }
     return false;
+}
+
+/// The first open goal in `application`, itself or an inline application
+/// nested in its references, in source order.
+pub fn findOpenGoal(application: RuleApplication) ?RuleApplication {
+    if (isOpenGoalRuleName(application.rule_name)) return application;
+    for (application.refs) |ref| {
+        switch (ref) {
+            .application => |child| {
+                if (findOpenGoal(child)) |found| return found;
+            },
+            .hyp, .line => {},
+        }
+    }
+    return null;
 }
 
 pub fn applicationHasSearchPlaceholder(application: RuleApplication) bool {

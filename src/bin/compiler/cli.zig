@@ -423,6 +423,23 @@ fn reportCompileFailure(compiler: *const mm0.Compiler, err: anyerror) void {
     var analysis = compiler.failureAnalysis();
     if (!analysis.analyzeCompileFailure(compiler)) compiler.reportError(err);
     analysis.reportPrimaryDiagnostics();
+    const open_goals = countOpenGoals(analysis.primaryDiagnostics());
+    if (open_goals != 0) {
+        std.debug.print("abc: {d} open goal{s} remain{s}\n", .{
+            open_goals,
+            if (open_goals == 1) "" else "s",
+            if (open_goals == 1) "s" else "",
+        });
+    }
+}
+
+/// The open goals (`?`) the failure analysis reported, one error each.
+fn countOpenGoals(diagnostics: []const mm0.CompilerDiagnostic) usize {
+    var count: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag.err == error.OpenGoal) count += 1;
+    }
+    return count;
 }
 
 fn runSearch(

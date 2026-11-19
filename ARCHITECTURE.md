@@ -706,6 +706,7 @@ used by the search frontends), `bindings.zig` (explicit-binding parsing,
 binder inference, candidate elaboration/validation), `inline_hints.zig`
 (expected-ref inference for inline minors, holey hint filling,
 sibling/semantic refinement, ACUI-spine demotion),
+`open_goals.zig` (admitting and reporting `?` open goals),
 `suggest.zig` (diagnostic name suggestions and label lookup),
 `checked_range.zig` (checked-IR ownership/leak validation), plus the
 older `matching.zig`, `diag_notes.zig`, and `freshen_retry.zig`.

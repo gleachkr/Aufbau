@@ -38,6 +38,7 @@ powering-search.md cell4: ok after search
 programs-and-correctness.md doc:hoare: ok
 proof-blocks-and-lines.md doc:blocks: ok
 proof-blocks-and-lines.md cell1: sorry
+proof-blocks-and-lines.md cell2: error: error: open goal: this step is still to be proved
 proof-line.md doc:hilbert: ok
 proof-line.md cell1: error: error: one of the rule's variables could not be determined from the statement and cited premises
 proof-search.md cell1: ok after search

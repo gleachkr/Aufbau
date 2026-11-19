@@ -308,6 +308,15 @@ pub const sorry_markdown =
     \\warning here, and the verifier rejects the output.
 ;
 
+/// Hover text for an open goal, `?`, which resolves to no rule.
+pub const open_goal_markdown =
+    \\`?` is an open goal: this step is still to be proved.
+    \\
+    \\Its goal is taken as given, so the rest of the proof checks against
+    \\it, but the proof does not compile until every open goal is replaced
+    \\by a rule application.
+;
+
 pub fn unknownRuleMarkdown(
     allocator: std.mem.Allocator,
     name: []const u8,

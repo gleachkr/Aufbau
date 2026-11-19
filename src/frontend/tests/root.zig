@@ -308,6 +308,44 @@ test "proof script parser lexes sorry! as a line justification" {
     try std.testing.expect(!ProofScript.isSorryRuleName(plain.rule_name));
 }
 
+test "proof script parser reads open goals on a line and in a reference slot" {
+    const src =
+        \\t
+        \\---
+        \\l1: $ a $ by ?
+        \\l2: $ b $ by mp [?, #1]
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.init(arena.allocator(), src);
+    const block = (try parser.nextBlock()).?;
+    try std.testing.expectEqual(@as(usize, 2), block.lines.len);
+    const line_goal = block.lines[0].application;
+    try std.testing.expect(ProofScript.isOpenGoalRuleName(line_goal.rule_name));
+    try std.testing.expectEqualStrings("?", src[line_goal.span.start..line_goal.span.end]);
+    try std.testing.expectEqual(@as(usize, 0), line_goal.refs.len);
+    const inline_goal = block.lines[1].application.refs[0].application;
+    try std.testing.expect(ProofScript.isOpenGoalRuleName(inline_goal.rule_name));
+    try std.testing.expectEqualStrings("?", src[inline_goal.span.start..inline_goal.span.end]);
+    try std.testing.expect(ProofScript.findOpenGoal(block.lines[1].application) != null);
+}
+
+test "proof script parser rejects a name straight after an open goal" {
+    const src =
+        \\t
+        \\---
+        \\l1: $ a $ by ?a
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.init(arena.allocator(), src);
+    try std.testing.expectError(error.UnexpectedCharacter, parser.nextBlock());
+}
+
 test "proof script parser does not lex sorry! in a reference slot" {
     const src =
         \\demo

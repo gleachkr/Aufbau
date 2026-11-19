@@ -47,6 +47,7 @@ const SortVarRegistry = CompilerVars.SortVarRegistry;
 const Holes = @import("../holes.zig");
 const Idents = @import("../../idents.zig");
 const OpenTerms = @import("../inference/open_terms.zig");
+const OpenGoals = @import("./open_goals.zig");
 const addFallbackFailureNote = DiagNotes.addFallbackFailureNote;
 const concreteMatchFailureSpan = DiagNotes.concreteMatchFailureSpan;
 const setHoleyInferenceDiagnostic = DiagNotes.setHoleyInferenceDiagnostic;
@@ -84,6 +85,7 @@ const foldTemplateOrRestore = @import("./inline_hints.zig").foldTemplateOrRestor
 const inferExpectedRefsForInlineApplicationProbe = @import("./inline_hints.zig").inferExpectedRefsForInlineApplicationProbe;
 const fillHoleyInlineHints = @import("./inline_hints.zig").fillHoleyInlineHints;
 const demoteAcuiSpineBindingsForRule = @import("./inline_hints.zig").demoteAcuiSpineBindingsForRule;
+const mintHintHole = @import("./inline_hints.zig").mintHintHole;
 const ambiguousPrincipalPins = @import("./inline_hints.zig").ambiguousPrincipalPins;
 const freePrincipalPins = @import("./inline_hints.zig").freePrincipalPins;
 const cloneNameExprMap = @import("./types.zig").cloneNameExprMap;
@@ -555,6 +557,7 @@ fn applyRuleCandidateCore(
         const checked_mark = checked.items.len;
         const sink_mark = if (self.inline_conclusion_sink) |sink| sink.mark() else 0;
         const oracle_mark = if (self.binding_oracle) |oracle| oracle.mark() else 0;
+        const open_goals_mark = if (context.open_goals) |records| records.items.len else 0;
         var failed_ref: ?usize = null;
         elaborateRefs(
             self,
@@ -591,6 +594,7 @@ fn applyRuleCandidateCore(
             )) orelse return err;
             CheckedIr.rollbackToMark(allocator, checked, checked_mark);
             if (self.inline_conclusion_sink) |sink| sink.rollback(sink_mark);
+            if (context.open_goals) |records| records.shrinkRetainingCapacity(open_goals_mark);
             w.oracle.rollback(oracle_mark);
             try w.supply(take, widest, partial_bindings);
             restoreDiagnostic(self, null);
@@ -1691,6 +1695,8 @@ const SpeculativeAttempt = struct {
     sink_mark: usize,
     oracle: ?*BindingOracle,
     oracle_mark: usize,
+    open_goals: ?*OpenGoals.Records,
+    open_goals_mark: usize,
     theorem: TheoremContext,
     theorem_vars: NameExprMap,
     line_idx: usize,
@@ -1724,6 +1730,8 @@ const SpeculativeAttempt = struct {
             .sink_mark = if (self.inline_conclusion_sink) |sink| sink.mark() else 0,
             .oracle = self.binding_oracle,
             .oracle_mark = if (self.binding_oracle) |oracle| oracle.mark() else 0,
+            .open_goals = context.open_goals,
+            .open_goals_mark = if (context.open_goals) |records| records.items.len else 0,
             .theorem = attempt_theorem,
             .theorem_vars = attempt_theorem_vars,
             .line_idx = undefined,
@@ -1751,6 +1759,7 @@ const SpeculativeAttempt = struct {
         CheckedIr.rollbackToMark(attempt.allocator, attempt.checked, attempt.checked_mark);
         if (attempt.sink) |sink| sink.rollback(attempt.sink_mark);
         if (attempt.oracle) |oracle| oracle.rollback(attempt.oracle_mark);
+        if (attempt.open_goals) |records| records.shrinkRetainingCapacity(attempt.open_goals_mark);
         attempt.theorem_vars.deinit();
         attempt.theorem.deinit();
         attempt.* = undefined;
@@ -1829,6 +1838,12 @@ fn elaborateRefs(
     failed_ref: *?usize,
 ) anyerror!void {
     const assertion = context.assertion;
+    // What each ref is known to state before any is elaborated: a theorem
+    // hypothesis or an earlier line, on either side of an inline
+    // application. Inline applications join as they are elaborated.
+    const known = try context.allocator.alloc(?ExprId, source_refs.len);
+    defer context.allocator.free(known);
+    for (source_refs, known) |ref, *out| out.* = knownRefExpr(context, theorem, ref);
     for (source_refs, 0..) |ref, idx| {
         failed_ref.* = idx;
         ref_exprs[idx] = switch (ref) {
@@ -1866,9 +1881,32 @@ fn elaborateRefs(
                     line_assertion,
                     expected_conclusion_hint,
                     expected_ref_exprs[idx],
-                    ref_exprs,
+                    known,
                     idx,
                 );
+                if (ProofScript.isOpenGoalRuleName(inline_app.rule_name) and
+                    OpenGoals.admitted(self))
+                {
+                    const line_idx = try admitInlineOpenGoal(
+                        self,
+                        context,
+                        theorem,
+                        theorem_vars,
+                        line.label,
+                        inline_app,
+                        hint,
+                        .{
+                            .rule = rule,
+                            .partial_bindings = partial_bindings,
+                            .line_assertion = line_assertion,
+                            .expected_conclusion_hint = expected_conclusion_hint,
+                            .siblings = known,
+                            .idx = idx,
+                        },
+                    );
+                    refs[idx] = .{ .line = line_idx };
+                    break :blk context.checked.items[line_idx].expr;
+                }
                 if (try admitNestedPlaceholder(self, context, theorem, inline_app, hint)) |line_idx| {
                     refs[idx] = .{ .line = line_idx };
                     break :blk context.checked.items[line_idx].expr;
@@ -1902,7 +1940,33 @@ fn elaborateRefs(
                 break :blk conclusion;
             },
         };
+        known[idx] = ref_exprs[idx];
     }
+}
+
+/// What `ref` states, if that is known without elaborating it: a theorem
+/// hypothesis or an earlier line. Null for an inline application, or a ref
+/// that does not resolve (its own elaboration reports that).
+fn knownRefExpr(
+    context: *const RuleApplyContext,
+    theorem: *const TheoremContext,
+    ref: Ref,
+) ?ExprId {
+    return switch (ref) {
+        .hyp => |hyp| switch (ProofScript.resolveHypRef(
+            theorem.theorem_hyp_names,
+            theorem.theorem_hyps.items.len,
+            hyp,
+        )) {
+            .index => |idx| theorem.theorem_hyps.items[idx],
+            .unknown, .ambiguous => null,
+        },
+        .line => |label| if (context.labels.get(label.label)) |line_idx|
+            context.checked.items[line_idx].expr
+        else
+            null,
+        .application => null,
+    };
 }
 
 /// Analysis only: a search placeholder nested in an application, admitted
@@ -1919,16 +1983,123 @@ noinline fn admitNestedPlaceholder(
 ) !?usize {
     if (!self.allow_search_placeholders) return null;
     if (!ProofScript.isSearchPlaceholderRuleName(inline_app.rule_name)) return null;
+    const goal = determinedGoal(theorem, hint) orelse return null;
+    return try CheckedIr.appendSorryLine(context.checked, context.allocator, goal);
+}
+
+/// The premise slot an inline application fills: premise `idx` of `rule`,
+/// with what the line and the known siblings say about the rule's binders.
+const PremiseSlot = struct {
+    rule: *const RuleDecl,
+    partial_bindings: []const ?ExprId,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    siblings: []const ?ExprId,
+    idx: usize,
+};
+
+/// An open goal nested in an application, `mp [?, #1]`: admitted like
+/// `sorry!` as the goal `hint` its position fixes, which is recorded for
+/// the line's report. When the position fixes only part of the goal, that
+/// part is the diagnostic and the line's check stops unfinished
+/// (`error.UnfinishedLine`); the line walk reports it.
+noinline fn admitInlineOpenGoal(
+    self: *CompilerContext,
+    context: *const RuleApplyContext,
+    theorem: *TheoremContext,
+    theorem_vars: *const NameExprMap,
+    line_label: []const u8,
+    inline_app: RuleApplication,
+    hint: ?ExprId,
+    slot: PremiseSlot,
+) !usize {
+    if (determinedGoal(theorem, hint)) |goal| {
+        if (context.open_goals) |records| try records.append(context.allocator, .{
+            .at = inline_app.rule_span.start,
+            .goal = try OpenGoals.formatGoal(
+                context.allocator,
+                theorem,
+                context.env,
+                context.parser,
+                theorem_vars,
+                goal,
+            ),
+        });
+        return try CheckedIr.appendSorryLine(context.checked, context.allocator, goal);
+    }
+    const shown: ?[]const u8 = if (context.open_goals == null)
+        null
+    else if (try partialInlineGoal(context, theorem, slot, hint)) |partial|
+        try OpenGoals.formatGoal(
+            context.allocator,
+            theorem,
+            context.env,
+            context.parser,
+            theorem_vars,
+            partial,
+        )
+    else
+        null;
+    self.setProof(OpenGoals.diagnostic(
+        context.assertion.name,
+        line_label,
+        inline_app,
+        shown,
+    ));
+    return error.UnfinishedLine;
+}
+
+/// What an inline open goal's position fixes of its goal, when it does not
+/// fix all of it: the premise with every binder the line and its known
+/// siblings pin, and a hole of the binder's sort for each other one. Null
+/// when not even that is known (a premise count that does not match).
+fn partialInlineGoal(
+    context: *const RuleApplyContext,
+    theorem: *TheoremContext,
+    slot: PremiseSlot,
+    hint: ?ExprId,
+) !?ExprId {
+    if (hint) |holey| return holey;
+    const rule = slot.rule;
+    if (rule.hyps.len != slot.siblings.len or slot.idx >= rule.hyps.len) return null;
+    const allocator = context.allocator;
+    const bindings = try allocator.alloc(?ExprId, slot.partial_bindings.len);
+    defer allocator.free(bindings);
+    const snap = try allocator.alloc(?ExprId, slot.partial_bindings.len);
+    defer allocator.free(snap);
+    try foldGoalAndSiblings(
+        theorem,
+        rule,
+        LineGoal.of(slot.expected_conclusion_hint, slot.line_assertion),
+        slot.partial_bindings,
+        slot.siblings,
+        true,
+        bindings,
+        snap,
+    );
+    demoteAcuiSpineBindingsForRule(context.registry, rule, slot.partial_bindings, bindings);
+    return try OpenTerms.instantiateTemplateHoley(
+        theorem,
+        context.env,
+        context.registry,
+        rule,
+        rule.hyps[slot.idx],
+        bindings,
+        .{ .placeholder_factory = .{ .makeFn = mintHintHole } },
+    );
+}
+
+fn determinedGoal(theorem: *const TheoremContext, hint: ?ExprId) ?ExprId {
     const goal = hint orelse return null;
     if (theorem.containsPlaceholder(goal)) return null;
-    return try CheckedIr.appendSorryLine(context.checked, context.allocator, goal);
+    return goal;
 }
 
 /// Report a hypothesis ref that names no hypothesis, or several. This and
 /// `reportUnknownLabel` are out of line so their diagnostics are not part of
 /// the `elaborateRefs` frame that stays live while inline applications
 /// recurse.
-noinline fn reportHypRef(
+pub noinline fn reportHypRef(
     self: *CompilerContext,
     theorem_name: []const u8,
     line_label: []const u8,
@@ -1955,7 +2126,7 @@ noinline fn reportHypRef(
     return err;
 }
 
-noinline fn reportUnknownLabel(
+pub noinline fn reportUnknownLabel(
     self: *CompilerContext,
     context: *const RuleApplyContext,
     line_label: []const u8,
@@ -2027,14 +2198,16 @@ noinline fn recordInlineConclusion(
 }
 
 /// Sharpen an inline minor's expected-conclusion hint using the concrete
-/// conclusions of the siblings already elaborated to its left.
+/// conclusions of its known siblings: those already elaborated to its left,
+/// and theorem hypotheses and earlier lines on either side.
 ///
 /// The up-front hint passes (`inferExpectedRefsForInlineApplications` +
 /// `fillHoleyInlineHints`) run before any ref is elaborated, so a
 /// hypothesis-only binder shared between two hypotheses — `hoare_seq`'s `q` in
 /// `⦃p⦄a⟦q⟧ > ⦃q⦄b⟦r⟧ > ⦃p⦄(a⨟b)⟦r⟧` — is left open: no ref expression is known
 /// yet. By the time `elaborateRefs` reaches ref `idx`, every earlier sibling has
-/// a concrete conclusion (`ref_exprs[0..idx]`). Folding those conclusions back
+/// a concrete conclusion, and so does every later one that is a hypothesis or
+/// a line (`siblings`, null where not known yet). Folding those conclusions back
 /// through the rule's hypothesis templates pins `q`, so the minor's hint sharpens
 /// from a hole (`⦃‹hole›⦄ skip ⟦p∧¬b⟧`) to the fully concrete
 /// `⦃p∧¬b⦄ skip ⟦p∧¬b⟧`. Without it the minor demands an explicit binding
@@ -2067,10 +2240,10 @@ noinline fn refinedInlineHint(
     line_assertion: LineAssertion,
     expected_conclusion_hint: ?ExprId,
     existing_hint: ?ExprId,
-    ref_exprs: []const ExprId,
+    siblings: []const ?ExprId,
     idx: usize,
 ) !?ExprId {
-    if (rule.hyps.len != ref_exprs.len) return existing_hint;
+    if (rule.hyps.len != siblings.len) return existing_hint;
     if (idx >= rule.hyps.len) return existing_hint;
 
     // A concrete existing hint is authoritative; only null/holey ones are eligible.
@@ -2092,14 +2265,17 @@ noinline fn refinedInlineHint(
     // all-or-nothing fold rolls back and drops the binders only it could pin;
     // retry with the siblings first, leaving the conclusion to transport. With
     // no siblings the two orders coincide.
-    const orders: []const bool = if (idx == 0) &.{true} else &.{ true, false };
+    const orders: []const bool = if (knownSiblingCount(siblings) == 0)
+        &.{true}
+    else
+        &.{ true, false };
     for (orders) |conclusion_first| {
         try foldGoalAndSiblings(
             theorem,
             rule,
             goal,
             partial_bindings,
-            ref_exprs[0..idx],
+            siblings,
             conclusion_first,
             bindings,
             snap,
@@ -2118,22 +2294,35 @@ noinline fn refinedInlineHint(
     return existing_hint;
 }
 
+fn knownSiblingCount(siblings: []const ?ExprId) usize {
+    var count: usize = 0;
+    for (siblings) |sibling| {
+        if (sibling != null) count += 1;
+    }
+    return count;
+}
+
 /// `partial_bindings` plus what folding `goal` through `rule`'s conclusion
-/// and each of `siblings` through its premise pins, into `bindings` (`snap`
-/// is scratch of the same length).
+/// and each known sibling through its premise pins, into `bindings` (`snap`
+/// is scratch of the same length). `siblings` is a slice of `ExprId`, the
+/// refs before some position, or of `?ExprId`, null where not known.
 fn foldGoalAndSiblings(
     theorem: *TheoremContext,
     rule: *const RuleDecl,
     goal: ?LineGoal,
     partial_bindings: []const ?ExprId,
-    siblings: []const ExprId,
+    siblings: anytype,
     conclusion_first: bool,
     bindings: []?ExprId,
     snap: []?ExprId,
 ) !void {
     @memcpy(bindings, partial_bindings);
     if (conclusion_first) if (goal) |g| try foldLineGoal(theorem, rule, g, bindings, snap);
-    for (siblings, 0..) |expr, j| {
+    for (siblings, 0..) |sibling, j| {
+        const expr: ExprId = if (@TypeOf(sibling) == ?ExprId)
+            sibling orelse continue
+        else
+            sibling;
         foldTemplateOrRestore(theorem, rule.hyps[j], expr, bindings, snap);
     }
     if (!conclusion_first) if (goal) |g| try foldLineGoal(theorem, rule, g, bindings, snap);

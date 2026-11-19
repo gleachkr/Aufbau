@@ -238,6 +238,14 @@ pub fn indexRuleApplication(
         });
         return;
     }
+    if (proof_script.isOpenGoalRuleName(app.rule_name)) {
+        try self.addSymbol(.{
+            .source_range = proofSpanRange(app.rule_span),
+            .target_range = null,
+            .markdown = markdown.open_goal_markdown,
+        });
+        return;
+    }
     const maybe_rule = self.resolveRule(
         block_index,
         app.rule_name,

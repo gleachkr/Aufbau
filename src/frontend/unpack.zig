@@ -135,9 +135,10 @@ fn findTarget(
         for (block.lines) |line| {
             if (offset < line.span.start or offset > line.span.end) continue;
             if (countInlineApplications(line.application) == 0) return null;
-            // A search placeholder anywhere in the line means the proof is
-            // still being written there; search actions own that surface.
-            if (containsSearchPlaceholder(line.application)) return null;
+            // A search placeholder or open goal anywhere in the line means
+            // the proof is still being written there; search actions and
+            // open-goal actions own that surface.
+            if (containsUnfinishedMarker(line.application)) return null;
             return .{ .block = block, .line = line };
         }
     }
@@ -155,11 +156,14 @@ fn countInlineApplications(app: RuleApplication) usize {
     return count;
 }
 
-fn containsSearchPlaceholder(app: RuleApplication) bool {
-    if (ProofScript.isSearchPlaceholderRuleName(app.rule_name)) return true;
+/// A search placeholder or an open goal: an inline application with no
+/// conclusion of its own to lift onto a line.
+fn containsUnfinishedMarker(app: RuleApplication) bool {
+    if (ProofScript.isSearchPlaceholderRuleName(app.rule_name) or
+        ProofScript.isOpenGoalRuleName(app.rule_name)) return true;
     for (app.refs) |ref| switch (ref) {
         .application => |child| {
-            if (containsSearchPlaceholder(child)) return true;
+            if (containsUnfinishedMarker(child)) return true;
         },
         else => {},
     };

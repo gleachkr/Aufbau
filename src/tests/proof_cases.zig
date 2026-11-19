@@ -1052,6 +1052,14 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_sorry_inline",
         .outcome = .{ .fail = error.UnexpectedCharacter },
     },
+    .{
+        .stem = "fail_open_goal",
+        .outcome = .{ .fail = error.OpenGoal },
+    },
+    .{
+        .stem = "fail_open_goal_bindings",
+        .outcome = .{ .fail = error.OpenGoalBindings },
+    },
 };
 
 const readProofCase = mm0.readProofCase;

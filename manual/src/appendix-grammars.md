@@ -145,5 +145,8 @@ Notes:
   bindings or references ([Admitting a
   line](proof-blocks-and-lines.md#admitting-a-line)). It is not accepted as
   an inline application.
+- `rule-name` may be `?`, an open goal, on a proof line or as an inline
+  application. It takes references but no bindings ([Open
+  goals](proof-blocks-and-lines.md#open-goals)).
 - `$ ... $` formulas may contain `@hole` tokens where the theory declares
   them ([Holes](holes.md)).
