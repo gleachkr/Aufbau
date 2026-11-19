@@ -171,13 +171,13 @@ const FRAGMENT_VALID = /^(?:[\w'!?]*|[^\w\s$()[\]{},;:.]*)$/u;
 // Map LSP CompletionItemKind numbers onto CodeMirror completion type names
 // (which drive the icons in the popup).
 const CM_COMPLETION_TYPES = {
-  2: "method", // axiom/theorem/lemma
   3: "function", // term/def
   6: "variable", // binder
   7: "class", // sort
   12: "constant", // hypothesis
   14: "keyword",
   18: "text", // proof-line reference
+  21: "method", // axiom/theorem/lemma
   24: "keyword", // notation operator
 };
 

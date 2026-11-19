@@ -306,6 +306,11 @@ fn proofCompletionsAt(
             offset,
             replacement,
             placeholderTokenAt(text, replacement),
+            .{
+                .write = app.refs_span == null and
+                    app.binding_list_span == null,
+                .snippet = options.snippet_support,
+            },
         ),
         .binding_slot => |app| try appendRuleBinderCompletions(
             self,
@@ -331,6 +336,10 @@ fn proofCompletionsAt(
             offset,
             replacement,
             placeholderTokenAt(text, replacement),
+            .{
+                .write = !argumentsFollow(text, replacement.end),
+                .snippet = options.snippet_support,
+            },
         ),
     }
 }
@@ -692,6 +701,72 @@ fn placeholderTokenAt(text: []const u8, replacement: SourceRange) bool {
     return std.mem.indexOfScalar(u8, text[start..end], '?') != null;
 }
 
+/// How a rule completion writes the rule's premises.
+const PremiseSlots = struct {
+    /// Whether to write them: not over an application that already has
+    /// arguments.
+    write: bool,
+    /// Whether each is a snippet tab stop.
+    snippet: bool,
+};
+
+/// Whether a binding or reference list follows `pos`, past whitespace. Where
+/// no application has parsed, this is how a rule completion sees the
+/// arguments already written after it (`by | [l1, l2]`).
+fn argumentsFollow(text: []const u8, pos: usize) bool {
+    var i = pos;
+    while (i < text.len and std.ascii.isWhitespace(text[i])) i += 1;
+    return i < text.len and (text[i] == '[' or text[i] == '(');
+}
+
+/// What accepting a rule inserts, as plain text and as a snippet.
+const RuleInsertion = struct {
+    plain: []const u8,
+    snippet: ?[]const u8,
+};
+
+/// What accepting the rule `name` inserts: the name, then one open goal `?`
+/// per premise (`mp [?, ?]`), so each premise shows its goal at once. Just
+/// the name for a rule with no premises or when `slots` writes none.
+fn ruleInsertion(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    premise_count: usize,
+    slots: PremiseSlots,
+) !RuleInsertion {
+    const count = if (slots.write) premise_count else 0;
+    if (count == 0) return .{ .plain = name, .snippet = null };
+    return .{
+        .plain = try premiseList(allocator, name, count, false),
+        .snippet = if (slots.snippet)
+            try premiseList(allocator, name, count, true)
+        else
+            null,
+    };
+}
+
+/// `name [?, ?]` with `premise_count` open goals, each a tab stop when
+/// `snippet`.
+fn premiseList(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    premise_count: usize,
+    snippet: bool,
+) ![]const u8 {
+    var out = std.ArrayListUnmanaged(u8).empty;
+    try out.print(allocator, "{s} [", .{name});
+    for (0..premise_count) |i| {
+        if (i != 0) try out.appendSlice(allocator, ", ");
+        if (snippet) {
+            try out.print(allocator, "${{{d}:?}}", .{i + 1});
+        } else {
+            try out.append(allocator, '?');
+        }
+    }
+    try out.append(allocator, ']');
+    return try out.toOwnedSlice(allocator);
+}
+
 fn appendProofRuleCompletions(
     self: anytype,
     list: *std.ArrayListUnmanaged(CompletionItem),
@@ -700,6 +775,7 @@ fn appendProofRuleCompletions(
     use_start: usize,
     replacement: SourceRange,
     placeholder_token: bool,
+    slots: PremiseSlots,
 ) !void {
     try appendSearchTacticCompletions(list, allocator, replacement);
     if (placeholder_token) return;
@@ -710,13 +786,16 @@ fn appendProofRuleCompletions(
         if (seen.contains(rule.name)) continue;
         try seen.put(allocator, rule.name, {});
         const decl = self.declarations[rule.decl_index];
+        const insert =
+            try ruleInsertion(allocator, rule.name, decl.hyp_count, slots);
         try list.append(allocator, .{
             .label = rule.name,
             .kind = .lemma,
             .detail = "lemma",
             .documentation_markdown = decl.markdown,
             .replacement = replacement,
-            .replacement_text = rule.name,
+            .replacement_text = insert.plain,
+            .snippet_replacement_text = insert.snippet,
             .sort_text = rule.sort_text,
         });
     }
@@ -727,13 +806,16 @@ fn appendProofRuleCompletions(
         }
         if (seen.contains(decl.name)) continue;
         if (!globalRuleAvailable(self, block_index, decl)) continue;
+        const insert =
+            try ruleInsertion(allocator, decl.name, decl.hyp_count, slots);
         try list.append(allocator, .{
             .label = decl.name,
             .kind = completionKindForDeclaration(decl.kind),
             .detail = declarationKindName(decl.kind),
             .documentation_markdown = decl.markdown,
             .replacement = replacement,
-            .replacement_text = decl.name,
+            .replacement_text = insert.plain,
+            .snippet_replacement_text = insert.snippet,
             .sort_text = globalDeclarationSortText(decl),
         });
     }

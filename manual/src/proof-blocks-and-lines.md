@@ -135,6 +135,9 @@ reference slot. References written on the `?` become the rule's premises, in
 order, so they choose what the goal leaves open. A line whose statement has
 no holes can also be admitted with `sorry!`.
 
+Completing a rule name writes one `?` per premise, as in `mp [?, ?]`, so
+each premise shows its goal at once.
+
 Unlike `sorry!`, an open goal does not compile: the compiler reports every
 `?` with its goal, then how many remain.
 

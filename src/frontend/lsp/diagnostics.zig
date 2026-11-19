@@ -315,7 +315,9 @@ fn completionKindToLsp(
         .term, .def => .Function,
         .notation => .Operator,
         .snippet => .Snippet,
-        .axiom, .theorem, .lemma => .Method,
+        // Not Method: a rule is never applied as `rule(...)`, and editors
+        // that add call brackets by kind (blink.cmp) would write them.
+        .axiom, .theorem, .lemma => .Constant,
         .proof_line => .Reference,
         .hypothesis => .Value,
         .binder => .Variable,

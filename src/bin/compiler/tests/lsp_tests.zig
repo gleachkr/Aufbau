@@ -2076,7 +2076,7 @@ test "LSP completion returns only rules applicable to the line goal" {
     const keep = completionItemNamed(items, "keep") orelse {
         return error.MissingApplicableKeepCompletion;
     };
-    try expectCompletionEditText(proof_text, keep, "ke", "keep");
+    try expectCompletionEditText(proof_text, keep, "ke", "keep [?]");
 }
 
 test "LSP completion filters rules inside nested applications" {
@@ -2165,8 +2165,8 @@ test "LSP completion returns explicit edits" {
     const keep = completionItemNamed(items, "keep") orelse {
         return error.MissingKeepCompletion;
     };
-    try std.testing.expectEqual(types.CompletionItemKind.Method, keep.kind.?);
-    try expectCompletionEditText(proof_text, keep, "ke", "keep");
+    try std.testing.expectEqual(types.CompletionItemKind.Constant, keep.kind.?);
+    try expectCompletionEditText(proof_text, keep, "ke", "keep [?]");
 }
 
 test "LSP completion uses UTF-16 ranges after non-ASCII text" {
@@ -2209,7 +2209,7 @@ test "LSP completion uses UTF-16 ranges after non-ASCII text" {
     const keep = completionItemNamed(items, "keep") orelse {
         return error.MissingKeepUtf16Completion;
     };
-    try expectCompletionEditText(proof_text, keep, "ke", "keep");
+    try expectCompletionEditText(proof_text, keep, "ke", "keep [?]");
 }
 
 test "LSP completion returns notation snippets for snippet clients" {

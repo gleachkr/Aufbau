@@ -1174,6 +1174,90 @@ test "completion returns proof rules inside nested applications" {
     try std.testing.expect(completionNamed(items, "l1") == null);
 }
 
+test "rule completion writes an open goal per premise" {
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\axiom both: $ top $ > $ top $ > $ top $;
+        \\theorem main: $ top $;
+    ;
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ top $ by top_i
+        \\l2: $ top $ by bo
+        \\l3: $ top $ by bo [l1, l1]
+        \\l4: $ top $ by  [l1, l1]
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const bare = (std.mem.indexOf(u8, proof_text, "bo\n") orelse
+        return error.MissingRuleContext) + "bo".len;
+    const plain = try snapshot.completionsAt(arena, .proof, bare, .{});
+    const both = completionNamed(plain, "both") orelse
+        return error.MissingRuleCompletion;
+    try std.testing.expectEqualStrings("both [?, ?]", both.replacement_text);
+    try std.testing.expect(both.snippet_replacement_text == null);
+    const top_i = completionNamed(plain, "top_i") orelse
+        return error.MissingRuleCompletion;
+    try std.testing.expectEqualStrings("top_i", top_i.replacement_text);
+
+    const snippets = try snapshot.completionsAt(
+        arena,
+        .proof,
+        bare,
+        .{ .snippet_support = true },
+    );
+    const both_snippet = completionNamed(snippets, "both") orelse
+        return error.MissingRuleCompletion;
+    try std.testing.expectEqualStrings(
+        "both [${1:?}, ${2:?}]",
+        both_snippet.snippet_replacement_text orelse "",
+    );
+    const top_i_snippet = completionNamed(snippets, "top_i") orelse
+        return error.MissingRuleCompletion;
+    try std.testing.expect(top_i_snippet.snippet_replacement_text == null);
+
+    // Over an application that has its references, only the name changes.
+    const written = (std.mem.indexOf(u8, proof_text, "bo [") orelse
+        return error.MissingRuleContext) + "bo".len;
+    const renamed = try snapshot.completionsAt(
+        arena,
+        .proof,
+        written,
+        .{ .snippet_support = true },
+    );
+    const both_renamed = completionNamed(renamed, "both") orelse
+        return error.MissingRuleCompletion;
+    try std.testing.expectEqualStrings("both", both_renamed.replacement_text);
+    try std.testing.expect(both_renamed.snippet_replacement_text == null);
+
+    // No application parses without a name, but the references after the
+    // cursor are still there.
+    const unnamed = (std.mem.indexOf(u8, proof_text, "by  [") orelse
+        return error.MissingRuleContext) + "by ".len;
+    const named = try snapshot.completionsAt(
+        arena,
+        .proof,
+        unnamed,
+        .{ .snippet_support = true },
+    );
+    const both_named = completionNamed(named, "both") orelse
+        return error.MissingRuleCompletion;
+    try std.testing.expectEqualStrings("both", both_named.replacement_text);
+    try std.testing.expect(both_named.snippet_replacement_text == null);
+}
+
 test "completion returns theorem names at proof headers" {
     const mm0_text =
         \\provable sort wff;
