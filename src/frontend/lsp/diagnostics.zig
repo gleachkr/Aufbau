@@ -312,11 +312,12 @@ fn completionKindToLsp(
     return switch (kind) {
         .keyword, .modifier, .annotation => .Keyword,
         .sort => .Class,
-        .term, .def => .Function,
+        // Not Function or Method: math applies a term without brackets and
+        // a proof never writes `rule(...)`, and editors that add call
+        // brackets by kind (blink.cmp) would write them.
+        .term, .def => .Constructor,
         .notation => .Operator,
         .snippet => .Snippet,
-        // Not Method: a rule is never applied as `rule(...)`, and editors
-        // that add call brackets by kind (blink.cmp) would write them.
         .axiom, .theorem, .lemma => .Constant,
         .proof_line => .Reference,
         .hypothesis => .Value,

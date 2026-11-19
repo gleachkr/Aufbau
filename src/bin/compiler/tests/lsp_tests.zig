@@ -2271,6 +2271,10 @@ test "LSP completion returns notation snippets for snippet clients" {
         "forall ∀",
         snippet.filterText orelse "",
     );
+    const term = completionItemNamed(items, "forall") orelse {
+        return error.MissingTermCompletion;
+    };
+    try std.testing.expectEqual(types.CompletionItemKind.Constructor, term.kind.?);
 }
 
 test "LSP completion avoids snippets for plain completion clients" {
