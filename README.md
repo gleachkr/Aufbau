@@ -45,7 +45,7 @@ to the joined theory, thus:
 abc join INPUT.mm0 | mm0-zig OUTPUT.mmb
 ```
 
-Run the search placeholders (`auto?`, `exact?`, `apply?`, `conversion?`)
+Run the search placeholders (`auto?`, `exact?`, `conversion?`)
 in a proof file, and compile the proofs they find:
 
 ```sh

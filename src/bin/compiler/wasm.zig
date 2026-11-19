@@ -140,7 +140,7 @@ fn compileUnit(unit: Unit) u32 {
     result_mmb = compiler.compileMmb(allocator) catch |err| {
         var analysis_compiler = compiler.failureAnalysis();
         // Match the LSP's analysis posture: a search placeholder (`auto?` /
-        // `exact?` / `apply?`) is an unfilled hole, not an unknown rule — the
+        // `exact?` / `conversion?`) is an unfilled hole, not an unknown rule — the
         // checker admits its line and goes on, and a warning-severity
         // diagnostic per placeholder is synthesized below
         // (`writePlaceholderDiagnostics`).

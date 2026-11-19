@@ -166,7 +166,7 @@ const completion = completionOutput
 const items = Array.isArray(completion?.result)
   ? completion.result
   : (completion?.result?.items ?? []);
-for (const tactic of ["auto?", "exact?", "apply?", "conversion?"]) {
+for (const tactic of ["auto?", "exact?", "conversion?"]) {
   assert.ok(
     items.some((item) => item.label === tactic),
     "LSP completion omitted " + tactic,

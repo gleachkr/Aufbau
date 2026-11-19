@@ -182,7 +182,7 @@ const CM_COMPLETION_TYPES = {
 };
 
 // Code actions: when the caret pauses on a search placeholder (`auto?` /
-// `exact?` / `apply?`), the server offers proof suggestions. The offer renders
+// `exact?`) or an open goal `?`, the server offers proof suggestions. The offer renders
 // as a line-end bulb whose menu applies the chosen edit. Whether an offer
 // exists is entirely the server's call — the client never scans proof text.
 const setCellActions = StateEffect.define();

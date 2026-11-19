@@ -722,17 +722,14 @@ pub fn build(b: *std.Build) void {
     cli_smoke_step.dependOn(&abc_search.step);
 
     // A marker after a line that does not check is not searched (the line's
-    // error fails the run); `apply?` lists candidates and is no find.
+    // error fails the run).
     const abc_search_blocked = b.addRunArtifact(compiler_exe);
     abc_search_blocked.setCwd(b.path("tests/cli"));
     abc_search_blocked.addArgs(&.{ "search", "search.mm0", "blocked.auf" });
     abc_search_blocked.expectExitCode(1);
     abc_search_blocked.expectStdOutEqual(
         "blocked.auf:4  found l2  exact?  not searched: l1 does not check\n" ++
-            "blocked.auf:8  missed l1  apply?  candidates\n" ++
-            "  use [ref1]\n" ++
-            "  found\n" ++
-            "0 found, 0 missed, 1 with candidates, 1 not searched\n",
+            "0 found, 0 missed, 1 not searched\n",
     );
     abc_search_blocked.expectStdErrEqual(
         "error: proof line assertion does not match the rule conclusion\n" ++

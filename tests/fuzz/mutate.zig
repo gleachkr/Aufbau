@@ -13,7 +13,7 @@ const Smith = std.testing.Smith;
 /// annotations, and a few shapes that stress nesting.
 pub const dictionary = [_][]const u8{
     "$",           "(",        ")",       "[",        "]",         ";",           ":",
-    ",",           "_",        "auto?",   "exact?",   "apply?",    "conversion?", "by",
+    ",",           "_",        "auto?",   "exact?",   "?",         "conversion?", "by",
     "sorry!",      "theorem",  "axiom",   "term",     "def",       "sort",        "pure",
     "strict",      "provable", "free",    "bound",    "infixl",    "infixr",      "prefix",
     "notation",    "prec",     "max",     "=",        ">",         "@relation",   "@rewrite",

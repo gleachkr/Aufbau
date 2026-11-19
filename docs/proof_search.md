@@ -1,4 +1,4 @@
-# Proof search: `auto?`, `exact?`, `apply?`, `conversion?`, and the `@auto` annotations
+# Proof search: `auto?`, `exact?`, `conversion?`, and the `@auto` annotations
 
 Aufbau can fill in proof steps for you. Where you would normally write a
 concrete rule application like
@@ -40,7 +40,7 @@ Two consequences follow:
 
 - **A placeholder is scaffolding, not a finished step.** The compiler
   will not emit MMB for a theorem whose proof still contains an `auto?`,
-  `exact?`, `apply?`, or `conversion?`. You replace the placeholder with
+  `exact?`, or `conversion?`. You replace the placeholder with
   the concrete line the search proposes, in the editor or with
   `abc search --fill` (see *Searching from the command line*), and
   *that* line is what gets compiled and verified.
@@ -73,12 +73,10 @@ you just don't want to spell out the rule name and its argument bindings:
 l12: $ nd G Target $ by exact?
 ```
 
-### `apply?` — like `exact?`, focused on applying one named-shaped rule
-
-`apply?` is a thin variant of `exact?`. It is oriented toward "apply a
-rule to what I have" and reports its candidates the same way. In day-to-day
-use you can treat it as `exact?`; reach for it when you are thinking "apply
-*a* rule here" rather than "close this goal outright".
+To apply one rule and leave the premises nothing in reach proves for
+later, write an open goal `?` instead of a placeholder. Its editor action
+lists the rules whose conclusion matches the goal and writes each open
+premise as a new `?` (manual chapter *Proof blocks and lines*).
 
 ### `auto?` — search for a multi-step proof
 
@@ -193,7 +191,7 @@ conversion rules), that need not be the most general one.
 
 ### `conversion?` — rewrite the goal to an existing reference
 
-`conversion?` answers a different question from the other three: is the
+`conversion?` answers a different question from the other two: is the
 goal formula **convertible** — by a chain of enrolled `@conversion`
 rewrites, applied anywhere, in any direction — to a hypothesis or an
 earlier proof line? It builds an egraph seeded with the goal and every
@@ -291,8 +289,8 @@ l3: $ b $ by mp [auto?, #1]
 Here you have committed to `mp` and to discharging its second premise
 with `#1`; the `auto?` fills just the first premise. The search works out
 that slot's goal from the outer rule and the sibling references, then
-searches for it exactly as it would a top-level placeholder. `exact?` and
-`apply?` fill the slot with a single rule or reference; **`auto?`
+searches for it exactly as it would a top-level placeholder. `exact?` fills
+the slot with a single rule or reference; **`auto?`
 additionally synthesizes a multi-step sub-proof for the slot**, the same
 recursive generation it runs at the top level — so `mp [auto?, #1]` can
 grow a whole chain in that first premise, and existential witnesses inside
@@ -311,18 +309,18 @@ sub-goal onto its own top-level `auto?` line and reference it.
 
 The search runs in your editor through the language server. The loop is:
 
-1. Write a placeholder line, e.g. `l1: $ a -> a $ by auto?`. The four
+1. Write a placeholder line, e.g. `l1: $ a -> a $ by auto?`. The three
    tactics are offered by completion wherever a rule name is — in the
    rule position after `by`, and in an argument slot — so typing `au`
    and accepting gives you `auto?`. They lead the completion list, ahead
    of the theory's own rules, and completing over one replaces its
    trailing `?` as well (swapping `auto?` for `exact?` leaves one `?`).
-   Typing the `?` itself narrows the list to just the four: no rule name
+   Typing the `?` itself narrows the list to just the three: no rule name
    contains one, so a token holding a `?` can only be a placeholder.
 2. The editor shows a status on that line while the search runs, then a
    lightbulb (a code action) if it found something.
 3. Open the code action. Each suggestion appears as
-   **"Replace auto? with …"** (or `exact?` / `apply?`), showing the
+   **"Replace auto? with …"** (or `exact?`), showing the
    concrete rule application it found.
 4. Accept one. The placeholder is rewritten to the real line, and the
    proof recompiles and re-verifies.
@@ -392,10 +390,9 @@ already used; no limit reaches it. A deep search can use up any pool in
 some branch, so this is not always the cause of the miss, but if the
 proof needs more distinct variables than the pool has, declare more.
 
-`exact?` and `apply?` misses are simpler — they are single-shot. An
-`exact?` miss reports how many pool references were in reach and reminds
-you that `auto?` can additionally synthesize sub-proofs; an `apply?` miss
-reports how many candidate rules and pool references were considered.
+`exact?` misses are simpler — it is single-shot. An `exact?` miss reports
+how many pool references were in reach and reminds you that `auto?` can
+additionally synthesize sub-proofs.
 
 ## Tuning a single search (per-call parameters)
 
@@ -437,9 +434,8 @@ Rules of thumb:
 A typo'd parameter name or an out-of-range value gets its own error
 diagnostic immediately (no search needed), and is otherwise ignored —
 it never silently changes what the search does. Parameters are
-meaningful only on `auto?`; `exact?` and `apply?` are single-shot
-searches with nothing to tune, and reject them with the same
-diagnostic.
+meaningful only on `auto?` and `conversion?`; `exact?` is a single-shot
+search with nothing to tune, and rejects them with the same diagnostic.
 
 ## Searching from the command line
 
@@ -464,7 +460,6 @@ label, and the outcome:
 - **found**: the proof, followed by the value of each of the line's
   holes the proof determines. The proof is put in place for the searches
   after it, so they can cite the line.
-- **candidates**: `apply?` lists the rules it found; none is put in place.
 - **missed**, or **missed (search cut short)** when a limit stopped it:
   the retry the failure report suggests, if any. The line stays as
   written and counts as proved for the lines and searches below it, as in
@@ -473,7 +468,7 @@ label, and the outcome:
   search has no goal to work from. The record names that line.
 
 The exit status is 0 when every placeholder found a proof, 4 when one
-missed or only listed candidates, and 1 on an error. Errors in the unit
+missed, and 1 on an error. Errors in the unit
 are printed, but the searches still run.
 
 **Options:**
@@ -494,7 +489,7 @@ are printed, but the searches still run.
   `--only` that matches no placeholder is an error.
 - `--depth N` sets the depth limit of every `auto?` that does not set
   it itself, and `--budget N` the work budget of every search, `exact?`
-  and `apply?` included. A placeholder's own parameters win.
+  included. A placeholder's own parameters win.
 - `--retry N` searches a missed `auto?` again with the parameters its
   report suggests, up to N times. A proof found that way is reported as
   `found after 1 retry` (or `after N retries`), and replaces the whole
@@ -745,11 +740,11 @@ l3: $ b $ by exact?      -- finds e.g.  ax_mp (a := $ a $, b := $ b $) [l1, l2]
 
 ## Budgets and determinism
 
-- **Every search is bounded.** `exact?`, `apply?` and `auto?` each run
+- **Every search is bounded.** `exact?` and `auto?` each run
   under a work budget (roughly a few seconds of calibrated work), so they
   always terminate. An `auto?` with `budget: 0` runs under a depth limit
   instead. A goal they can't crack within budget yields "no
-  suggestion", not a hang; `exact?` and `apply?` offer whatever they found
+  suggestion", not a hang; `exact?` offers whatever it found
   before the budget ran out. Very deep goals may approach the budget before
   giving up. Checking and trimming the proofs a search found run under a
   budget of the same size of their own.

@@ -1,14 +1,14 @@
 # Search subsystem architecture
 
-This directory is the **proof search** behind `exact?`, `apply?`, `auto?` and
-`conversion?`. Given a goal and the ambient theory it produces candidate
+This directory is the **proof search** behind `exact?`, `auto?` and
+`conversion?`, and the rule probe behind an open goal's actions. Given a goal and the ambient theory it produces candidate
 `RuleApplication`s (source-proof lines) that, when checked, close the goal. It
 is untrusted frontend automation: every suggestion is re-validated by the
 checker, so a bug here yields a rejected or missing suggestion, never an
 unsound proof.
 
 This file is the map. `exact?` and `auto?` run the search core (`core/`);
-`apply?` probes rules one at a time; `conversion?` is a separate e-graph
+an open goal probes rules one at a time; `conversion?` is a separate e-graph
 engine. The largest modules are `core/prover.zig`, `core/terms.zig`,
 `egraph.zig`, `egraph/explain.zig` and `conversion/lowerer.zig`. The core's
 files carry their design in their header comments; read those before
@@ -34,10 +34,11 @@ theorem amortize.
   closed by facts (the *reference pool*) or by rules with no premises. Every
   proof is collected (`Request.collect`) and ranked: fewest nested steps
   first, then by rule declaration order, then fewer premises.
-- **`apply?`** → `apply.zig`: the rules whose conclusion matches the goal
-  (`rule_index.zig` pre-filter, relation transports screened out), each
-  probed against the checker (`Check.probeRuleConclusion`) and ranked by
-  `rank.zig`.
+- **An open goal `?`** → `apply.zig`: the rules whose conclusion matches
+  the goal (`rule_index.zig` pre-filter, relation transports screened out),
+  each probed against the checker (`Check.probeRuleConclusion`) and ranked by
+  `rank.zig`; `source/open_goal.zig` turns each into an edit. The completion
+  filter (`apply_at_offset`) runs the same probe at an ordinary rule name.
 - **`auto?`** → `entry.zig:generateTopLevel`. The search core on a concrete
   or holey goal, after the call's setup (see "The search core" below). A
   concrete inline slot goal is searched the same way; an inline slot whose
@@ -167,7 +168,7 @@ its maximum.
 
 `GenerateOptions.global_budget` (default 2.3e9, null = off; the `budget:`
 parameter in units of 1e9) caps the whole call, forward saturation and the
-core; `exact?` and `apply?` draw from the same kind of budget. The unit is
+core; `exact?` and the open-goal probe draw from the same kind of budget. The unit is
 *weighted work ticks*: deterministic, machine-independent op counts
 (`expr.zig` threadlocals) with wall-calibrated weights (`types.zig`): intern
 probe levels (one per copy-on-write base-chain hop), def-eq symbolic-node
@@ -178,11 +179,11 @@ read, which add their weights to `work_ticks_core` directly. Units ≈ ns of cal
 reads as "≈2.3 s of work".
 
 The budget is checked at each goal the core expands (`Prover.charge`) and at
-each `spendCandidate` (the core's close-out probe, each `apply?` probe, each
+each `spendCandidate` (the core's close-out probe, each rule probe, each
 pool ref tried in an inline slot); exhaustion unwinds as
 `error.SearchBudgetExhausted`. The one sub-candidate poll is the inference
-solver's (`expr.zig` `WorkBudget`). `exact?` and `apply?` stop there with the
-proofs they have found. `source.zig` `CallBudgets` holds the call's budget and
+solver's (`expr.zig` `WorkBudget`). `exact?` and the rule probe stop there
+with what they have found. `source.zig` `CallBudgets` holds the call's budget and
 a second of the same size for checking and trimming the results found, each
 charged only for its own work (`GlobalBudget.pause`), so a search that spent
 its budget still has its results checked.
@@ -437,7 +438,7 @@ Cost corollaries:
 These narrow the search without dropping proofs. Each must be a *sound*
 over-approximation (never drop a match):
 
-- **`rule_index.zig`** — goal-shape → candidate rule ids, for `apply?`.
+- **`rule_index.zig`** — goal-shape → candidate rule ids, for the rule probe.
 - **`refs.zig` + `ref_index.zig`** — the reference pool (proof lines +
   theorem hyps usable as facts) and its shape index, used by forward
   saturation and by the pool refs offered in an inline slot. `shape.zig` is
@@ -511,8 +512,8 @@ Notes:
 | `forward.zig` | forward saturation (`@auto forward`), recipe materialization, the binding `Namer` |
 | `tunables.zig` | per-call search parameters: names, ranges, validation, and applying them to `GenerateOptions` |
 | `candidate.zig` | `probe`/`commit` over `tryCandidate`: full checker re-validation on a cloned theorem |
-| `apply.zig` | `apply?`: rule-index candidates probed against the checker |
-| `rank.zig` | `apply?` candidate ranking |
+| `apply.zig` | the rule probe: rule-index candidates probed against the checker |
+| `rank.zig` | rule-probe candidate ranking |
 | `bag.zig` | the search's handle on `acui_bag.zig` (one flattening of an ACUI combiner application: members, unit, laws, rebuild), with the combiner looked up from the search context |
 | `acui.zig` | ACUI member extraction, unit normalization and canonicalization outside the core |
 | `def_match.zig` | transparent-def-aware matching: one-layer unfolding (`unfoldAppOnce`), the def-body walk (`walkDefBody`), hyp-side binder extraction (`extractHypPartialBindings`, with ordered-spine and ACUI member extraction) |

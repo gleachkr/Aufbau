@@ -4,7 +4,7 @@
 // server `textDocument/codeAction` for the range at the caret, and if it hands
 // back any actions we mark that line with a clickable lightbulb whose menu
 // applies the server-provided edit. Placement and availability are entirely the
-// server's call — we never scan proof text for `exact?`/`auto?`/`apply?`, so new
+// server's call — we never scan proof text for `exact?`/`auto?`/`?`, so new
 // action kinds surface with no client change.
 //
 // Note: the demo's LSP server is in-process wasm and runs synchronously, so a

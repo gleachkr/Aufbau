@@ -590,7 +590,7 @@ const SearchTactic = struct {
 /// The proof-search placeholders (`proof_script.isSearchPlaceholderRuleName`).
 /// They are legal wherever a rule name is, so they ride along with the rule
 /// completions instead of forming a context of their own, and they lead the
-/// list: four fixed entries a reader can learn, ahead of the theory's rules.
+/// list: three fixed entries a reader can learn, ahead of the theory's rules.
 const search_tactics = [_]SearchTactic{
     .{
         .label = "auto?",
@@ -615,18 +615,9 @@ const search_tactics = [_]SearchTactic{
         ,
     },
     .{
-        .label = "apply?",
-        .detail = "search: apply a rule to what is in reach",
-        .sort_text = sort_group_search_tactic ++ " 02",
-        .markdown =
-        \\A variant of `exact?` oriented toward "apply *a* rule here" rather
-        \\than "close this goal outright". It reports candidates the same way.
-        ,
-    },
-    .{
         .label = "conversion?",
         .detail = "search: rewrite to a reference",
-        .sort_text = sort_group_search_tactic ++ " 03",
+        .sort_text = sort_group_search_tactic ++ " 02",
         .markdown =
         \\Rewrite the goal, by a chain of enrolled `@conversion` rules applied
         \\anywhere and in either direction, to a hypothesis or an earlier line.
@@ -831,7 +822,7 @@ fn appendProofReferenceCompletions(
     placeholder_token: bool,
 ) !void {
     // A reference slot also accepts a placeholder — `mp [auto?, #1]` fills just
-    // the first premise — so the same four tactics belong here.
+    // the first premise — so the same three tactics belong here.
     try appendSearchTacticCompletions(list, allocator, replacement);
     if (placeholder_token) return;
     const block = self.proof_blocks[block_index];

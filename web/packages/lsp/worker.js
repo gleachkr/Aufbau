@@ -1,7 +1,7 @@
 // Web Worker host for the wasm LSP server.
 //
 // The server processes each LSP message synchronously, and a proof search
-// (triggered by a code-action request on `auto?`/`exact?`/`apply?`) can run for
+// (triggered by a code-action request on `auto?`/`exact?`/`conversion?`) can run for
 // seconds. Running that on the page's main thread freezes the tab; hosting it in
 // a worker keeps the UI responsive and lets the wasm churn on its own thread.
 //

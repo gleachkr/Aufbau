@@ -1,7 +1,7 @@
 # Search benchmark (`bench-search`)
 
 Latency + capability harness for the proof-search engine that backs the
-`exact?`, `apply?`, and `auto?` editor actions. The driver is
+`exact?` and `auto?` editor actions. The driver is
 [`src/search_bench.zig`](../../src/search_bench.zig); the fixtures it runs live
 in this directory.
 
@@ -27,7 +27,7 @@ Flags (after `--`):
 | `--frontier=MODE` | Skip the scenario bench and run frontier analysis (`breadth` or `depth`, below). |
 | `--files=MM0:AUF` | Frontier fixture pair (repeatable). Default: the `*_frontier` copies of the major developments in this directory (`default_frontier_corpus` in `search_bench.zig`). |
 | `--exclude=TEXT[,TEXT...]` | Frontier mode: skip theorems whose name contains any listed TEXT (a fixture's supporting lemmas). |
-| `--marker=TEXT`   | Frontier search marker (`auto?` default; `exact?`/`apply?` disable generation). |
+| `--marker=TEXT`   | Frontier search marker (`auto?` default; `exact?` disables generation). |
 | `--max-depth=N`   | Frontier `auto?` generation depth (default 6). |
 | `--global-budget=TICKS` | Override the per-call work budget in weighted ticks; `0` disables it. |
 | `--fwd-facts=N`, `--fwd-layers=N`, `--fwd-attempts=N`, `--fwd-tuples=N` | Override the forward-saturation bounds (0 = the `ForwardOptions` default). |
@@ -163,7 +163,7 @@ with an `.auf` proof that contains a search marker:
 ```
 <theorem-name>
 --------------
-l1: $ <goal> $ by auto?      <- marker is one of: exact?  apply?  auto?
+l1: $ <goal> $ by auto?      <- marker is one of: exact?  auto?
 ```
 
 The harness reads the `.mm0` for the theorem signature, finds the marker offset
@@ -172,13 +172,13 @@ LSP uses. Key fields:
 
 | Field | Meaning |
 |-------|---------|
-| `marker` | Which action to invoke (`exact?` / `apply?` / `auto?`). Must appear in the `.auf`. |
+| `marker` | Which action to invoke (`exact?` / `auto?`). Must appear in the `.auf`. |
 | `expected_replacement` | The suggestion string the run must produce. |
 | `expect_result` | `true` (default): the run FAILS if `expected_replacement` is not among the suggestions. `false`: a capability/latency probe with no required replacement. |
 | `expected_suggestion_count` | Optional exact suggestion count. Use `0` for unsupported probes that should stay unsolved until intentionally reclassified. |
 | `expect_saturation_exhausted` | Optional assertion on the forward-saturation exhaustion flag (`forward_saturation_exhausted`). `false` = the loop reached a fixpoint; `true` = it stopped on the budget. Guards the adversarial-saturation probes against dedupe-key regressions. |
 | `expect_derived_refs` | Optional assertion on the exact derived-ref count (`derived_ref_count`). Pins forward-dedupe behavior (e.g. confluence collapsing two recipes to one fact). |
-| `generate` | `auto?` generation options (`enabled`, `max_depth`, …). Leave default for `exact?`/`apply?`. |
+| `generate` | `auto?` generation options (`enabled`, `max_depth`, …). Leave default for `exact?`. |
 | `exact_result_limit` | Mirrors the LSP single-proof cap; `null` keeps every result visible. |
 
 `expect_result = false` records a probe: the benchmark still runs it for
@@ -245,12 +245,6 @@ multi-layer forward saturation.
 | `auto martin_lof id_sym_ty J_elim auto? (no result)` | Path-induction motive plus eigenvariables not conclusion-pinned. | beyond Stage 7 |
 | `auto zermelo_hilbert imp_id auto? (no result)` | Nothing conclusion-pinned, so the desirable behavior is cheap bounded failure. | termination / fuel guard |
 | `zermelo nd_and_comm auto?` / `zermelo nd_eq_symm auto?` | Need an ACUI idempotency cascade or deep equality chains, not member witnesses. | beyond Stage 5 |
-
-Mode-boundary guards:
-
-| Scenario | What it checks |
-|----------|----------------|
-| `apply? stays one-step (Stage 4)` | `apply?` may list the witness rule, but only as `hyp_only_use [ref1]`. |
 
 Supported open-backward cases:
 

@@ -120,9 +120,7 @@ test "source suggestions can apply at an ordinary rule offset" {
             proof_src[item.replace_span.start..item.replace_span.end],
         );
         if (std.mem.eql(u8, item.replacement, "p")) found_p = true;
-        if (std.mem.startsWith(u8, item.replacement, "keep ")) {
-            found_keep = true;
-        }
+        if (std.mem.eql(u8, item.replacement, "keep")) found_keep = true;
         try std.testing.expect(!std.mem.startsWith(
             u8,
             item.replacement,
@@ -238,7 +236,7 @@ test "source suggestions cite earlier placeholder lines" {
     const concrete_src =
         \\t
         \\---
-        \\l1: $ Q $ by apply?
+        \\l1: $ Q $ by ?
         \\l2: $ R $ by exact?
     ;
     var concrete = try suggestionsAtNeedle(
@@ -255,7 +253,7 @@ test "source suggestions cite earlier placeholder lines" {
     const holey_src =
         \\t
         \\---
-        \\l1: $ HOLE $ by apply?
+        \\l1: $ HOLE $ by ?
         \\l2: $ Q $ by pq [l1]
         \\l3: $ R $ by exact?
     ;
@@ -703,7 +701,7 @@ test "searchPlaceholders enumerates top-level and nested placeholders" {
         \\----
         \\l1: $ P $ by exact?
         \\l2: $ Q $ by keep [auto?]
-        \\l3: $ R $ by apply?
+        \\l3: $ R $ by conversion?
     ;
     const placeholders = try source.searchPlaceholders(
         std.testing.allocator,
@@ -721,7 +719,7 @@ test "searchPlaceholders enumerates top-level and nested placeholders" {
         placeholders[1].kind,
     );
     try std.testing.expectEqual(
-        source.SearchPlaceholder.Kind.apply,
+        source.SearchPlaceholder.Kind.conversion,
         placeholders[2].kind,
     );
     // Each span covers the placeholder application text itself.

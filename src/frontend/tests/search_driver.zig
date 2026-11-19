@@ -199,31 +199,6 @@ test "search driver searches past a malformed block header" {
     try std.testing.expectEqualStrings("o", result.markers[1].holes[0].value);
 }
 
-test "search driver lists apply? candidates without putting one in place" {
-    const proof_src =
-        \\t1
-        \\---
-        \\l1: $ P $ by p
-        \\l2: $ Q $ by use [l1]
-        \\l3: $ R $ by apply?
-        \\
-        \\t2
-        \\---
-        \\l1: $ R $ by both [p [], use [p []]]
-        \\
-        \\t3
-        \\---
-        \\l1: $ isty o $ by o_ty
-    ;
-    var result = try run(proof_src);
-    defer result.deinit();
-
-    try std.testing.expectEqual(@as(usize, 1), result.markers.len);
-    try std.testing.expectEqual(.candidates, result.markers[0].outcome);
-    try std.testing.expect(result.markers[0].suggestions.len != 0);
-    try std.testing.expectEqualStrings(proof_src, result.text);
-}
-
 test "search driver reports the hole values a find gives its line" {
     const proof_src =
         \\t1

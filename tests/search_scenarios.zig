@@ -48,13 +48,6 @@ pub const scenarios = [_]Scenario{
         .expected_replacement = "p",
     },
     .{
-        .name = "simple apply with unresolved hypotheses",
-        .mm0_path = "tests/search_bench_cases/simple_apply.mm0",
-        .proof_path = "tests/search_bench_cases/simple_apply.auf",
-        .marker = "apply?",
-        .expected_replacement = "mp [ref1, ref2]",
-    },
-    .{
         .name = "multi-hyp exact with many refs",
         .mm0_path = "tests/search_bench_cases/multi_ref_exact.mm0",
         .proof_path = "tests/search_bench_cases/multi_ref_exact.auf",
@@ -74,13 +67,6 @@ pub const scenarios = [_]Scenario{
         .proof_path = "tests/search_bench_cases/transparent_defs.auf",
         .marker = "exact?",
         .expected_replacement = "use_d3 [l1]",
-    },
-    .{
-        .name = "view lookup with different raw head",
-        .mm0_path = "tests/search_bench_cases/view_head_apply.mm0",
-        .proof_path = "tests/search_bench_cases/view_head_apply.auf",
-        .marker = "apply?",
-        .expected_replacement = "ax_subst",
     },
     .{
         .name = "zermelo cb_bijection_surj_body exact?",
@@ -783,16 +769,6 @@ pub const scenarios = [_]Scenario{
         .proof_path = "tests/search_bench_cases/meta_hyp_only_exact.auf",
         .marker = "exact?",
         .expected_replacement = "hyp_only_use [pred_K []]",
-    },
-    .{
-        // STAGE 4 negative control: `apply?` may suggest the witness rule,
-        // but it must remain a one-step application with a ref hole rather
-        // than entering open backward generation.
-        .name = "apply? stays one-step (Stage 4)",
-        .mm0_path = "tests/search_bench_cases/metavariable_capabilities.mm0",
-        .proof_path = "tests/search_bench_cases/meta_hyp_only_apply.auf",
-        .marker = "apply?",
-        .expected_replacement = "hyp_only_use [ref1]",
     },
     .{
         // STAGE 7 flagship (forward universal instantiation — SUPPORTED). Goal

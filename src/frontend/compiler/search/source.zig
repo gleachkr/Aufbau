@@ -22,7 +22,6 @@ const Check = @import("../check.zig");
 const DiagnosticSink = @import("../diagnostic_sink.zig").DiagnosticSink;
 const Goal = types.Goal;
 const Context = types.Context;
-const ApplyCandidate = types.ApplyCandidate;
 const SourceSuggestion = types.SourceSuggestion;
 const SourceSuggestionOptions = types.SourceSuggestionOptions;
 const SourceSuggestions = types.SourceSuggestions;
@@ -385,6 +384,7 @@ pub fn suggestionsAtSourceOffset(
             },
         );
         defer results.deinit();
+        options.counters.?.work_budget_exhausted = budgets.searchExhausted();
         var suggestions = empty;
         suggestions.items = try open_goal_mod.actions(work, .{
             .proof_src = proof_src,
@@ -399,10 +399,9 @@ pub fn suggestionsAtSourceOffset(
     }
 
     if (is_exact_like) {
-        // Single-proof modes (`exact?`/`auto?`) honor the tighter
-        // `exact_result_limit` when set, so the editor gets one best proof and
-        // `exact?` can short-circuit recursive generation. `apply?` (below) keeps
-        // the full `max_results`, since it lists candidate rules.
+        // `exact?` and `auto?` honor the tighter `exact_result_limit` when
+        // set, so the editor gets one best proof and `exact?` can
+        // short-circuit recursive generation.
         var exact_options = options;
         if (options.exact_result_limit) |limit| {
             exact_options.max_results = @min(options.max_results, limit);
@@ -486,6 +485,10 @@ pub fn suggestionsAtSourceOffset(
         return try copyOutSuggestions(allocator, suggestions);
     }
 
+    // What is left is an ordinary rule name under the cursor
+    // (`apply_at_offset`): the rules whose conclusion matches its goal, each
+    // as its bare name.
+    std.debug.assert(options.apply_at_offset);
     var results = try applyWithSession(
         &compiler,
         &session,
@@ -499,36 +502,20 @@ pub fn suggestionsAtSourceOffset(
         },
     );
     defer results.deinit();
-    var apply_suggestions = try renderApplySourceSuggestions(
-        work,
-        results.candidates,
-        target_application.span,
-        if (options.apply_at_offset)
-            target_application.rule_name
-        else
-            "apply?",
-    );
-    apply_suggestions.target_span = match_span;
-    options.counters.?.work_budget_exhausted = budgets.searchExhausted();
-    apply_suggestions.status = searchStatus(
-        apply_suggestions.items.len,
-        options.counters.?,
-    );
-    if (options.status_detail and apply_suggestions.status != .found) {
-        apply_suggestions.status_detail = try buildStatusDetail(
-            work,
-            if (options.apply_at_offset)
-                target_application.rule_name
-            else
-                "apply?",
-            false,
-            apply_suggestions.status,
-            options.counters.?,
-            options.generate,
-        );
+    const items = try work.alloc(SourceSuggestion, results.candidates.len);
+    for (results.candidates, items) |candidate, *item| {
+        item.* = .{
+            .title = candidate.rule_name,
+            .replacement = candidate.rule_name,
+            .replace_span = target_application.span,
+        };
     }
-    // `apply_suggestions` lives on the work allocator; hand the caller an owned copy.
-    return try copyOutSuggestions(allocator, apply_suggestions);
+    // `items` lives on the work allocator; hand the caller an owned copy.
+    return try copyOutSuggestions(allocator, .{
+        .allocator = work,
+        .items = items,
+        .target_span = match_span,
+    });
 }
 
 fn topLevelExactSuggestions(
@@ -711,32 +698,6 @@ fn inlineExactSuggestions(
         }
     }
 
-    return .{ .allocator = allocator, .items = try items.toOwnedSlice(allocator) };
-}
-
-fn renderApplySourceSuggestions(
-    allocator: std.mem.Allocator,
-    candidates: []const ApplyCandidate,
-    replace_span: Span,
-    replaced_rule_name: []const u8,
-) !SourceSuggestions {
-    var items = std.ArrayListUnmanaged(SourceSuggestion).empty;
-    errdefer deinitSourceSuggestionItems(allocator, items.items);
-    for (candidates) |candidate| {
-        const replacement = try renderApplyApplication(allocator, candidate);
-        errdefer allocator.free(replacement);
-        const title = try std.fmt.allocPrint(
-            allocator,
-            "Replace {s} with {s}",
-            .{ replaced_rule_name, replacement },
-        );
-        errdefer allocator.free(title);
-        try items.append(allocator, .{
-            .title = title,
-            .replacement = replacement,
-            .replace_span = replace_span,
-        });
-    }
     return .{ .allocator = allocator, .items = try items.toOwnedSlice(allocator) };
 }
 
@@ -1186,24 +1147,6 @@ pub fn copyOutSuggestions(
         .retry = retry,
         .target_kind = src.target_kind,
     };
-}
-
-fn renderApplyApplication(
-    allocator: std.mem.Allocator,
-    candidate: ApplyCandidate,
-) ![]const u8 {
-    if (candidate.unresolved_hyps.len == 0) {
-        return try allocator.dupe(u8, candidate.rule_name);
-    }
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    errdefer buf.deinit(allocator);
-    try buf.print(allocator, "{s} [", .{candidate.rule_name});
-    for (candidate.unresolved_hyps, 0..) |_, idx| {
-        if (idx != 0) try buf.appendSlice(allocator, ", ");
-        try buf.print(allocator, "ref{}", .{idx + 1});
-    }
-    try buf.append(allocator, ']');
-    return try buf.toOwnedSlice(allocator);
 }
 
 fn renderApplication(

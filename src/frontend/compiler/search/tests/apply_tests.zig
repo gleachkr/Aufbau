@@ -30,7 +30,7 @@ const expectApplyRuleOrder = helpers.expectApplyRuleOrder;
 const suggestionsAtNeedle = helpers.suggestionsAtNeedle;
 const expectOffers = helpers.expectOffers;
 
-test "apply rule index filters nonmatching rules before validation" {
+test "open goal rule index filters nonmatching rules before validation" {
     const mm0_src =
         \\delimiter $ ( ) $;
         \\provable sort wff;
@@ -45,7 +45,7 @@ test "apply rule index filters nonmatching rules before validation" {
     const proof_src =
         \\t
         \\------
-        \\l1: $ P $ by apply?
+        \\l1: $ P $ by ?
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -54,12 +54,13 @@ test "apply rule index filters nonmatching rules before validation" {
         &arena,
         mm0_src,
         proof_src,
-        "apply?",
+        "?",
         .{ .counters = &counters },
     );
     defer suggestions.deinit();
 
-    try std.testing.expectEqual(@as(usize, 1), suggestions.items.len);
+    // Applying `p`, then admitting the line.
+    try std.testing.expectEqual(@as(usize, 2), suggestions.items.len);
     try std.testing.expectEqual(@as(usize, 1), counters.conclusion_probes);
     try std.testing.expectEqual(
         @as(usize, 1),
@@ -652,7 +653,7 @@ test "exact search stops at the call's work budget with the proofs it found" {
     try std.testing.expectEqualStrings("k [#1, #1, #1, #1]", suggestions.items[0].replacement);
 }
 
-test "apply search stops at the call's work budget" {
+test "an open goal's rule probe stops at the call's work budget" {
     const mm0_src =
         \\delimiter $ ( ) $;
         \\provable sort wff;
@@ -668,12 +669,12 @@ test "apply search stops at the call's work budget" {
     const proof_src =
         \\t
         \\------
-        \\l1: $ T $ by apply?
+        \\l1: $ T $ by ?
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "apply?", .{
+    var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "?", .{
         .counters = &counters,
         .generate = .{ .global_budget = 3 * types.candidate_weight },
     });

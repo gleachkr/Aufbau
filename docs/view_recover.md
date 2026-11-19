@@ -577,7 +577,7 @@ fix both sides and both plugs, which the core never invents, so
 and the formula to rewrite. Otherwise search uses an `@abstract` rule only when
 its premises are already available: `exact?` tries it with premises taken
 from earlier lines, and `auto?` does the same when it closes a goal
-directly. `apply?` does not offer it. A rule with a pattern plug never
+directly. A rule with a pattern plug never
 gets subgoals for its premises: the context can only be worked out once
 both sides are known, so the premise to prove would be unknown. A
 DeM-style step whose premise must itself be proved has to be cited.

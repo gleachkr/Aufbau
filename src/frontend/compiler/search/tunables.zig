@@ -23,8 +23,8 @@ pub const GenerateOptions = types.GenerateOptions;
 
 /// Which placeholder keyword a parameter list is attached to; each keyword
 /// accepts its own parameter set (`auto?` tunes the generator, `conversion?`
-/// tunes the egraph, `exact?`/`apply?` accept none).
-pub const ParamContext = enum { exact, apply, auto, conversion };
+/// tunes the egraph, `exact?` accepts none).
+pub const ParamContext = enum { exact, auto, conversion };
 
 /// The `budget` parameter is written in billions of weighted work ticks —
 /// per the `GlobalBudget` calibration, one unit ≈ 1 second of search work.
@@ -70,7 +70,7 @@ fn specsFor(context: ParamContext) []const ParamSpec {
     return switch (context) {
         .auto => &auto_specs,
         .conversion => &conversion_specs,
-        .exact, .apply => &.{},
+        .exact => &.{},
     };
 }
 
@@ -169,7 +169,7 @@ pub fn validateSearchParams(
             const tactic: []const u8, const known: []const u8 = switch (context) {
                 .auto => .{ "auto?", known_param_names },
                 .conversion => .{ "conversion?", known_conversion_param_names },
-                .exact, .apply => unreachable,
+                .exact => unreachable,
             };
             try appendIssue(
                 allocator,

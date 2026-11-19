@@ -410,7 +410,7 @@ fn printUsage() !void {
         "usage: zig build bench-search -- [--compact|-c] [--filter=TEXT]\n" ++
             "       [--frontier=breadth|depth] [--files=MM0:AUF]...\n" ++
             "       [--exclude=TEXT[,TEXT...]] [--expect-miss=THM/LINE[,...]]\n" ++
-            "       [--marker=auto?|exact?|apply?] [--max-depth=N]\n" ++
+            "       [--marker=auto?|exact?] [--max-depth=N]\n" ++
             "       [--slow-ms=N] [--verbose|-v] [--counters] [--track-sites]\n" ++
             "       [--require-no-miss] [--retry-misses] [--max-k=N]\n" ++
             "       [--no-shape-cache]\n" ++

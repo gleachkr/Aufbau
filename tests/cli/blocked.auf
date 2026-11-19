@@ -5,5 +5,4 @@ l2: $ Q $ by exact?
 
 missed
 ------
-l1: $ Q $ by apply?
-l2: $ S $ by sorry!
+l1: $ S $ by sorry!

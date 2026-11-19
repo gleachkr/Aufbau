@@ -2,7 +2,7 @@
 //!
 //! A proof case that compiles and verifies cleanly has the justifications
 //! of up to three of its proof steps (whole lines or inline sub-proofs)
-//! replaced by `auto?`, `exact?`, `apply?` or `conversion?`, and the
+//! replaced by `auto?`, `exact?` or `conversion?`, and the
 //! search driver behind `abc search` runs on it with a small work budget.
 //! The search must not panic, leak, hang or run away with memory, and
 //! must not fail; it must trim every suggestion it returns; and putting
@@ -19,7 +19,7 @@ const ProofScript = mm0.ProofScript;
 const SearchDriver = mm0.CompilerSupport.SearchDriver;
 
 const max_markers = 3;
-const markers = [_][]const u8{ "auto?", "exact?", "apply?", "conversion?" };
+const markers = [_][]const u8{ "auto?", "exact?", "conversion?" };
 
 /// A proof step to replace, in the original proof text.
 const Step = struct {

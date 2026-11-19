@@ -18,7 +18,7 @@ Related docs:
 - `docs/view_recover.md`
 - `docs/fresh_binders.md`
 - `docs/holes.md`
-- `docs/proof_search.md` — the `auto?` / `exact?` / `apply?` search
+- `docs/proof_search.md` — the `auto?` / `exact?` / `conversion?` search
   placeholders and the `@auto` rule annotations
 
 In particular, `@alpha` and `@freshen` are frontend-only annotations used

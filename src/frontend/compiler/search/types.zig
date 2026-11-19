@@ -316,9 +316,9 @@ pub const ApplyOptions = struct {
     premises: ?[]const ProofScript.Ref = null,
 };
 
-/// Cost-weighted budget for one whole search call (`exact?`, `apply?` or
-/// `auto?`): forward saturation and the search core. The cost unit is the
-/// interner work tick (`expr.zig` `work_ticks`): one per intern attempt,
+/// Cost-weighted budget for one whole search call (`exact?`, `auto?` or an
+/// open goal's rule probe): forward saturation and the search core. The cost
+/// unit is the interner work tick (`expr.zig` `work_ticks`): one per intern attempt,
 /// everywhere on the thread. Unlike a `tryCandidate` count, tick
 /// consumption tracks how *expensive* each candidate's validation cascade
 /// actually was (cheap syntactic rejects vs. the full def/ACUI/normalization
@@ -635,7 +635,7 @@ pub const SourceSuggestions = struct {
 
 /// Controls bounded recursive generation (`auto?`). Generation only
 /// runs when the `auto?` keyword is under the cursor AND `enabled` is set by the
-/// caller (the permit). The bench and `exact?`/`apply?` paths never enable it,
+/// caller (the permit). The bench and `exact?` paths never enable it,
 /// so they never pay generation cost.
 pub const GenerateOptions = struct {
     enabled: bool = false,
@@ -702,14 +702,14 @@ pub const GenerateOptions = struct {
 
 pub const SourceSuggestionOptions = struct {
     max_results: usize = 5,
-    /// Treat the ordinary rule application under the requested source offset
-    /// as an `apply?` target. This lets editor features reuse source search
-    /// without rewriting the proof document. The default still requires an
-    /// explicit search-placeholder rule name.
+    /// Probe every rule against the goal of the ordinary rule application
+    /// under the requested source offset, and return the names of those
+    /// whose conclusion matches (the completion filter). The default needs
+    /// a search placeholder or an open goal there.
     apply_at_offset: bool = false,
-    /// Optional tighter cap for the single-proof modes (`exact?`/`auto?`), which
-    /// want one best result, leaving `apply?` (a list of candidate rules) on the
-    /// full `max_results`. When set, it also lets `exact?` short-circuit
+    /// Optional tighter cap for `exact?`/`auto?`, which want one best result,
+    /// leaving the lists (an open goal's actions, the completion filter's
+    /// rules) on the full `max_results`. When set, it also lets `exact?` short-circuit
     /// recursive generation once it has enough proofs. `null` = use `max_results`
     /// for every mode (the bench does this to keep generation hotspots visible).
     exact_result_limit: ?usize = null,

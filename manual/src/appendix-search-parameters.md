@@ -9,7 +9,6 @@ search](proof-search.md) explains how to use them;
 | Command | What it does |
 |---|---|
 | `exact?` | Close the goal with **one** rule application whose hypotheses are all discharged by existing references (theorem hypotheses, earlier lines). |
-| `apply?` | List rules whose conclusions match the goal, even if some hypotheses are not available. |
 | `auto?` | `exact?` plus recursive generation of missing sub-proofs, under iterative deepening and a work budget. Builds proofs from rule applications. |
 | `conversion?` | Equality saturation: is the goal convertible, by `@conversion`/`@compute` rewrites and local equations, to a hypothesis, earlier line, or instance of a reflexivity law? |
 
@@ -50,9 +49,8 @@ suggests a retry that raises them together with the budget, e.g.
 `N` times.
 
 `abc search --depth N --budget N` adjusts the `depth` default for `auto?` and
-the `budget` default for every search. `exact?` and `apply?` take no parameters,
-but run under the same default budget and offer what they found when it runs
-out.
+the `budget` default for every search. `exact?` takes no parameters, but runs
+under the same default budget and offers what it found when it runs out.
 
 ## `conversion?` parameters
 
@@ -61,9 +59,9 @@ out.
 | `iters` | 16 | 1–10 000 | Saturation rounds (match → instantiate → rebuild). Saturation stops early the moment the goal joins a reference's class, so a hit does not pay the full count. |
 | `nodes` | 10 000 | 1–1 000 000 | Cap on distinct term shapes the e-graph may hold. |
 
-## `exact?` and `apply?`
+## `exact?`
 
-`exact?` and `apply?` take no search parameters.
+`exact?` takes no search parameters.
 
 ## What search reads from the theory
 

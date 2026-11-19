@@ -7,10 +7,9 @@ find a justification:
 l2: $ a ∧ b ⊢ b $ by exact?
 ```
 
-The four placeholders serve different purposes: `exact?` closes a step from
-available facts, `apply?` lists rules that could produce the goal, `auto?`
-performs backward search, and `conversion?` looks for a chain of equalities
-or equivalences.
+The three placeholders serve different purposes: `exact?` closes a step from
+available facts, `auto?` performs backward search, and `conversion?` looks for
+a chain of equalities or equivalences.
 
 ## Example: search over natural deduction
 
@@ -55,8 +54,10 @@ whose hypotheses are supplied by available assertions: the lemma's own
 hypotheses (`#1`, `#2`, …) and earlier proof lines. This collection is the
 **reference pool**.
 
-`apply?` lists rules whose conclusions match the goal, even if the reference
-pool does not supply all their hypotheses.
+To apply a rule whose hypotheses the pool does not all supply, write an
+[open goal](proof-blocks-and-lines.md#open-goals) `?` instead: its editor
+action lists the rules whose conclusions match the goal and leaves the
+missing hypotheses as new open goals.
 
 ## Finding a chain: `auto?`
 
@@ -91,7 +92,7 @@ suggestions in the same order.
 
 ## Placeholders in argument slots
 
-`exact?`, `apply?`, and `auto?` can also appear in reference slots.
+`exact?` and `auto?` can also appear in reference slots.
 `conversion?` requires a whole proof line with a fully specified goal. For
 example:
 

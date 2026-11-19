@@ -138,7 +138,7 @@ Notes:
   match the cited rule's hypothesis count.
 - A bare identifier in a reference list is always a line reference, so a
   zero-hypothesis inline application needs its delimiter: `keep [top_i []]`.
-- `rule-name` may also be a search command (`exact?`, `apply?`, `auto?`,
+- `rule-name` may also be a search command (`exact?`, `auto?`,
   `conversion?`); the `name: number` parameter form is accepted only there
   ([search parameters](appendix-search-parameters.md)).
 - On a proof line, `rule-name` may be `sorry!`, which admits the goal with no

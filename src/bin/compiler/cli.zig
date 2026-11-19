@@ -632,7 +632,6 @@ fn writeSearchReport(
 ) !bool {
     var found: usize = 0;
     var missed: usize = 0;
-    var candidates: usize = 0;
     var not_searched: usize = 0;
     var failed = false;
     for (markers) |marker| {
@@ -648,10 +647,6 @@ fn writeSearchReport(
             .found => {
                 found += 1;
                 try w.writeAll("found");
-            },
-            .candidates => {
-                candidates += 1;
-                try w.writeAll("candidates");
             },
             .missed => {
                 missed += 1;
@@ -701,7 +696,6 @@ fn writeSearchReport(
         try w.writeAll("no search markers\n");
     } else {
         try w.print("{d} found, {d} missed", .{ found, missed });
-        if (candidates != 0) try w.print(", {d} with candidates", .{candidates});
         if (not_searched != 0) try w.print(", {d} not searched", .{not_searched});
         try w.writeAll("\n");
     }

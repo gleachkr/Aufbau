@@ -72,7 +72,7 @@ test "search tunables validate names, values, and placeholder kind" {
         std.mem.indexOf(u8, issues[1].message, "'depth' must be between") != null,
     );
 
-    // Any parameter on an exact?/apply? placeholder is rejected.
+    // Any parameter on an exact? placeholder is rejected.
     const not_auto = try tunables.validateSearchParams(allocator, .exact, &.{
         testParam("depth", 8),
     });

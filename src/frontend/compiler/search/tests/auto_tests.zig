@@ -893,7 +893,7 @@ test "source exact inside inline application can resolve to direct ref" {
     try expectTimingCounter(counters.ref_lookup_ns);
 }
 
-test "source apply completes inline application with unresolved subrefs" {
+test "an inline open goal offers a rule whose premise a hypothesis closes" {
     const mm0_src =
         \\delimiter $ ( ) $;
         \\provable sort wff;
@@ -906,7 +906,7 @@ test "source apply completes inline application with unresolved subrefs" {
     const proof_src =
         \\t
         \\------
-        \\l1: $ Q $ by use [apply?]
+        \\l1: $ Q $ by use [?]
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -914,14 +914,14 @@ test "source apply completes inline application with unresolved subrefs" {
         &arena,
         mm0_src,
         proof_src,
-        "apply?",
+        "?",
         .{},
     );
     defer suggestions.deinit();
 
     try std.testing.expect(suggestions.items.len > 0);
     try std.testing.expectEqualStrings(
-        "id [ref1]",
+        "id [#1]",
         suggestions.items[0].replacement,
     );
 }

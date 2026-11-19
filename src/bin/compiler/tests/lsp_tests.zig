@@ -296,12 +296,6 @@ const lsp_search_exact_proof_text =
     \\l1: $ top $ by exact?
 ;
 
-const lsp_search_apply_proof_text =
-    \\main
-    \\----
-    \\l1: $ top $ by apply?
-;
-
 test "LSP initialize advertises navigation capabilities" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
@@ -1211,43 +1205,6 @@ test "LSP placeholder diagnostics report invalid search parameters" {
     try std.testing.expect(transport_state.containsMessage(
         "'depth' must be between 1 and 64",
     ));
-}
-
-test "LSP code action replaces apply placeholder with plain refs" {
-    const mm0_uri = "file:///tmp/lsp-code-action-apply.mm0";
-    const proof_uri = "file:///tmp/lsp-code-action-apply.auf";
-
-    var transport_state: TestTransport = .{};
-    var handler = Handler.init(
-        std.testing.allocator,
-        std.testing.io,
-        &transport_state.transport,
-    );
-    defer handler.deinit();
-    try handler.putDocument(mm0_uri, lsp_search_mm0_text, 1);
-    try handler.putDocument(proof_uri, lsp_search_apply_proof_text, 1);
-
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const actions = try expectCodeActionItems(
-        try handler.@"textDocument/codeAction"(
-            arena_state.allocator(),
-            try codeActionParamsAt(
-                proof_uri,
-                lsp_search_apply_proof_text,
-                "apply?",
-            ),
-        ),
-    );
-    const action = codeActionWithReplacement(
-        actions,
-        proof_uri,
-        "keep [ref1]",
-    ) orelse return error.MissingApplyCodeAction;
-    const edit = codeActionSingleEdit(action, proof_uri) orelse {
-        return error.ExpectedCodeActionEdit;
-    };
-    try expectRangeText(lsp_search_apply_proof_text, edit.range, "apply?");
 }
 
 test "LSP code action uses UTF-16 ranges after non-ASCII text" {

@@ -452,7 +452,7 @@ fn uriListContains(uris: []const []const u8, uri: []const u8) bool {
     return false;
 }
 
-// Proof-search results (`exact?`/`auto?`/`apply?` code-action suggestions) are
+// Proof-search results (`exact?`/`auto?`/`conversion?` code-action suggestions) are
 // expensive to compute and editors fire `textDocument/codeAction` repeatedly
 // around the same proof step (lightbulb, quick-fix menu, cursor settle/drift).
 // This caches the last result per proof document, keyed by the states of
@@ -554,9 +554,9 @@ fn outcomeForPlaceholder(
     return null;
 }
 
-/// Filter static rule completions through the same conclusion probe as
-/// `apply?`. Search locates the ordinary application at `offset` and treats it
-/// as an apply target, preserving prior-line checking, local-lemma
+/// Filter static rule completions through the conclusion probe an open
+/// goal's actions use. Search locates the ordinary application at `offset` and
+/// probes every rule against its goal, preserving prior-line checking, local-lemma
 /// availability, and inline expected-goal inference.
 fn applicableRuleCompletions(
     arena: std.mem.Allocator,
@@ -627,12 +627,9 @@ fn searchOffersRule(
     suggestions: []const Search.SourceSuggestion,
     rule_name: []const u8,
 ) bool {
+    // Each suggestion is a rule's bare name.
     for (suggestions) |suggestion| {
-        if (!std.mem.startsWith(u8, suggestion.replacement, rule_name)) {
-            continue;
-        }
-        if (suggestion.replacement.len == rule_name.len) return true;
-        if (suggestion.replacement[rule_name.len] == ' ') return true;
+        if (std.mem.eql(u8, suggestion.replacement, rule_name)) return true;
     }
     return false;
 }
@@ -1141,13 +1138,12 @@ pub const Handler = struct {
             nav.unit.mm0.joined.text,
             proof_side.joined.text,
             offset,
-            // One best proof for the single-proof modes (`exact?`/`auto?`); this
-            // also lets `exact?` short-circuit recursive generation once it has a
-            // proof. `apply?` keeps the full `max_results` (it lists candidate
-            // rules). Grant the generation permit; the keyword under the cursor
-            // decides whether recursive generation actually runs. `status_detail`
-            // asks for the human-readable failure elaboration the placeholder
-            // diagnostics surface.
+            // One best proof for `exact?`/`auto?`; this also lets `exact?`
+            // short-circuit recursive generation once it has a proof. Grant
+            // the generation permit; the keyword under the cursor decides
+            // whether recursive generation actually runs. `status_detail`
+            // asks for the human-readable failure elaboration the
+            // placeholder diagnostics surface.
             .{
                 .exact_result_limit = 1,
                 .generate = .{ .enabled = true },

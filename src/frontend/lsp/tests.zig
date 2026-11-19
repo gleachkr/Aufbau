@@ -989,7 +989,7 @@ test "a token holding a question mark completes only to search tactics" {
     defer snapshot.deinit();
 
     // A bare `?` in the rule position, and a placeholder in a reference slot:
-    // both are committed, so both offer the four tactics and nothing else.
+    // both are committed, so both offer the three tactics and nothing else.
     // (A *bare* `?` in a reference slot does not parse at all, so that line
     // is incomplete and offers no reference context — a separate gap.)
     for ([_][]const u8{ "by ?", "use [auto?" }) |prefix| {
@@ -1009,11 +1009,10 @@ test "a token holding a question mark completes only to search tactics" {
             offset + prefix.len,
             .{},
         );
-        try std.testing.expectEqual(@as(usize, 4), items.len);
+        try std.testing.expectEqual(@as(usize, 3), items.len);
         for ([_][]const u8{
             "auto?",
             "exact?",
-            "apply?",
             "conversion?",
         }) |label| {
             const item = completionNamed(items, label) orelse {
@@ -1072,13 +1071,13 @@ test "completion offers search tactics in rule and reference positions" {
         "au",
         proof_text[auto.replacement.start..auto.replacement.end],
     );
-    for ([_][]const u8{ "exact?", "apply?", "conversion?" }) |label| {
+    for ([_][]const u8{ "exact?", "conversion?" }) |label| {
         if (completionNamed(stem_items, label) == null) {
             return error.MissingSearchTacticCompletion;
         }
     }
 
-    // Tactics lead the rule list: four fixed entries a reader can learn, ahead
+    // Tactics lead the rule list: three fixed entries a reader can learn, ahead
     // of the theory's own rules.
     const use_rule = completionNamed(stem_items, "use") orelse {
         return error.MissingRuleCompletion;

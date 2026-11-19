@@ -4,10 +4,9 @@
 //! (`suggestionsAtSourceOffset`) on a working copy of the proof text. A
 //! found proof replaces its marker in the working text, so later markers
 //! and lines see it proven; a missed marker stays as written, and the
-//! analysis admits it like `sorry!` when its assertion is concrete.
-//! `apply?` lists candidate rules rather than a proof, so its result is
-//! reported and never substituted. A marker after a line of its block that
-//! does not check is not searched: there is no context to search in.
+//! analysis admits it like `sorry!` when its assertion is concrete. A
+//! marker after a line of its block that does not check is not searched:
+//! there is no context to search in.
 //!
 //! With `Options.retries`, a missed `auto?` whose report advises larger
 //! limits is rewritten with them and searched again. The rewrite stays in
@@ -53,8 +52,6 @@ pub const Cost = struct {
 pub const Outcome = enum {
     /// A proof was found and put in the marker's place.
     found,
-    /// `apply?` listed candidate rules; none is put in place.
-    candidates,
     /// The search ran to the end without a proof.
     missed,
     /// A limit cut the search short; a proof may still exist.
@@ -84,8 +81,7 @@ pub const Marker = struct {
     theorem: []const u8,
     label: []const u8,
     outcome: Outcome,
-    /// The proof put in the marker's place, or every candidate rule of an
-    /// `apply?`. Empty otherwise.
+    /// The proof put in the marker's place. Empty otherwise.
     suggestions: []const []const u8 = &.{},
     /// After a miss that larger limits might fix: the marker rewritten
     /// with those limits.
@@ -150,9 +146,8 @@ pub const Result = struct {
 };
 
 const search_options: Search.SourceSuggestionOptions = .{
-    // The editor's settings: one proof for `exact?`/`auto?`/`conversion?`,
-    // the full candidate list for `apply?`, and the miss detail behind the
-    // retry advice.
+    // The editor's settings: one proof per marker, and the miss detail
+    // behind the retry advice.
     .exact_result_limit = 1,
     .generate = .{ .enabled = true },
     .status_detail = true,
@@ -349,7 +344,7 @@ fn searchMarker(
         return .{};
     }
     marker.outcome = switch (search.status) {
-        .found => if (marker.kind == .apply) .candidates else .found,
+        .found => .found,
         .miss => .missed,
         .budget_exhausted => .cut_short,
     };
@@ -368,7 +363,7 @@ fn searchMarker(
             suggestion.* = try out.dupe(u8, item.replacement);
         }
         marker.suggestions = suggestions;
-        if (marker.kind != .apply) spans.proof = search.items[0].replace_span;
+        spans.proof = search.items[0].replace_span;
     }
     return spans;
 }

@@ -1652,7 +1652,6 @@ fn isIdentChar(ch: u8) bool {
 pub const search_placeholder_bases = [_][]const u8{
     "auto",
     "exact",
-    "apply",
     "conversion",
 };
 

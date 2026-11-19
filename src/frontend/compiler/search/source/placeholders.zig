@@ -1,5 +1,5 @@
 //! Finding search placeholders in a proof source: every `auto?`/`exact?`/
-//! `apply?`/`conversion?` marker (for the LSP status diagnostics and the
+//! `conversion?` marker (for the LSP status diagnostics and the
 //! search CLI), and the one at a source offset, with the path to it inside a
 //! nested application.
 
@@ -20,14 +20,12 @@ const SourceTarget = fixture_mod.SourceTarget;
 pub const SearchPlaceholder = struct {
     pub const Kind = enum {
         exact,
-        apply,
         auto,
         conversion,
 
         pub fn keyword(self: Kind) []const u8 {
             return switch (self) {
                 .exact => "exact?",
-                .apply => "apply?",
                 .auto => "auto?",
                 .conversion => "conversion?",
             };
@@ -38,7 +36,6 @@ pub const SearchPlaceholder = struct {
         pub fn paramContext(self: Kind) tunables.ParamContext {
             return switch (self) {
                 .exact => .exact,
-                .apply => .apply,
                 .auto => .auto,
                 .conversion => .conversion,
             };
@@ -62,7 +59,7 @@ pub const SearchPlaceholder = struct {
     label: []const u8 = "",
 };
 
-/// Enumerate every search placeholder (`exact?`/`apply?`/`auto?`) in
+/// Enumerate every search placeholder (`exact?`/`auto?`/`conversion?`) in
 /// `proof_src`, top-level and nested, in source order. Used by the LSP to
 /// publish a status diagnostic per placeholder. The parse is lenient, so a
 /// broken proof line costs only itself, and a broken header only its own
@@ -156,8 +153,6 @@ fn collectSearchPlaceholders(
         const kind: SearchPlaceholder.Kind =
             if (std.mem.eql(u8, application.rule_name, "exact?"))
                 .exact
-            else if (std.mem.eql(u8, application.rule_name, "apply?"))
-                .apply
             else if (std.mem.eql(u8, application.rule_name, "conversion?"))
                 .conversion
             else
