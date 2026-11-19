@@ -127,6 +127,14 @@ A line may also name the facts a step uses before its rule is chosen:
 `by ? [#1, l2]`. The references are checked, but there is no rule yet to
 check them against. A `?` takes no bindings.
 
+In the editor, a `?` offers to apply each rule whose conclusion matches its
+goal. A premise that the goal and the references fix completely is cited
+when a hypothesis or an earlier line states it. Every other premise stays
+open: as a new `?` line above, or as `?` in place when the open goal fills a
+reference slot. References written on the `?` become the rule's premises, in
+order, so they choose what the goal leaves open. A line whose statement has
+no holes can also be admitted with `sorry!`.
+
 Unlike `sorry!`, an open goal does not compile: the compiler reports every
 `?` with its goal, then how many remain.
 

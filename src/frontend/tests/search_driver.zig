@@ -406,3 +406,20 @@ test "search driver searches only the markers named, with default limits" {
     try std.testing.expectEqual(@as(usize, 1), line.markers.len);
     try std.testing.expectEqualStrings("l2", line.markers[0].label);
 }
+
+test "search driver does not search a marker in an open goal's refs" {
+    // The `?` owns its refs: its actions, not a search, replace it.
+    const proof_src =
+        \\t1
+        \\---
+        \\l1: $ P $ by p
+        \\l2: $ R $ by ? [l1, auto?]
+    ;
+    var result = try run(proof_src);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), result.markers.len);
+    try std.testing.expectEqual(.not_searched, result.markers[0].outcome);
+    try std.testing.expectEqual(@as(usize, 0), result.markers[0].suggestions.len);
+    try std.testing.expectEqualStrings(proof_src, result.text);
+}

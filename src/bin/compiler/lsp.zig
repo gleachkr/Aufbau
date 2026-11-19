@@ -1107,10 +1107,11 @@ pub const Handler = struct {
     }
 
     /// Return the search suggestions for the unit at `offset` (in the joined
-    /// proof text), plus the retry edit after a miss that larger limits
-    /// might fix, serving the per-proof cache when every file's state
-    /// matches and the offset falls within the cached result's placeholder
-    /// span, and recomputing otherwise. The returned slice is owned by the
+    /// proof text), or the actions on the open goal there, plus the retry
+    /// edit after a miss that larger limits might fix, serving the
+    /// per-proof cache when every file's state matches and the offset falls
+    /// within the cached result's placeholder span, and recomputing
+    /// otherwise. The returned slice is owned by the
     /// cache entry (handler allocator) and stays valid until the entry is
     /// evicted, which never happens within one request. Returns null only
     /// when the search itself fails (a cached empty result is a non-null
@@ -1118,8 +1119,8 @@ pub const Handler = struct {
     ///
     /// A recomputed search also records its outcome in `search_status` and
     /// re-publishes the proof document's diagnostics, upgrading the target
-    /// placeholder's "not yet searched" warning; a cache hit changes nothing,
-    /// so it publishes nothing.
+    /// placeholder's "not yet searched" warning; a cache hit, or an open
+    /// goal, which runs no search, changes nothing, so it publishes nothing.
     fn suggestionsForUnit(
         self: *Handler,
         arena: std.mem.Allocator,
@@ -1178,6 +1179,10 @@ pub const Handler = struct {
             target_span,
             actions,
         );
+
+        // An open goal's actions come from no search, so there is no outcome
+        // to show.
+        if (suggestions.target_kind == .open_goal) return stored;
 
         // A fresh search just concluded: record its outcome and re-publish the
         // proof document's diagnostics so this placeholder's "not yet searched"

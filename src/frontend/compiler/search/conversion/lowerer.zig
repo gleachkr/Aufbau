@@ -79,8 +79,8 @@ pub const Lowerer = struct {
     proof_src: []const u8,
     target_line: ProofScript.ProofLine,
     indent: []const u8,
-    used_labels: std.StringHashMapUnmanaged(void) = .{},
-    label_counter: usize = 0,
+    /// Set by `seedLabels`.
+    labels: ProofScript.FreshLabels = .{ .base = "" },
     /// Safety valve: re-treeing seams are O(members²) lines each, so a
     /// runaway chain aborts the ref instead of flooding the buffer.
     lines_emitted: usize = 0,
@@ -118,22 +118,7 @@ pub const Lowerer = struct {
         self: *Lowerer,
         block_lines: []const ProofScript.ProofLine,
     ) !void {
-        for (block_lines) |line| {
-            try self.used_labels.put(self.work, line.label, {});
-        }
-    }
-
-    fn freshLabel(self: *Lowerer) ![]const u8 {
-        while (true) {
-            self.label_counter += 1;
-            const candidate = try std.fmt.allocPrint(
-                self.work,
-                "{s}_{d}",
-                .{ self.target_line.label, self.label_counter },
-            );
-            const entry = try self.used_labels.getOrPut(self.work, candidate);
-            if (!entry.found_existing) return candidate;
-        }
+        self.labels = try .init(self.work, self.target_line.label, block_lines);
     }
 
     fn ppExpr(self: *Lowerer, expr_id: ExprId) ![]const u8 {
@@ -302,7 +287,7 @@ pub const Lowerer = struct {
             return null;
         }
         const text = (try self.ppExpr(formula));
-        const label = try self.freshLabel();
+        const label = try self.labels.next(self.work);
         try self.out.print(self.work, "{s}{s}: $ {s} $ by {s}", .{
             self.indent,
             label,

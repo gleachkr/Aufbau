@@ -73,10 +73,13 @@ pub fn applyWithSession(
         // never a backward proof step — screen them on all paths, matching the
         // `exact?` candidate loop. See `RewriteRegistry.isRelationTransport`.
         if (context.registry.isRelationTransport(context.env, rule_id)) continue;
-        // Out of budget: list what the probes so far found.
-        if (options.budget) |budget| budget.spendCandidate() catch break;
         const rule_idx: usize = @intCast(rule_id);
         const rule = context.env.rules.items[rule_idx];
+        if (options.premises) |premises| {
+            if (premises.len != rule.hyps.len) continue;
+        }
+        // Out of budget: list what the probes so far found.
+        if (options.budget) |budget| budget.spendCandidate() catch break;
         var attempt_theorem = try theorem.clone();
         var attempt_theorem_owned = true;
         errdefer if (attempt_theorem_owned) attempt_theorem.deinit();
@@ -118,6 +121,7 @@ pub fn applyWithSession(
             @intCast(rule_idx),
             &attempt_theorem,
             &attempt_vars,
+            options.premises orelse &.{},
         ) catch |err| {
             if (err == error.OutOfMemory) return err;
             if (counters) |actual| {
@@ -134,8 +138,6 @@ pub fn applyWithSession(
         errdefer probe.deinit();
         context.diag_scratch.discard(diag_mark);
         compiler.restoreDiagnostic(saved_diag);
-        attempt_vars.deinit();
-        attempt_vars_owned = false;
 
         if (counters) |actual| {
             actual.accepted_candidates += 1;
@@ -147,11 +149,13 @@ pub fn applyWithSession(
             .rule_name = probe.rule_name,
             .declaration_order = rule_idx,
             .theorem = attempt_theorem,
+            .theorem_vars = attempt_vars,
             .bindings = probe.bindings,
             .conclusion = probe.displayed_conclusion,
             .unresolved_hyps = probe.unresolved_hyps,
         });
         attempt_theorem_owned = false;
+        attempt_vars_owned = false;
         probe.bindings = &.{};
         probe.unresolved_hyps = &.{};
         probe.deinit();

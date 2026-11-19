@@ -115,6 +115,34 @@ pub fn formatGoal(
     theorem_vars: *const NameExprMap,
     goal: ExprId,
 ) !?[]const u8 {
+    return try render(allocator, theorem, env, parser, theorem_vars, goal, "_");
+}
+
+/// `goal` as source text to write into a proof, or null when it cannot be
+/// written: a hole whose sort has no `@hole` token, or notation that does
+/// not render.
+pub fn formatStatement(
+    allocator: std.mem.Allocator,
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+    parser: *const MM0Parser,
+    theorem_vars: *const NameExprMap,
+    goal: ExprId,
+) !?[]const u8 {
+    return try render(allocator, theorem, env, parser, theorem_vars, goal, null);
+}
+
+/// `goal` in source notation, each hole named by its sort's hole token, or
+/// by `fallback` when the sort has none. Null when a hole has no name.
+fn render(
+    allocator: std.mem.Allocator,
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+    parser: *const MM0Parser,
+    theorem_vars: *const NameExprMap,
+    goal: ExprId,
+    fallback: ?[]const u8,
+) !?[]const u8 {
     var names = try ViewTrace.DiagNames.build(
         allocator,
         theorem,
@@ -124,7 +152,7 @@ pub fn formatGoal(
     defer names.deinit(allocator);
     var holes: std.AutoHashMapUnmanaged(PlaceholderId, []const u8) = .empty;
     defer holes.deinit(allocator);
-    try nameHoles(allocator, theorem, parser, goal, &holes);
+    if (!try nameHoles(allocator, theorem, parser, goal, fallback, &holes)) return null;
     const view: interner_view.View = .{
         .names = .{ .vars = &names.map, .placeholders = &holes },
         .theorem = theorem,
@@ -133,29 +161,31 @@ pub fn formatGoal(
     return try pretty_print.render(allocator, parser, view, goal, .{ .overflow = .fail });
 }
 
-/// Each placeholder under `root`, named by its sort's hole token.
+/// Each placeholder under `root`, named by its sort's hole token or
+/// `fallback`. False when some placeholder gets no name.
 fn nameHoles(
     allocator: std.mem.Allocator,
     theorem: *const TheoremContext,
     parser: *const MM0Parser,
     root: ExprId,
+    fallback: ?[]const u8,
     holes: *std.AutoHashMapUnmanaged(PlaceholderId, []const u8),
-) !void {
+) !bool {
     switch (theorem.interner.node(root).*) {
         .variable => {},
         .placeholder => |pid| {
-            const entry = try holes.getOrPut(allocator, pid);
-            if (entry.found_existing) return;
-            const info = theorem.placeholderInfo(pid);
-            entry.value_ptr.* = if (info) |known|
-                parser.core.sort_hole_tokens.get(known.sort_name) orelse "_"
+            if (holes.contains(pid)) return true;
+            const token = if (theorem.placeholderInfo(pid)) |known|
+                parser.core.sort_hole_tokens.get(known.sort_name) orelse fallback
             else
-                "_";
+                fallback;
+            try holes.put(allocator, pid, token orelse return false);
         },
         .app => |app| for (app.args) |arg| {
-            try nameHoles(allocator, theorem, parser, arg, holes);
+            if (!try nameHoles(allocator, theorem, parser, arg, fallback, holes)) return false;
         },
     }
+    return true;
 }
 
 /// A line justified by `?` must not carry bindings: they name the

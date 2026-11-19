@@ -141,6 +141,35 @@ pub const ProofLine = struct {
     }
 };
 
+/// Labels for the lines an edit adds above line `base`: `<base>_1`,
+/// `<base>_2`, ..., skipping any the block's lines use or that were already
+/// handed out. Allocates from the allocator it is given and frees nothing,
+/// so give it an arena.
+pub const FreshLabels = struct {
+    base: []const u8,
+    used: std.StringHashMapUnmanaged(void) = .empty,
+    counter: usize = 0,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        base: []const u8,
+        block_lines: []const ProofLine,
+    ) !FreshLabels {
+        var self: FreshLabels = .{ .base = base };
+        for (block_lines) |line| try self.used.put(allocator, line.label, {});
+        return self;
+    }
+
+    pub fn next(self: *FreshLabels, allocator: std.mem.Allocator) ![]const u8 {
+        while (true) {
+            self.counter += 1;
+            const label = try std.fmt.allocPrint(allocator, "{s}_{d}", .{ self.base, self.counter });
+            const entry = try self.used.getOrPut(allocator, label);
+            if (!entry.found_existing) return label;
+        }
+    }
+};
+
 /// Every error the proof-script parser can raise. Declared explicitly (not
 /// inferred) so the compiler's diagnostic error catalog can be checked to
 /// cover it at compile time.

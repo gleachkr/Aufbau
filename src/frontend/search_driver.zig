@@ -59,7 +59,9 @@ pub const Outcome = enum {
     missed,
     /// A limit cut the search short; a proof may still exist.
     cut_short,
-    /// Not searched, because an earlier line of the block does not check.
+    /// Not searched, because an earlier line of the block does not check
+    /// (`blocked_by`), or because the marker is one of an open goal's refs
+    /// (`? [auto?]`), whose actions are the `?`'s.
     not_searched,
     /// The search itself failed (`failure`).
     failed,
@@ -339,7 +341,7 @@ fn searchMarker(
     };
     defer search.deinit();
 
-    if (search.target_span == null) {
+    if (search.target_span == null or search.target_kind == .open_goal) {
         marker.outcome = .not_searched;
         if (search.blocked_by) |span| {
             marker.blocked_by = try out.dupe(u8, text[span.start..span.end]);

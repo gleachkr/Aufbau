@@ -35,6 +35,8 @@ const inline_target_mod = @import("./source/inline_target.zig");
 const InlineExpectedRef = inline_target_mod.InlineExpectedRef;
 const expectedGoalForInlineTarget = inline_target_mod.expectedGoalForInlineTarget;
 const placeholders_mod = @import("./source/placeholders.zig");
+const open_goal_mod = @import("./source/open_goal.zig");
+const OpenGoals = @import("../check/open_goals.zig");
 const findSearchLine = placeholders_mod.findSearchLine;
 const applicationAtPath = placeholders_mod.applicationAtPath;
 const report_mod = @import("./source/report.zig");
@@ -184,6 +186,10 @@ pub fn suggestionsAtSourceOffset(
         target_line.span
     else
         target_application.span;
+    const is_open_goal = !options.apply_at_offset and
+        ProofScript.isOpenGoalRuleName(target_application.rule_name);
+    const target_kind: SourceSuggestions.TargetKind =
+        if (is_open_goal) .open_goal else .search;
 
     if (options.counters) |counters| {
         counters.cold_setup_ns += timer.elapsedSince(setup_start);
@@ -213,6 +219,7 @@ pub fn suggestionsAtSourceOffset(
                 .allocator = allocator,
                 .items = &.{},
                 .target_span = match_span,
+                .target_kind = target_kind,
             };
         };
     }
@@ -249,6 +256,7 @@ pub fn suggestionsAtSourceOffset(
                 .allocator = allocator,
                 .items = &.{},
                 .target_span = match_span,
+                .target_kind = target_kind,
             };
         }
     }
@@ -343,6 +351,52 @@ pub fn suggestionsAtSourceOffset(
 
     var budgets: CallBudgets = undefined;
     budgets.init(&compiler, options.generate.global_budget);
+
+    if (is_open_goal) {
+        // An inline open goal whose position fixes only part of its goal
+        // returned above, so this one is concrete: it is probed as the
+        // statement it is, which lets a rule leave premise binders open, as
+        // on a line.
+        const goal: Goal = if (inline_expectation) |expected|
+            .{ .concrete = expected.query }
+        else
+            search_goal;
+        const empty: SourceSuggestions = .{
+            .allocator = work,
+            .items = &.{},
+            .target_span = match_span,
+            .target_kind = target_kind,
+        };
+        // A `?` with bindings is malformed; its error is the only thing to fix.
+        if (OpenGoals.hasBindings(target_application)) return try copyOutSuggestions(allocator, empty);
+        // Every rule the goal matches is ranked by what the facts close, so
+        // none is cut before the ranking, unless the budget runs out first.
+        var results = try applyWithSession(
+            &compiler,
+            &session,
+            goal,
+            &theorem,
+            theorem_vars,
+            .{
+                .max_results = null,
+                .counters = options.counters,
+                .budget = budgets.searchBudget(),
+                .premises = if (target_application.refs.len == 0) null else target_application.refs,
+            },
+        );
+        defer results.deinit();
+        var suggestions = empty;
+        suggestions.items = try open_goal_mod.actions(work, .{
+            .proof_src = proof_src,
+            .block_lines = target.block.lines,
+            .line_index = target.line_index,
+            .marker = target_application,
+            .top_level = target.path.len == 0,
+            .context = &context,
+            .theorem = &theorem,
+        }, results.candidates, line_goal, options.max_results);
+        return try copyOutSuggestions(allocator, suggestions);
+    }
 
     if (is_exact_like) {
         // Single-proof modes (`exact?`/`auto?`) honor the tighter
@@ -1130,6 +1184,7 @@ pub fn copyOutSuggestions(
         .status = src.status,
         .status_detail = status_detail,
         .retry = retry,
+        .target_kind = src.target_kind,
     };
 }
 

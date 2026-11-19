@@ -475,6 +475,44 @@ test "LSP code action replaces exact placeholder" {
     try expectRangeText(lsp_search_exact_proof_text, edit.range, "exact?");
 }
 
+test "LSP code action applies a rule to an open goal" {
+    const mm0_uri = "file:///tmp/lsp-code-action-open-goal.mm0";
+    const proof_uri = "file:///tmp/lsp-code-action-open-goal.auf";
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ top $ by ?
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        std.testing.io,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, lsp_search_mm0_text, 1);
+    try handler.putDocument(proof_uri, proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const actions = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(
+            arena_state.allocator(),
+            try codeActionParamsAt(proof_uri, proof_text, "?"),
+        ),
+    );
+    const action = codeActionWithReplacement(
+        actions,
+        proof_uri,
+        "l1: $ top $ by keep [#1]",
+    ) orelse return error.MissingApplyRuleAction;
+    try std.testing.expectEqualStrings("Apply keep [#1]", action.title);
+    try std.testing.expect(codeActionWithReplacement(actions, proof_uri, "sorry!") != null);
+    // No search ran, so there is no outcome to show.
+    try std.testing.expectEqual(@as(usize, 0), handler.search_status.count());
+}
+
 test "LSP code action offers unpack for inline applications" {
     const mm0_uri = "file:///tmp/lsp-code-action-unpack.mm0";
     const proof_uri = "file:///tmp/lsp-code-action-unpack.auf";

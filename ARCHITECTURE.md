@@ -1305,7 +1305,10 @@ There are distinct engines with different contracts:
   (one step): a goal-directed prover over witness variables, with iterative
   deepening, a per-call budget and failure/success memos. `entry.zig` sets a
   call up: the `@vars` pool and forward saturation.
-  `apply.zig` probes each rule against the goal for `apply?`.
+  `apply.zig` probes each rule against the goal for `apply?` and for the
+  actions on an open goal `?`, which `compiler/search/source/open_goal.zig` turns into
+  edits: a fact cites each premise the goal and the written references fix
+  and some fact states, and every other premise becomes a new `?`.
 - `conversion.zig` drives a separate e-graph. `egraph.zig` records justified
   equality unions; `compiler/search/egraph/explain.zig` extracts explanations;
   `compiler/search/conversion/lowerer.zig` renders proof-script steps.

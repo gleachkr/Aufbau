@@ -16,6 +16,7 @@ comptime {
     _ = @import("./alpha_tests.zig");
     _ = @import("./conditional_tests.zig");
     _ = @import("./ring_tests.zig");
+    _ = @import("./open_goal_tests.zig");
     // The two normalizer engines, on the bags inference and the checker
     // both read.
     _ = @import("./normal_form_tests.zig");

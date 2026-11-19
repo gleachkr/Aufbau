@@ -218,9 +218,7 @@ pub fn findSearchLine(
                     .path = &.{},
                 };
             }
-            if (ProofScript.isSearchPlaceholderRuleName(
-                line.application.rule_name,
-            )) {
+            if (isActionMarker(line.application.rule_name)) {
                 const span = line.application.ruleApplicationSpan();
                 if (offset >= span.start and offset <= span.end) {
                     return .{
@@ -267,8 +265,7 @@ fn findNestedSearchPath(
         };
         if (!spanContains(child.span, offset)) continue;
         if ((apply_at_offset and spanContains(child.rule_span, offset)) or
-            (!apply_at_offset and
-                ProofScript.isSearchPlaceholderRuleName(child.rule_name)))
+            (!apply_at_offset and isActionMarker(child.rule_name)))
         {
             const path = try allocator.alloc(usize, 1);
             path[0] = idx;
@@ -287,6 +284,14 @@ fn findNestedSearchPath(
         }
     }
     return null;
+}
+
+/// A marker the editor offers actions on: a search placeholder, whose
+/// actions are the proofs its search finds, or an open goal, whose actions
+/// apply a rule to it.
+fn isActionMarker(rule_name: []const u8) bool {
+    return ProofScript.isSearchPlaceholderRuleName(rule_name) or
+        ProofScript.isOpenGoalRuleName(rule_name);
 }
 
 fn spanContains(span: Span, offset: usize) bool {

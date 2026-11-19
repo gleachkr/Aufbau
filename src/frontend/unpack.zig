@@ -207,10 +207,7 @@ const Emitter = struct {
     /// emitted line (`ProofLine.span` starts at the physical line start, so
     /// the replacement re-supplies the indentation it replaces).
     indent: []const u8,
-    /// Label base for fresh labels: `<base>_1`, `<base>_2`, ...
-    base: []const u8,
-    used_labels: std.StringHashMapUnmanaged(void),
-    label_counter: usize = 0,
+    labels: ProofScript.FreshLabels,
     out: std.ArrayListUnmanaged(u8) = .empty,
     count: usize = 0,
 
@@ -269,7 +266,7 @@ const Emitter = struct {
         const app_text = (try self.renderApp(app)) orelse return null;
         const conclusion = self.conclusions.get(spanKey(app.span)) orelse
             return null;
-        const label = try self.freshLabel();
+        const label = try self.labels.next(self.allocator);
         try self.out.print(
             self.allocator,
             "{s}{s}: $ {s} $ by {s}\n",
@@ -277,22 +274,6 @@ const Emitter = struct {
         );
         self.count += 1;
         return label;
-    }
-
-    fn freshLabel(self: *Emitter) ![]const u8 {
-        while (true) {
-            self.label_counter += 1;
-            const candidate = try std.fmt.allocPrint(
-                self.allocator,
-                "{s}_{d}",
-                .{ self.base, self.label_counter },
-            );
-            const entry = try self.used_labels.getOrPut(
-                self.allocator,
-                candidate,
-            );
-            if (!entry.found_existing) return candidate;
-        }
     }
 };
 
@@ -302,19 +283,13 @@ fn buildReplacement(
     target: Target,
     conclusions: *const std.AutoHashMapUnmanaged(u128, []const u8),
 ) !?Built {
-    var used_labels = std.StringHashMapUnmanaged(void){};
-    for (target.block.lines) |line| {
-        try used_labels.put(allocator, line.label, {});
-    }
-
     const line = target.line;
     var emitter = Emitter{
         .allocator = allocator,
         .proof_src = proof_src,
         .conclusions = conclusions,
         .indent = proof_src[line.span.start..line.label_span.start],
-        .base = line.label,
-        .used_labels = used_labels,
+        .labels = try .init(allocator, line.label, target.block.lines),
     };
 
     const top_text = (try emitter.renderApp(line.application)) orelse

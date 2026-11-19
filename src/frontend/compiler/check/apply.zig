@@ -333,6 +333,12 @@ fn unrecoverable(err: anyerror) bool {
     return err == error.OutOfMemory or err == error.CheckStackExhausted;
 }
 
+/// Whether rule `rule_id` can conclude the line, and with which bindings,
+/// without its premises proved. `premise_refs` is empty, or holds one ref
+/// per premise, as written on an open goal (`? [l1, ?, l5]`). Each premise
+/// whose ref cites a hypothesis or earlier line is checked like a ref of the
+/// full application, so its fact constrains the bindings as it would there;
+/// the others stay open.
 pub fn probeRuleConclusion(
     self: *CompilerContext,
     context: *const RuleApplyContext,
@@ -344,6 +350,7 @@ pub fn probeRuleConclusion(
     rule_id: u32,
     theorem: *TheoremContext,
     theorem_vars: *NameExprMap,
+    premise_refs: []const Ref,
 ) anyerror!ConclusionProbe {
     const checked_mark = context.checked.items.len;
     defer CheckedIr.rollbackToMark(
@@ -365,6 +372,7 @@ pub fn probeRuleConclusion(
         theorem_vars,
         .conclusion_probe,
         &.{},
+        premise_refs,
     );
     return result.conclusion_probe;
 }
@@ -455,6 +463,8 @@ fn applyRuleCandidateCore(
     theorem_vars: *NameExprMap,
     kind: CandidateApplyKind,
     pins: []const ?ExprId,
+    /// A conclusion probe's premise refs (`probeRuleConclusion`).
+    premise_refs: []const Ref,
 ) anyerror!CandidateApplyResult {
     const allocator = context.allocator;
     const parser = context.parser;
@@ -633,6 +643,7 @@ fn applyRuleCandidateCore(
         refs,
         &refs_owned,
         ref_exprs,
+        premise_refs,
     );
 }
 
@@ -657,6 +668,7 @@ noinline fn finishCandidate(
     refs: []CheckedRef,
     refs_owned: *bool,
     ref_exprs: []ExprId,
+    premise_refs: []const Ref,
 ) anyerror!CandidateApplyResult {
     const allocator = context.allocator;
     const parser = context.parser;
@@ -666,12 +678,22 @@ noinline fn finishCandidate(
     const checked = context.checked;
     const diag_scratch = context.diag_scratch;
     const rule = &env.rules.items[rule_id];
+    const probe_premises: CitedPremises = if (kind == .conclusion_probe)
+        try .init(allocator, context, theorem, rule_id, rule, premise_refs)
+    else
+        .{};
+    defer probe_premises.deinit(allocator);
+    // A probe infers from the conclusion and the cited premises alone.
     var conclusion_rule = rule.*;
-    if (kind == .conclusion_probe) conclusion_rule.hyps = &.{};
+    if (kind == .conclusion_probe) conclusion_rule.hyps = probe_premises.hyps;
     const inference_rule = if (kind == .conclusion_probe)
         &conclusion_rule
     else
         rule;
+    const inference_refs: []const ExprId = if (kind == .conclusion_probe)
+        probe_premises.exprs
+    else
+        ref_exprs;
     const explicit_bindings = try allocator.dupe(?ExprId, partial_bindings);
     defer allocator.free(explicit_bindings);
 
@@ -718,7 +740,8 @@ noinline fn finishCandidate(
         .kind = kind,
         .line_assertion = line_assertion,
         .expected_conclusion_hint = expected_conclusion_hint,
-        .ref_exprs = ref_exprs,
+        .ref_exprs = inference_refs,
+        .probe_view_hyps = probe_premises.view_hyps,
         .inference_context = &inference_context,
         .fresh_context = fresh_context,
     };
@@ -731,7 +754,7 @@ noinline fn finishCandidate(
             line,
             line_assertion,
             partial_bindings,
-            ref_exprs,
+            inference_refs,
             expected_conclusion_hint,
             fresh_context,
             setup.maybe_view,
@@ -790,7 +813,7 @@ noinline fn finishCandidate(
                 line_assertion,
                 expected_conclusion_hint,
                 candidate.displayed_conclusion,
-                ref_exprs,
+                inference_refs,
                 explicit_bindings,
                 filled_bindings,
                 rule_fresh,
@@ -828,6 +851,24 @@ noinline fn finishCandidate(
         _ = line_idx;
         refs_owned.* = false;
         filled_bindings_owned = false;
+
+        // Each cited fact must prove its premise, as a ref of the full
+        // application must.
+        for (probe_premises.indices, probe_premises.refs, probe_premises.exprs) |idx, ref, actual| {
+            const expected = try theorem.instantiateTemplate(rule.hyps[idx], filled_bindings);
+            const match_mark = diag_scratch.mark();
+            defer diag_scratch.discard(match_mark);
+            const matched = Matching.convertTo(
+                probe_conversion,
+                .{ .ref = ref },
+                actual,
+                expected,
+            ) catch |err| {
+                if (err == error.OutOfMemory) return err;
+                return error.HypothesisMismatch;
+            };
+            if (matched == null) return error.HypothesisMismatch;
+        }
 
         const owned_bindings = try allocator.dupe(?ExprId, optional_bindings);
         errdefer allocator.free(owned_bindings);
@@ -1400,6 +1441,71 @@ fn inlineHints(
     return expected_refs;
 }
 
+/// The premises a conclusion probe checks with the conclusion: those whose
+/// written ref cites a hypothesis or earlier line, in order, with the
+/// rule's @view premises at the same positions.
+const CitedPremises = struct {
+    indices: []const usize = &.{},
+    hyps: []const TemplateExpr = &.{},
+    view_hyps: []const TemplateExpr = &.{},
+    refs: []const CheckedRef = &.{},
+    exprs: []const ExprId = &.{},
+
+    fn init(
+        allocator: std.mem.Allocator,
+        context: *const RuleApplyContext,
+        theorem: *const TheoremContext,
+        rule_id: u32,
+        rule: *const RuleDecl,
+        premise_refs: []const Ref,
+    ) !CitedPremises {
+        if (premise_refs.len == 0) return .{};
+        std.debug.assert(premise_refs.len == rule.hyps.len);
+        const known = try allocator.alloc(?KnownRef, premise_refs.len);
+        defer allocator.free(known);
+        var count: usize = 0;
+        for (premise_refs, known) |ref, *out| {
+            out.* = knownRef(context, theorem, ref);
+            count += @intFromBool(out.* != null);
+        }
+        const view = context.views.get(rule_id);
+        const indices = try allocator.alloc(usize, count);
+        errdefer allocator.free(indices);
+        const hyps = try allocator.alloc(TemplateExpr, count);
+        errdefer allocator.free(hyps);
+        const view_hyps = try allocator.alloc(TemplateExpr, if (view != null) count else 0);
+        errdefer allocator.free(view_hyps);
+        const refs = try allocator.alloc(CheckedRef, count);
+        errdefer allocator.free(refs);
+        const exprs = try allocator.alloc(ExprId, count);
+        var next: usize = 0;
+        for (known, 0..) |maybe_fact, idx| {
+            const fact = maybe_fact orelse continue;
+            indices[next] = idx;
+            hyps[next] = rule.hyps[idx];
+            if (view) |v| view_hyps[next] = v.hyps[idx];
+            refs[next] = fact.ref;
+            exprs[next] = fact.expr;
+            next += 1;
+        }
+        return .{
+            .indices = indices,
+            .hyps = hyps,
+            .view_hyps = view_hyps,
+            .refs = refs,
+            .exprs = exprs,
+        };
+    }
+
+    fn deinit(self: CitedPremises, allocator: std.mem.Allocator) void {
+        allocator.free(self.indices);
+        allocator.free(self.hyps);
+        allocator.free(self.view_hyps);
+        allocator.free(self.refs);
+        allocator.free(self.exprs);
+    }
+};
+
 /// Binder inference for one application, rerunnable from different given
 /// bindings (the oracle trials below).
 const NodeInference = struct {
@@ -1415,6 +1521,9 @@ const NodeInference = struct {
     line_assertion: LineAssertion,
     expected_conclusion_hint: ?ExprId,
     ref_exprs: []const ExprId,
+    /// A conclusion probe's @view premises, those it cites a fact for
+    /// (`CitedPremises.view_hyps`).
+    probe_view_hyps: []const TemplateExpr,
     inference_context: *const Inference.RuleInferenceContext,
     fresh_context: Inference.HiddenWitnessFreshContext,
 
@@ -1456,7 +1565,7 @@ const NodeInference = struct {
         }
         var maybe_view = n.context.views.get(n.rule_id);
         if (n.kind == .conclusion_probe) {
-            if (maybe_view) |*view| view.hyps = &.{};
+            if (maybe_view) |*view| view.hyps = n.probe_view_hyps;
         }
         const had_omitted = Inference.hasOmittedBindings(given);
         const has_omitted_structural = had_omitted and
@@ -1678,6 +1787,7 @@ fn tryApplyRuleApplicationWithCandidate(
         theorem_vars,
         .full_application,
         pins,
+        &.{},
     );
     return result.full_application;
 }
@@ -1843,7 +1953,7 @@ fn elaborateRefs(
     // application. Inline applications join as they are elaborated.
     const known = try context.allocator.alloc(?ExprId, source_refs.len);
     defer context.allocator.free(known);
-    for (source_refs, known) |ref, *out| out.* = knownRefExpr(context, theorem, ref);
+    for (source_refs, known) |ref, *out| out.* = if (knownRef(context, theorem, ref)) |k| k.expr else null;
     for (source_refs, 0..) |ref, idx| {
         failed_ref.* = idx;
         ref_exprs[idx] = switch (ref) {
@@ -1944,27 +2054,34 @@ fn elaborateRefs(
     }
 }
 
-/// What `ref` states, if that is known without elaborating it: a theorem
-/// hypothesis or an earlier line. Null for an inline application, or a ref
-/// that does not resolve (its own elaboration reports that).
-fn knownRefExpr(
+/// A ref to a theorem hypothesis or an earlier line, and what it states.
+const KnownRef = struct {
+    ref: CheckedRef,
+    expr: ExprId,
+};
+
+/// What `ref` cites and states, if that is known without elaborating it: a
+/// theorem hypothesis or an earlier line. Null for an inline application, or
+/// a ref that does not resolve (its own elaboration reports that).
+fn knownRef(
     context: *const RuleApplyContext,
     theorem: *const TheoremContext,
     ref: Ref,
-) ?ExprId {
+) ?KnownRef {
     return switch (ref) {
         .hyp => |hyp| switch (ProofScript.resolveHypRef(
             theorem.theorem_hyp_names,
             theorem.theorem_hyps.items.len,
             hyp,
         )) {
-            .index => |idx| theorem.theorem_hyps.items[idx],
+            .index => |idx| .{ .ref = .{ .hyp = idx }, .expr = theorem.theorem_hyps.items[idx] },
             .unknown, .ambiguous => null,
         },
-        .line => |label| if (context.labels.get(label.label)) |line_idx|
-            context.checked.items[line_idx].expr
-        else
-            null,
+        .line => |label| {
+            const line_idx = context.labels.get(label.label) orelse return null;
+            if (line_idx >= context.checked.items.len) return null;
+            return .{ .ref = .{ .line = line_idx }, .expr = context.checked.items[line_idx].expr };
+        },
         .application => null,
     };
 }

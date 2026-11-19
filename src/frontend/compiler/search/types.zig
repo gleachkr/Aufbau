@@ -130,6 +130,9 @@ pub const ApplyCandidate = struct {
     rule_name: []const u8,
     declaration_order: usize,
     theorem: TheoremContext,
+    /// The theorem's variables with those the probe named (a `@fresh`
+    /// binder's pick from its `@vars` pool).
+    theorem_vars: NameExprMap,
     bindings: []const ?ExprId,
     conclusion: ExprId,
     unresolved_hyps: []const UnresolvedHypothesis,
@@ -137,6 +140,7 @@ pub const ApplyCandidate = struct {
     pub fn deinit(self: *ApplyCandidate) void {
         self.allocator.free(self.bindings);
         self.allocator.free(self.unresolved_hyps);
+        self.theorem_vars.deinit();
         self.theorem.deinit();
         self.* = undefined;
     }
@@ -306,6 +310,10 @@ pub const ApplyOptions = struct {
     /// Per-call work budget: each rule probe spends a candidate from it,
     /// and when it runs out the remaining rules are not probed.
     budget: ?*GlobalBudget = null,
+    /// The refs written on an open goal (`? [l1, ?, l5]`), when there are
+    /// any: only rules with that many premises are probed, and each fact
+    /// cited constrains the rule's bindings as the checker's ref would.
+    premises: ?[]const ProofScript.Ref = null,
 };
 
 /// Cost-weighted budget for one whole search call (`exact?`, `apply?` or
@@ -588,8 +596,8 @@ pub const SourceSuggestions = struct {
     /// not affect the suggestions themselves.
     target_span: ?Span = null,
     /// How the search concluded (see `SearchStatus`). Meaningful only when
-    /// `target_span` is set (a placeholder was actually searched); the early
-    /// no-placeholder returns leave the default.
+    /// `target_span` is set and `target_kind` is `.search` (a placeholder
+    /// was actually searched); the other returns leave the default.
     status: SearchStatus = .miss,
     /// Set instead of searching when an earlier line of the placeholder's
     /// block does not check: that line's label span. `target_span` is null.
@@ -604,6 +612,11 @@ pub const SourceSuggestions = struct {
     /// `miss.retryFor`). Built alongside `status_detail`; null otherwise.
     /// Owned by `allocator` when present.
     retry: ?SourceSuggestion = null,
+    /// What stood at the offset: a search placeholder, whose outcome backs
+    /// its status diagnostic, or an open goal, which runs no search.
+    target_kind: TargetKind = .search,
+
+    pub const TargetKind = enum { search, open_goal };
 
     pub fn deinit(self: *SourceSuggestions) void {
         for (self.items) |item| {
