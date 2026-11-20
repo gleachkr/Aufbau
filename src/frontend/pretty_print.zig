@@ -33,6 +33,11 @@ const Out = struct {
     list: std.ArrayListUnmanaged(u8) = .empty,
     arena: std.mem.Allocator,
     max_len: usize,
+    /// The parentheses as written: `(` is followed by a space unless the theory
+    /// declares it a left delimiter, and `)` preceded by one unless it is a
+    /// right delimiter, so `( p ∧ q )` lexes where `(p ∧ q)` would read `(p`.
+    open: []const u8,
+    close: []const u8,
 
     fn append(self: *Out, byte: u8) RenderError!void {
         try self.list.append(self.arena, byte);
@@ -87,7 +92,12 @@ pub fn render(
     root: @TypeOf(view).Node,
     limit: Limit,
 ) Error!?[]const u8 {
-    var out: Out = .{ .arena = arena, .max_len = limit.max_len };
+    var out: Out = .{
+        .arena = arena,
+        .max_len = limit.max_len,
+        .open = if (notation.isLeftDelimiter('(')) "(" else "( ",
+        .close = if (notation.isRightDelimiter(')')) ")" else " )",
+    };
     errdefer out.list.deinit(arena);
     const rendered = renderNode(&out, notation, view, root, 0) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -164,13 +174,13 @@ fn renderInfix(
     const left_prec = if (ix.right_assoc) ix.prec + 1 else ix.prec;
     const right_prec = if (ix.right_assoc) ix.prec else ix.prec + 1;
     const wrap = ix.prec < min_prec;
-    if (wrap) try out.append('(');
+    if (wrap) try out.appendSlice(out.open);
     if (!try renderNode(out, notation, view, args[0], left_prec)) return false;
     try out.append(' ');
     try out.appendSlice(ix.token);
     try out.append(' ');
     if (!try renderNode(out, notation, view, args[1], right_prec)) return false;
-    if (wrap) try out.append(')');
+    if (wrap) try out.appendSlice(out.close);
     return true;
 }
 
@@ -183,7 +193,7 @@ fn renderPrefix(
     min_prec: u16,
 ) RenderError!bool {
     const wrap = px.prec < min_prec;
-    if (wrap) try out.append('(');
+    if (wrap) try out.appendSlice(out.open);
     try out.appendSlice(px.token);
     for (px.lits) |lit| {
         try out.append(' ');
@@ -201,7 +211,7 @@ fn renderPrefix(
             },
         }
     }
-    if (wrap) try out.append(')');
+    if (wrap) try out.appendSlice(out.close);
     return true;
 }
 
@@ -220,7 +230,7 @@ fn renderFallback(
         return true;
     }
     const wrap = APP_PRECEDENCE < min_prec;
-    if (wrap) try out.append('(');
+    if (wrap) try out.appendSlice(out.open);
     try out.appendSlice(name);
     for (args) |arg| {
         try out.append(' ');
@@ -228,7 +238,7 @@ fn renderFallback(
         // argument is parenthesized while atoms are left bare.
         if (!try renderNode(out, notation, view, arg, MAX_PRECEDENCE)) return false;
     }
-    if (wrap) try out.append(')');
+    if (wrap) try out.appendSlice(out.close);
     return true;
 }
 
@@ -269,6 +279,15 @@ const MockView = struct {
 const MockNotation = struct {
     entries: []const ?Notation,
     coercions: []const u32 = &.{},
+    delimited_parens: bool = true,
+
+    fn isLeftDelimiter(self: MockNotation, ch: u8) bool {
+        return self.delimited_parens and ch == '(';
+    }
+
+    fn isRightDelimiter(self: MockNotation, ch: u8) bool {
+        return self.delimited_parens and ch == ')';
+    }
 
     fn notationForTerm(self: MockNotation, term_id: u32) ?Notation {
         if (term_id >= self.entries.len) return null;
@@ -343,6 +362,27 @@ test "infix left-associative parenthesizes right nesting" {
         .{ .infix = .{ .token = "+", .prec = 64, .right_assoc = false } },
     } };
     try expectRender("a + (b + c)", notation, view, 4);
+}
+
+test "parentheses are spaced when the theory does not delimit them" {
+    // ->(->(a, b), c) with infixr, no `( )` delimiters -> "( a -> b ) -> c"
+    const view = MockView{
+        .nodes = &.{
+            .{ .atom = "a" }, // 0
+            .{ .atom = "b" }, // 1
+            .{ .atom = "c" }, // 2
+            .{ .app = .{ .term_id = 0, .args = &.{ 0, 1 } } }, // 3
+            .{ .app = .{ .term_id = 0, .args = &.{ 3, 2 } } }, // 4
+        },
+        .term_names = &.{"imp"},
+    };
+    const notation = MockNotation{
+        .entries = &.{
+            .{ .infix = .{ .token = "->", .prec = 25, .right_assoc = true } },
+        },
+        .delimited_parens = false,
+    };
+    try expectRender("( a -> b ) -> c", notation, view, 4);
 }
 
 test "infix right-associative omits redundant right parens" {

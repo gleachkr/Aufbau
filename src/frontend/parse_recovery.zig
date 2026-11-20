@@ -99,6 +99,16 @@ pub const MM0Parser = struct {
         return self.core.isCoercionTerm(term_id);
     }
 
+    /// Whether the tokenizer splits after `ch` (for pretty-printing).
+    pub fn isLeftDelimiter(self: *const MM0Parser, ch: u8) bool {
+        return self.core.isLeftDelimiter(ch);
+    }
+
+    /// Whether the tokenizer splits before `ch` (for pretty-printing).
+    pub fn isRightDelimiter(self: *const MM0Parser, ch: u8) bool {
+        return self.core.isRightDelimiter(ch);
+    }
+
     /// The set of declared coercion term ids, for mirroring into the
     /// compiler's `GlobalEnv` (the parser consumes `coercion` statements
     /// without emitting them).

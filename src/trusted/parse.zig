@@ -1456,6 +1456,17 @@ pub const MM0Parser = struct {
         return self.coercion_terms.contains(term_id);
     }
 
+    /// Whether the tokenizer splits after `ch` (a left delimiter): read-only
+    /// view for pretty-printing.
+    pub fn isLeftDelimiter(self: *const MM0Parser, ch: u8) bool {
+        return self.left_delims[ch];
+    }
+
+    /// Whether the tokenizer splits before `ch` (a right delimiter).
+    pub fn isRightDelimiter(self: *const MM0Parser, ch: u8) bool {
+        return self.right_delims[ch];
+    }
+
     /// Whether `token` re-tokenizes to itself under the current delimiter set.
     /// A notation declared with a token that does not (e.g. an ASCII `\/` while
     /// `/` is a delimiter) cannot be re-parsed, so the pretty-printer must not

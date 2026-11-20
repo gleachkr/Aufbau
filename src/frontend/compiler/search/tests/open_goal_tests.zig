@@ -455,8 +455,9 @@ test "a named unknown in a context premise keeps the context's other members" {
 
 test "a goal with a hole inside a part offers the rules whose variables stand for that part" {
     // `and_elim_l`'s `a` is the whole `p /\ ?q`. The line checker leaves a
-    // variable over a part with a hole open; the probe binds it.
-    const mm0 = comptime "delimiter $ ( ) $;\n" ++ named("axiom and_elim_l (a b: wff): $ a /\\ b $ > $ a $;\n" ++
+    // variable over a part with a hole open; the probe binds it. The theory
+    // declares no delimiters, so the parentheses are written spaced.
+    const mm0 = comptime named("axiom and_elim_l (a b: wff): $ a /\\ b $ > $ a $;\n" ++
         "theorem t (p q: wff): $ p $ > $ p /\\ q $;");
     const proof_src =
         \\t
@@ -471,7 +472,7 @@ test "a goal with a hole inside a part offers the rules whose variables stand fo
         if (std.mem.startsWith(u8, item.title, "Apply and_elim_l")) break item;
     } else return error.MissingAndElim;
     try std.testing.expectEqualStrings(
-        \\l1_1: $ (p /\ ?q) /\ ?b $ by ?
+        \\l1_1: $ ( p /\ ?q ) /\ ?b $ by ?
         \\l1: $ p /\ ?q $ by and_elim_l [l1_1]
         \\
     , action.replacement);
