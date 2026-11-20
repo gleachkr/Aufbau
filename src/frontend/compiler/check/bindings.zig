@@ -200,13 +200,36 @@ pub fn inferCandidateOptionalBindings(
         },
         .holey => |holey| {
             if (had_omitted) {
-                return try inferHoleyOptionalBindingsForProbe(
+                return inferHoleyOptionalBindingsForProbe(
                     context,
                     partial_bindings,
                     base_ref_exprs,
                     maybe_view,
                     holey,
-                );
+                ) catch |err| {
+                    if (err != error.UnifyMismatch and err != error.HoleyInferenceMismatch) return err;
+                    // The exact matcher reads the goal only as written. A
+                    // rule whose conclusion meets it modulo ACUI or a
+                    // definition is read as a holey line's check reads it,
+                    // minting no hidden witness: a probe may be abandoned.
+                    const bindings = Inference.inferBindingsFromHoleyAdvanced(
+                        self,
+                        context,
+                        line,
+                        partial_bindings,
+                        base_ref_exprs,
+                        holey,
+                        maybe_view,
+                        null,
+                    ) catch |advanced_err| {
+                        if (advanced_err == error.OutOfMemory) return advanced_err;
+                        restoreDiagnostic(self, null);
+                        return err;
+                    };
+                    defer allocator.free(bindings);
+                    restoreDiagnostic(self, null);
+                    return try concreteBindingsToOptional(allocator, bindings);
+                };
             }
         },
         .implicit_whole_conclusion => {},

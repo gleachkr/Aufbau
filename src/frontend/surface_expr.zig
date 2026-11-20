@@ -95,20 +95,21 @@ pub fn containsStructuralHole(
 }
 
 /// Intern a holey surface into `theorem`, with `mint(context, theorem,
-/// sort_name)` in place of each hole. Null when a hole's sort is unknown or
+/// sort_name, name)` in place of each hole (`name` is a named unknown's
+/// token, null for an anonymous hole). Null when a hole's sort is unknown or
 /// `mint` declines it. A hole-free subtree is interned as parsed.
 pub fn internHoley(
     theorem: *TheoremContext,
     env: *const GlobalEnv,
     expr: *const Expr,
     context: anytype,
-    comptime mint: fn (@TypeOf(context), *TheoremContext, []const u8) anyerror!?ExprId,
+    comptime mint: fn (@TypeOf(context), *TheoremContext, []const u8, ?[]const u8) anyerror!?ExprId,
 ) anyerror!?ExprId {
     if (!containsHole(expr)) return try theorem.internParsedExpr(expr);
     switch (expr.*) {
         .hole => |hole| {
             const sort_name = sortNameById(env, hole.sort) orelse return null;
-            return try mint(context, theorem, sort_name);
+            return try mint(context, theorem, sort_name, hole.name);
         },
         .variable => unreachable,
         .term => |term| {
@@ -135,7 +136,7 @@ pub fn lowerStructuralHolesToUnits(
         env: *const GlobalEnv,
         registry: *RewriteRegistry,
 
-        fn mint(self: @This(), t: *TheoremContext, sort_name: []const u8) anyerror!?ExprId {
+        fn mint(self: @This(), t: *TheoremContext, sort_name: []const u8, _: ?[]const u8) anyerror!?ExprId {
             const acui = try self.registry.resolveStructuralCombinerForSort(
                 self.env,
                 sort_name,

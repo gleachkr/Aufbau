@@ -507,6 +507,71 @@ test "LSP code action applies a rule to an open goal" {
     try std.testing.expectEqual(@as(usize, 0), handler.search_status.count());
 }
 
+test "LSP open goal action ends on the open goal it adds" {
+    const mm0_uri = "file:///tmp/lsp-code-action-open-goal-cursor.mm0";
+    const proof_uri = "file:///tmp/lsp-code-action-open-goal-cursor.auf";
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom keep: $ top $ > $ top $;
+        \\theorem main: $ top $;
+    ;
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ top $ by ?
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        std.testing.io,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    const result = handler.initialize(std.testing.allocator, .{
+        .capabilities = .{ .window = .{ .showDocument = .{ .support = true } } },
+    });
+    const execute = result.capabilities.executeCommandProvider orelse
+        return error.ExpectedExecuteCommandProvider;
+    try std.testing.expectEqualStrings("aufbau.showOpenGoal", execute.commands[0]);
+    try handler.putDocument(mm0_uri, mm0_text, 1);
+    try handler.putDocument(proof_uri, proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const actions = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(arena, try codeActionParamsAt(proof_uri, proof_text, "?")),
+    );
+    const action = codeActionWithReplacement(
+        actions,
+        proof_uri,
+        "l1_1: $ top $ by ?\nl1: $ top $ by keep [l1_1]",
+    ) orelse return error.MissingApplyRuleAction;
+    // The new line's `?`, in the edited document.
+    const command = action.command orelse return error.ExpectedCommand;
+    try std.testing.expectEqualStrings("aufbau.showOpenGoal", command.command);
+    const arguments = command.arguments orelse return error.ExpectedArguments;
+    try std.testing.expectEqualStrings(proof_uri, arguments[0].string);
+    const selection = try std.json.parseFromValueLeaky(types.Range, arena, arguments[1], .{});
+    try std.testing.expectEqual(@as(u32, 2), selection.start.line);
+    try std.testing.expectEqual(@as(u32, "l1_1: $ top $ by ".len), selection.start.character);
+    try std.testing.expectEqual(selection.start.character + 1, selection.end.character);
+    // `sorry!` adds no open goal.
+    const sorry = codeActionWithReplacement(actions, proof_uri, "sorry!") orelse
+        return error.MissingSorryAction;
+    try std.testing.expect(sorry.command == null);
+
+    transport_state.clearMessages();
+    _ = try handler.@"workspace/executeCommand"(arena, .{
+        .command = command.command,
+        .arguments = arguments,
+    });
+    try std.testing.expect(transport_state.containsMessage("\"method\":\"window/showDocument\""));
+    try std.testing.expect(transport_state.containsMessage("\"selection\":{\"start\":{\"line\":2,\"character\":17}"));
+}
+
 test "LSP code action offers unpack for inline applications" {
     const mm0_uri = "file:///tmp/lsp-code-action-unpack.mm0";
     const proof_uri = "file:///tmp/lsp-code-action-unpack.auf";

@@ -66,3 +66,49 @@ test "truncateUtf8 backs off a split multibyte codepoint" {
     // Limit 4 is the boundary just after "→".
     try std.testing.expectEqualStrings("a\u{2192}", truncateUtf8(s, 4));
 }
+
+/// A token of scanned text and its byte span there.
+pub const Token = struct {
+    text: []const u8,
+    start: usize,
+    end: usize,
+};
+
+pub fn isMathWhitespace(ch: u8) bool {
+    return ch == ' ' or ch == '\n' or ch == '\t' or ch == '\r';
+}
+
+/// The tokens of a math string as MM0 reads them (`specs/mm0.md`): split
+/// on whitespace, after each left delimiter and before each right one.
+pub const MathTokenCursor = struct {
+    src: []const u8,
+    pos: usize = 0,
+    left_delims: [256]bool,
+    right_delims: [256]bool,
+
+    pub fn next(self: *MathTokenCursor) ?Token {
+        while (self.pos < self.src.len and
+            isMathWhitespace(self.src[self.pos]))
+        {
+            self.pos += 1;
+        }
+        if (self.pos >= self.src.len) return null;
+
+        const start = self.pos;
+        while (self.pos < self.src.len) {
+            const ch = self.src[self.pos];
+            self.pos += 1;
+            if (self.left_delims[ch]) break;
+            if (self.pos >= self.src.len) break;
+            const next_ch = self.src[self.pos];
+            if (isMathWhitespace(next_ch) or self.right_delims[next_ch]) {
+                break;
+            }
+        }
+        return .{
+            .text = self.src[start..self.pos],
+            .start = start,
+            .end = self.pos,
+        };
+    }
+};

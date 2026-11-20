@@ -168,12 +168,12 @@ pub fn suggestionsAtSourceOffset(
     // cost about 1.5% of a search (#446).
 
     const target_line = target.block.lines[target.line_index];
-    const line_goal = try parseGoal(
+    const line_goal = try boundGoal(&walk, try parseGoal(
         &fixture,
         &theorem,
         theorem_vars,
         target_line.assertion.text,
-    );
+    ));
     const target_application = applicationAtPath(
         target_line.application,
         target.path,
@@ -517,6 +517,19 @@ pub fn suggestionsAtSourceOffset(
         .items = items,
         .target_span = match_span,
     });
+}
+
+/// `goal` with the named unknowns the walk bound written as their values,
+/// as the checker reads the line.
+fn boundGoal(walk: *Check.LineWalk, goal: Goal) !Goal {
+    const surface = switch (goal) {
+        .holey => |surface| surface,
+        .concrete, .implicit_whole_conclusion => return goal,
+    };
+    return switch (try walk.writeBoundUnknowns(.{ .holey = surface })) {
+        .concrete => |expr| .{ .concrete = expr },
+        .holey => |written| .{ .holey = written },
+    };
 }
 
 fn topLevelExactSuggestions(
@@ -1121,6 +1134,7 @@ pub fn copyOutSuggestions(
             .title = title,
             .replacement = replacement,
             .replace_span = item.replace_span,
+            .cursor = item.cursor,
         };
         filled = idx + 1;
     }

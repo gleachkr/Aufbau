@@ -362,7 +362,8 @@ pub fn foldTemplateToSurface(
 /// Intern a holey surface with a fresh line hole for each hole: a holey line
 /// (`HoleyLine`) or an inline minor's holey hint. Line holes are meta
 /// wildcards that spend no dependency slot, so a theorem may check any
-/// number of holey lines. Null when a hole's sort is unknown.
+/// number of holey lines. A named unknown's hole keeps its name
+/// (`PlaceholderInfo.name`) for printing. Null when a hole's sort is unknown.
 pub fn internWithLineHoles(
     theorem: *TheoremContext,
     env: *const GlobalEnv,
@@ -371,8 +372,8 @@ pub fn internWithLineHoles(
     return SurfaceExpr.internHoley(theorem, env, holey, {}, mintLineHole);
 }
 
-pub fn mintLineHole(_: void, theorem: *TheoremContext, sort_name: []const u8) anyerror!?ExprId {
-    return try theorem.addLineHolePlaceholder(sort_name);
+fn mintLineHole(_: void, theorem: *TheoremContext, sort_name: []const u8, name: ?[]const u8) anyerror!?ExprId {
+    return try theorem.addNamedLineHolePlaceholder(sort_name, name);
 }
 
 /// Fill holes from the same visible positions in a selected candidate.

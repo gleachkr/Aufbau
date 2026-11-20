@@ -179,8 +179,9 @@ fn render(
     return try pretty_print.render(allocator, parser, view, goal, .{ .overflow = .fail });
 }
 
-/// Each placeholder under `root`, named by its sort's hole token or
-/// `fallback`. False when some placeholder gets no name.
+/// Each placeholder under `root`, named by the unknown it stands for, else
+/// by its sort's hole token or `fallback`. False when some placeholder gets
+/// no name.
 fn nameHoles(
     allocator: std.mem.Allocator,
     theorem: *const TheoremContext,
@@ -194,7 +195,7 @@ fn nameHoles(
         .placeholder => |pid| {
             if (holes.contains(pid)) return true;
             const token = if (theorem.placeholderInfo(pid)) |known|
-                parser.core.sort_hole_tokens.get(known.sort_name) orelse fallback
+                known.name orelse parser.core.sort_hole_tokens.get(known.sort_name) orelse fallback
             else
                 fallback;
             try holes.put(allocator, pid, token orelse return false);

@@ -568,6 +568,9 @@ pub const SourceSuggestion = struct {
     title: []const u8,
     replacement: []const u8,
     replace_span: Span,
+    /// Where in `replacement` the editor puts the cursor after the edit: on
+    /// the first open goal `?` it adds, so the next action can follow.
+    cursor: ?usize = null,
 };
 
 /// How a source-offset search concluded, for surfacing to the user (LSP

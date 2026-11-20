@@ -246,7 +246,7 @@ fn sameRef(a: ProofScript.Ref, b: ProofScript.Ref) bool {
 }
 
 /// A hole's wvar, minted before the search starts (`WVars.mintHole`).
-fn mintHole(wvars: *WVars, _: *TheoremContext, sort_name: []const u8) anyerror!?ExprId {
+fn mintHole(wvars: *WVars, _: *TheoremContext, sort_name: []const u8, _: ?[]const u8) anyerror!?ExprId {
     return try wvars.mintHole(sort_name);
 }
 

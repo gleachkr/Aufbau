@@ -582,7 +582,7 @@ pub const LineWalk = struct {
 
     /// `parsed` with the named unknowns earlier lines bound written as
     /// their values; concrete once no hole is left.
-    fn writeBoundUnknowns(
+    pub fn writeBoundUnknowns(
         self: *LineWalk,
         parsed: Holes.ParsedAssertion,
     ) !Holes.ParsedAssertion {

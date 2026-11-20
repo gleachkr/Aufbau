@@ -526,6 +526,23 @@ source name, such as an anonymous dummy, since no text would parse back
 to it. Both come from `HoleInferenceSink`, which the check memo records
 and replays with the block.
 
+On an open goal (`by ?`), the **Apply** action writes the goal with the
+names earlier lines bound already written as their values. A rule variable
+that stands where the goal has a part with a hole takes that part, names
+included, so `l1: $ ?c /\ q $ by ?` becomes `andi [l1_1, l1_2]` with
+`l1_1: $ ?c $ by ?`. A rule whose conclusion must fill the goal's holes
+instead is offered as it would check on that line: `l1: $ p ∧ q ⊢ ?p ∧ q $`
+gets `ax` (`G , p ⊢ p`), and the walk then reads `?p` as `p`. Any other
+variable the goal leaves open, in a sort
+with an `@unknown` prefix, becomes a new name: the prefix and the rule's
+name for the variable (`?a`), numbered (`?a1`, …) when a statement or
+binding of the proof uses that name already. The premises that mention it share it, and a context premise
+keeps the context's other members (`p ∨ q , ?p ⊢ r`, where a hole token
+would stand for the whole context). The edit ends with the cursor on the
+first `?` it added: a command (`aufbau.showOpenGoal`) that the server runs
+as `window/showDocument` for clients that support it, and that the web
+editors run themselves.
+
 ---
 
 ## What never sees a hole

@@ -967,13 +967,15 @@ test "apply search supports ACUI context holes" {
         "mm0",
     );
     defer std.testing.allocator.free(mm0_src);
+    // The conclusion matches the goal term for term, so the premise is the
+    // goal's parts, its holes placeholders: `nd (join _ctx (hyp p)) _wff`.
     try expectApplyContains(
         mm0_src,
         "hole_acui_min_ctx",
         "nd _ctx (imp p _wff)",
         "imp_intro",
         1,
-        1,
+        0,
     );
 }
 

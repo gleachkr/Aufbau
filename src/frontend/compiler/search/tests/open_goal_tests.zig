@@ -91,6 +91,13 @@ test "an open goal line offers the rules its goal matches, those the facts close
         \\l1: $ p /\ q $ by mp [l1_1, l1_2]
         \\
     , suggestions.items[1].replacement);
+    // The editor goes on to the first `?` an action adds; one that cites
+    // every premise adds none.
+    try std.testing.expectEqual(@as(?usize, null), suggestions.items[0].cursor);
+    try std.testing.expectEqual(
+        @as(?usize, "l1_1: $ _wff -> p /\\ q $ by ".len),
+        suggestions.items[1].cursor,
+    );
     for (suggestions.items) |action| {
         try expectAnalyzes(both, try applied(arena.allocator(), proof_src, action));
     }
@@ -192,6 +199,7 @@ test "an inline open goal is replaced in place" {
     ;
     const open_premises = try actionsAt(&arena, nested, bare, "?,");
     try expectTitles(open_premises.items, &.{"Apply mp [?, ?]"});
+    try std.testing.expectEqual(@as(?usize, "mp [".len), open_premises.items[0].cursor);
 }
 
 test "a premise needing a hole in a sort without one is not offered" {
@@ -219,17 +227,31 @@ test "a holey open goal line offers no sorry!" {
     for (suggestions.items) |item| {
         try std.testing.expect(!std.mem.eql(u8, item.replacement, "sorry!"));
     }
-    try std.testing.expectEqualStrings("Apply andi [#1, l1_1]", suggestions.items[0].title);
+    // `mp` too: its conclusion variable is the whole goal, hole and all.
+    try expectTitles(suggestions.items, &.{ "Apply mp [l1_1, l1_2]", "Apply andi [#1, l1_1]" });
+    try std.testing.expectEqualStrings(
+        \\l1_1: $ _wff -> p /\ _wff $ by ?
+        \\l1_2: $ _wff $ by ?
+        \\l1: $ p /\ _wff $ by mp [l1_1, l1_2]
+    , suggestions.items[0].replacement);
     try std.testing.expectEqualStrings(
         \\l1_1: $ _wff $ by ?
         \\l1: $ p /\ _wff $ by andi [#1, l1_1]
-    , suggestions.items[0].replacement);
+    , suggestions.items[1].replacement);
 }
 
 /// Sequents over contexts that are sets (`,` is ACUI with unit `_`), with
 /// no holes: `or_elim` splits its conclusion's context three ways.
-const sequents =
-    \\delimiter $ ( ) , $;
+const sequents = "delimiter $ ( ) , $;\n" ++ sequent_rules ++
+    \\axiom or_elim (G H K: ctx) (p q r: wff):
+    \\  $ G |- p \/ q $ > $ H , p |- r $ > $ K , q |- r $ > $ G , H , K |- r $;
+    \\theorem t (p q r: wff):
+    \\  $ p \/ q |- p \/ q $ > $ p |- r $ > $ q |- r $ > $ _ , p \/ q |- r $;
+    \\
+;
+
+/// The sequent calculus's sorts, terms and laws, without its rules.
+const sequent_rules =
     \\strict provable sort wff;
     \\sort ctx;
     \\term or (p q: wff): wff; infixr or: $\/$ prec 28;
@@ -261,10 +283,6 @@ const sequents =
     \\--| @congr
     \\axiom nd_congr (G H: ctx) (p q: wff):
     \\  $ ctx_eq G H $ > $ p <-> q $ > $ (G |- p) <-> (H |- q) $;
-    \\axiom or_elim (G H K: ctx) (p q r: wff):
-    \\  $ G |- p \/ q $ > $ H , p |- r $ > $ K , q |- r $ > $ G , H , K |- r $;
-    \\theorem t (p q r: wff):
-    \\  $ p \/ q |- p \/ q $ > $ p |- r $ > $ q |- r $ > $ _ , p \/ q |- r $;
     \\
 ;
 
@@ -321,4 +339,212 @@ test "a premise with a fresh variable is written with its name" {
         \\l1: $ p $ by ui (x := $ x $) [l1_1]
     , suggestions.items[0].replacement);
     try expectAnalyzes(fresh, try applied(arena.allocator(), proof_src, suggestions.items[0]));
+}
+
+/// `theory`, with named unknowns: `?a` is an unknown in `wff`.
+fn named(comptime theorem: []const u8) []const u8 {
+    return "--| @unknown ?\n--| @hole _wff\n" ++ rules ++ theorem;
+}
+
+test "a rule variable the goal leaves open is a named unknown in the premises" {
+    const mm0 = named("theorem t (p q: wff): $ p -> q $ > $ p $ > $ q $;");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    {
+        const proof_src =
+            \\t
+            \\---
+            \\l1: $ q $ by ?
+        ;
+        const suggestions = try actionsAt(&arena, mm0, proof_src, "by ?");
+        try expectTitles(suggestions.items, &.{ "Apply mp [l1_1, l1_2]", "Admit with sorry!" });
+        // Both premises name `mp`'s antecedent `?a`, so filling one fills
+        // the other.
+        try std.testing.expectEqualStrings(
+            \\l1_1: $ ?a -> q $ by ?
+            \\l1_2: $ ?a $ by ?
+            \\l1: $ q $ by mp [l1_1, l1_2]
+        , suggestions.items[0].replacement);
+        try expectAnalyzes(mm0, try applied(arena.allocator(), proof_src, suggestions.items[0]));
+    }
+    {
+        // A name the block uses already is not reused.
+        const proof_src =
+            \\t
+            \\---
+            \\l0: $ ?a $ by ?
+            \\l1: $ q $ by ?
+        ;
+        const suggestions = try actionsAt(&arena, mm0, proof_src, "q $ by ?");
+        try std.testing.expectEqualStrings(
+            \\l1_1: $ ?a1 -> q $ by ?
+            \\l1_2: $ ?a1 $ by ?
+            \\l1: $ q $ by mp [l1_1, l1_2]
+        , suggestions.items[0].replacement);
+    }
+    {
+        // A variable where the goal has an anonymous hole gets a name too.
+        const proof_src =
+            \\t
+            \\---
+            \\l1: $ _wff $ by ?
+            \\l2: $ q $ by ?
+        ;
+        const suggestions = try actionsAt(&arena, mm0, proof_src, "by ?");
+        try std.testing.expectEqualStrings(
+            \\l1_1: $ ?a -> ?b $ by ?
+            \\l1_2: $ ?a $ by ?
+            \\l1: $ _wff $ by mp [l1_1, l1_2]
+            \\
+        , suggestions.items[0].replacement);
+    }
+}
+
+test "the premises keep the names the goal gives a rule variable" {
+    const mm0 = named("theorem t (p q: wff): $ p $ > $ p /\\ q $;");
+    // Not the last line, which the theorem's conclusion would fix.
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ ?c /\ q $ by ?
+        \\l2: $ p /\ q $ by ?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const suggestions = try actionsAt(&arena, mm0, proof_src, "by ?");
+    const action = for (suggestions.items) |item| {
+        if (std.mem.startsWith(u8, item.title, "Apply andi")) break item;
+    } else return error.MissingAndi;
+    try std.testing.expectEqualStrings(
+        \\l1_1: $ ?c $ by ?
+        \\l1_2: $ q $ by ?
+        \\l1: $ ?c /\ q $ by andi [l1_1, l1_2]
+        \\
+    , action.replacement);
+    try expectAnalyzes(mm0, try applied(arena.allocator(), proof_src, action));
+}
+
+test "a named unknown in a context premise keeps the context's other members" {
+    // `or_elim` with one context: the goal fixes `G`, and `p`, `q` become
+    // named unknowns, the context members its case premises add.
+    const mm0 = "delimiter $ ( ) , $;\n--| @unknown ?\n" ++ sequent_rules ++
+        \\axiom or_elim (G: ctx) (p q r: wff):
+        \\  $ G |- p \/ q $ > $ G , p |- r $ > $ G , q |- r $ > $ G |- r $;
+        \\theorem t (p q: wff): $ p \/ q |- q \/ p $;
+        \\
+    ;
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ p \/ q |- q \/ p $ by ?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const suggestions = try actionsAt(&arena, mm0, proof_src, "by ?");
+    const action = for (suggestions.items) |item| {
+        if (std.mem.startsWith(u8, item.title, "Apply or_elim")) break item;
+    } else return error.MissingOrElim;
+    try std.testing.expectEqualStrings(
+        \\l1_1: $ p \/ q |- ?p \/ ?q $ by ?
+        \\l1_2: $ p \/ q , ?p |- q \/ p $ by ?
+        \\l1_3: $ p \/ q , ?q |- q \/ p $ by ?
+        \\l1: $ p \/ q |- q \/ p $ by or_elim [l1_1, l1_2, l1_3]
+    , action.replacement);
+    try expectAnalyzes(mm0, try applied(arena.allocator(), proof_src, action));
+}
+
+test "a goal with a hole inside a part offers the rules whose variables stand for that part" {
+    // `and_elim_l`'s `a` is the whole `p /\ ?q`. The line checker leaves a
+    // variable over a part with a hole open; the probe binds it.
+    const mm0 = comptime "delimiter $ ( ) $;\n" ++ named("axiom and_elim_l (a b: wff): $ a /\\ b $ > $ a $;\n" ++
+        "theorem t (p q: wff): $ p $ > $ p /\\ q $;");
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ p /\ ?q $ by ?
+        \\l2: $ p /\ q $ by ?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const suggestions = try actionsAt(&arena, mm0, proof_src, "by ?");
+    const action = for (suggestions.items) |item| {
+        if (std.mem.startsWith(u8, item.title, "Apply and_elim_l")) break item;
+    } else return error.MissingAndElim;
+    try std.testing.expectEqualStrings(
+        \\l1_1: $ (p /\ ?q) /\ ?b $ by ?
+        \\l1: $ p /\ ?q $ by and_elim_l [l1_1]
+        \\
+    , action.replacement);
+    try expectAnalyzes(mm0, try applied(arena.allocator(), proof_src, action));
+}
+
+test "a rule whose conclusion fills the goal's unknowns is offered" {
+    // `id` proves `?x -> p` only with `?x` as `p`, which the line, once it
+    // cites `id`, is checked for.
+    const mm0 = comptime named("axiom id (a: wff): $ a -> a $;\n" ++
+        "theorem t (p: wff): $ p -> p $;");
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ ?x -> p $ by ?
+        \\l2: $ p -> p $ by ?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const suggestions = try actionsAt(&arena, mm0, proof_src, "by ?");
+    const action = for (suggestions.items) |item| {
+        if (std.mem.eql(u8, item.title, "Apply id")) break item;
+    } else return error.MissingId;
+    try std.testing.expectEqualStrings(
+        \\l1: $ ?x -> p $ by id
+        \\
+    , action.replacement);
+    try expectAnalyzes(mm0, try applied(arena.allocator(), proof_src, action));
+}
+
+test "a new name skips the names the proof writes, and only those" {
+    // `(` splits only after it and `)` only before it, so `(?a` and `?b)`
+    // hold the names `?a` and `?b`; a name in a comment is no name.
+    const mm0 = comptime "delimiter $ ( $ $ ) $;\n" ++
+        named("theorem t (p q: wff): $ p -> q $ > $ p $ > $ q $;");
+    const proof_src =
+        \\t
+        \\---
+        \\-- ?c is not used
+        \\l0: $ (?a -> ?b) $ by ?
+        \\l1: $ q $ by ?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const suggestions = try actionsAt(&arena, mm0, proof_src, "q $ by ?");
+    try std.testing.expectEqualStrings(
+        \\l1_1: $ ?a1 -> q $ by ?
+        \\l1_2: $ ?a1 $ by ?
+        \\l1: $ q $ by mp [l1_1, l1_2]
+    , suggestions.items[0].replacement);
+}
+
+test "a variable named where the goal has an anonymous hole has its name in every premise" {
+    // `b` stands for the goal's `_wff`; the first premise is settled by the
+    // goal alone, the second also has the open `c`.
+    const mm0 = comptime named("axiom k (a b c: wff): $ b $ > $ c -> b $ > $ a /\\ b $;\n" ++
+        "theorem t (p q: wff): $ p $ > $ p /\\ q $;");
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ p /\ _wff $ by ?
+        \\l2: $ p /\ q $ by ?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const suggestions = try actionsAt(&arena, mm0, proof_src, "by ?");
+    const action = for (suggestions.items) |item| {
+        if (std.mem.startsWith(u8, item.title, "Apply k")) break item;
+    } else return error.MissingK;
+    try std.testing.expectEqualStrings(
+        \\l1_1: $ ?b $ by ?
+        \\l1_2: $ ?c -> ?b $ by ?
+        \\l1: $ p /\ _wff $ by k [l1_1, l1_2]
+        \\
+    , action.replacement);
 }

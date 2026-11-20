@@ -359,6 +359,33 @@ pub fn probeRuleConclusion(
         checked_mark,
     );
 
+    // A goal with holes is first the statement it is, its holes
+    // placeholders, so a rule variable standing for a part with a hole in it
+    // is that part (`p ∧ ?q`), names and all. A rule that must fill the
+    // holes instead (`?p ∧ q` by `G , p ⊢ p`) meets the goal as a holey
+    // line's check does.
+    if (line_assertion == .holey) if (line_assertion.holey.interned) |goal| {
+        if (applyRuleCandidateCore(
+            self,
+            context,
+            application,
+            .{ .concrete = goal },
+            expected_conclusion_hint,
+            diag_context,
+            line,
+            rule_id,
+            theorem,
+            theorem_vars,
+            .conclusion_probe,
+            &.{},
+            premise_refs,
+        )) |result| return result.conclusion_probe else |err| {
+            if (unrecoverable(err)) return err;
+        }
+        CheckedIr.rollbackToMark(context.allocator, context.checked, checked_mark);
+        restoreDiagnostic(self, null);
+    };
+
     const result = try applyRuleCandidateCore(
         self,
         context,
@@ -747,6 +774,7 @@ noinline fn finishCandidate(
     };
 
     if (kind == .conclusion_probe) {
+        try bindProbeGoalParts(allocator, theorem, rule, line_assertion, partial_bindings);
         const setup = try node.prepare(partial_bindings);
         const optional_bindings = try inferCandidateOptionalBindings(
             self,
@@ -2204,6 +2232,29 @@ fn partialInlineGoal(
         bindings,
         .{ .placeholder_factory = .{ .makeFn = mintHintHole } },
     );
+}
+
+/// A probed goal whose holes are placeholders (`probeRuleConclusion`) fixes
+/// each rule variable the conclusion matches term for term, holes and all:
+/// the conclusion must be that statement. Inference takes a placeholder for
+/// a wildcard and would leave such a variable open, so it is bound here
+/// first. All or nothing, and only for open variables.
+fn bindProbeGoalParts(
+    allocator: std.mem.Allocator,
+    theorem: *TheoremContext,
+    rule: *const RuleDecl,
+    line_assertion: LineAssertion,
+    partial_bindings: []?ExprId,
+) !void {
+    const goal = switch (line_assertion) {
+        .concrete => |expr| expr,
+        .holey, .implicit_whole_conclusion => return,
+    };
+    if (!theorem.containsLineHole(goal)) return;
+    const matched = try allocator.dupe(?ExprId, partial_bindings);
+    defer allocator.free(matched);
+    if (!theorem.matchTemplate(rule.concl, goal, matched)) return;
+    @memcpy(partial_bindings, matched);
 }
 
 fn determinedGoal(theorem: *const TheoremContext, hint: ?ExprId) ?ExprId {

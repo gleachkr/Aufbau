@@ -1,11 +1,11 @@
 const std = @import("std");
 const Types = @import("types.zig");
 
-pub const Token = struct {
-    text: []const u8,
-    start: usize,
-    end: usize,
-};
+const TextUtil = @import("../text_util.zig");
+
+pub const Token = TextUtil.Token;
+pub const MathTokenCursor = TextUtil.MathTokenCursor;
+pub const isMathWhitespace = TextUtil.isMathWhitespace;
 
 const DocumentId = Types.DocumentId;
 const SourceRange = Types.SourceRange;
@@ -60,39 +60,6 @@ pub const StatementIterator = struct {
 const HeaderToken = struct {
     text: []const u8,
     end: usize,
-};
-
-pub const MathTokenCursor = struct {
-    src: []const u8,
-    pos: usize = 0,
-    left_delims: [256]bool,
-    right_delims: [256]bool,
-
-    pub fn next(self: *MathTokenCursor) ?Token {
-        while (self.pos < self.src.len and
-            isMathWhitespace(self.src[self.pos]))
-        {
-            self.pos += 1;
-        }
-        if (self.pos >= self.src.len) return null;
-
-        const start = self.pos;
-        while (self.pos < self.src.len) {
-            const ch = self.src[self.pos];
-            self.pos += 1;
-            if (self.left_delims[ch]) break;
-            if (self.pos >= self.src.len) break;
-            const next_ch = self.src[self.pos];
-            if (isMathWhitespace(next_ch) or self.right_delims[next_ch]) {
-                break;
-            }
-        }
-        return .{
-            .text = self.src[start..self.pos],
-            .start = start,
-            .end = self.pos,
-        };
-    }
 };
 
 pub fn nextAnnotationToken(text: []const u8, pos: *usize) ?Token {
@@ -400,10 +367,6 @@ pub fn containsMathWhitespace(text: []const u8) bool {
         if (isMathWhitespace(ch)) return true;
     }
     return false;
-}
-
-pub fn isMathWhitespace(ch: u8) bool {
-    return ch == ' ' or ch == '\n' or ch == '\t' or ch == '\r';
 }
 
 pub fn sourceRangeFromSlice(

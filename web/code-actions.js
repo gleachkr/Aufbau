@@ -283,6 +283,24 @@ function applyCodeAction(view, action, uri) {
     .sort((a, b) => b.from - a.from || b.to - a.to);
 
   view.dispatch({ effects: setCodeActions.of(null), changes });
+
+  // An action that adds open goals ends on the first one, so the next action
+  // can follow. The range is in the edited document.
+  const goal = openGoalRange(action, uri);
+  if (goal) {
+    const at = lspPositionToOffset(view.state.doc, goal.start);
+    view.dispatch({ selection: { anchor: at }, scrollIntoView: true });
+  }
+}
+
+// The range the action's `aufbau.showOpenGoal` command selects in `uri`, or
+// null. The command is the server's way to move the cursor after the edit;
+// this client runs it itself.
+function openGoalRange(action, uri) {
+  const command = action.command;
+  if (command?.command !== "aufbau.showOpenGoal") return null;
+  const [target, range] = command.arguments ?? [];
+  return target === uri && range?.start ? range : null;
 }
 
 // LSP positions use UTF-16 code units for `character`, which is exactly

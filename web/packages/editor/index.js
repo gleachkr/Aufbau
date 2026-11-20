@@ -1474,8 +1474,10 @@ class AufbauProof extends HTMLElement {
   }
 
   // Code actions at a body-local position — proof-search suggestions when the
-  // position is a search placeholder. Returns [{ title, changes }] with
-  // body-local CodeMirror change specs, or null. Public for tests/pages.
+  // position is a search placeholder. Returns [{ title, changes, goal,
+  // lineDelta }] with body-local CodeMirror change specs, or null; `goal` is
+  // the file range, after the edit, of the first open goal the action adds
+  // (null when it adds none). Public for tests/pages.
   // The proof search can run for seconds; it happens on the worker thread, and
   // the cell status shows "searching…" while a slow request is in flight.
   async lspCodeActionsAt(pos) {
@@ -1523,7 +1525,16 @@ class AufbauProof extends HTMLElement {
         }
         changes.push({ from: mapped.from, to: mapped.to, insert: edit.newText });
       }
-      if (changes.length) actions.push({ title: action.title, changes });
+      if (!changes.length) continue;
+      // The server's `aufbau.showOpenGoal` command puts the cursor on the
+      // first open goal the action adds; its range is in the edited file.
+      const command = action.command;
+      const goal =
+        command?.command === "aufbau.showOpenGoal" &&
+        command.arguments?.[0] === ctx.uri
+          ? command.arguments[1]
+          : null;
+      actions.push({ title: action.title, changes, goal, lineDelta: ctx.lineDelta });
     }
     return actions;
   }
@@ -1569,6 +1580,10 @@ class AufbauProof extends HTMLElement {
           changes: action.changes,
           effects: setCellActions.of(null),
         });
+        const goal = action.goal && this._rangeFromFile(action.goal, action.lineDelta);
+        if (goal) {
+          this._view.dispatch({ selection: { anchor: goal.from }, scrollIntoView: true });
+        }
         this._view.focus();
       });
       menu.append(item);

@@ -135,6 +135,14 @@ reference slot. References written on the `?` become the rule's premises, in
 order, so they choose what the goal leaves open. A line whose statement has
 no holes can also be admitted with `sorry!`.
 
+A rule variable the goal leaves open is written with its sort's hole token,
+or, when the sort has an `@unknown` prefix, as a new named unknown: the
+prefix and the rule's name for the variable (`?a`), numbered when the proof
+uses that name already. Every premise that mentions the variable then
+shows the same name, so filling it in on one line fills it on the others.
+After the edit the cursor is on the first `?` the action added, ready for
+the next rule.
+
 Completing a rule name writes one `?` per premise, as in `mp [?, ?]`, so
 each premise shows its goal at once.
 

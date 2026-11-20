@@ -109,6 +109,11 @@ pub const PlaceholderInfo = struct {
     /// leaves open. An anonymous meta otherwise; the flag tells the checker
     /// such a hint from one carrying search metas.
     line_hole: bool = false,
+    /// The named unknown a line hole stands for (`?a`), for printing it
+    /// back by name; the minter keeps the text alive as long as the
+    /// theorem. The checker gives it no meaning: each occurrence is its own
+    /// hole.
+    name: ?[]const u8 = null,
 };
 
 pub const ExprLeafInfo = struct {
@@ -1071,11 +1076,22 @@ pub const TheoremContext = struct {
         self: *TheoremContext,
         sort_name: []const u8,
     ) !ExprId {
+        return self.addNamedLineHolePlaceholder(sort_name, null);
+    }
+
+    /// `addLineHolePlaceholder` for the named unknown `name`, when given
+    /// (see `PlaceholderInfo.name`).
+    pub fn addNamedLineHolePlaceholder(
+        self: *TheoremContext,
+        sort_name: []const u8,
+        name: ?[]const u8,
+    ) !ExprId {
         return self.mintMetaPlaceholder(.{
             .sort_name = sort_name,
             .deps = 0,
             .class = .meta,
             .line_hole = true,
+            .name = name,
         });
     }
 

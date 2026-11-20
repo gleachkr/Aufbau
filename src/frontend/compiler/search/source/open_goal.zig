@@ -12,8 +12,11 @@
 //! and the rule is probed with the facts they cite, so it must accept them
 //! and what they fix can complete the others (`ApplyOptions.premises`).
 //!
-//! A premise still partly unknown is written with its sort's `@hole` token;
-//! a rule that would need a hole in a sort without one is not offered. A
+//! A rule variable the goal leaves open is a fresh named unknown (`?a`)
+//! when its sort has an `@unknown` prefix, so the premises that mention it
+//! share it by name; a named unknown in the goal keeps its name. Any other
+//! part still unknown is written with its sort's `@hole` token; a rule that
+//! would need a hole in a sort without one is not offered. A
 //! `@fresh` variable a stated premise mentions is written as a binding
 //! (`freshPins`).
 
@@ -22,6 +25,7 @@ const types = @import("../types.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const ProofScript = @import("../../../proof_script.zig");
+const TextUtil = @import("../../../text_util.zig");
 const OpenTerms = @import("../../inference/open_terms.zig");
 const OpenGoals = @import("../../check/open_goals.zig");
 const mintHintHole = @import("../../check/inline_hints.zig").mintHintHole;
@@ -29,6 +33,8 @@ const Ref = ProofScript.Ref;
 const ProofLine = ProofScript.ProofLine;
 const RuleApplication = ProofScript.RuleApplication;
 const ApplyCandidate = types.ApplyCandidate;
+const RuleDecl = @import("../../../env.zig").RuleDecl;
+const TrustedParser = @FieldType(@import("../../../parse_recovery.zig").MM0Parser, "core");
 const Context = types.Context;
 const Goal = types.Goal;
 const SourceSuggestion = types.SourceSuggestion;
@@ -67,9 +73,11 @@ pub fn actions(
         site.block_lines[site.line_index].label,
         site.block_lines,
     );
+    // Only a line states its premises, so only a line names their unknowns.
+    const names: ?NameSet = if (site.top_level) try unknownNames(allocator, site) else null;
     var planned = std.ArrayListUnmanaged(Planned).empty;
     for (candidates) |*candidate| {
-        if (try plan(allocator, site, pool, labels, candidate)) |p| {
+        if (try plan(allocator, site, pool, labels, names, candidate)) |p| {
             try planned.append(allocator, p);
         }
     }
@@ -135,6 +143,8 @@ fn plan(
     site: Site,
     pool: []const Fact,
     block_labels: ProofScript.FreshLabels,
+    /// The unknown names the proof uses, on a line; null inline.
+    names: ?NameSet,
     candidate: *ApplyCandidate,
 ) !?Planned {
     const rule = &site.context.env.rules.items[candidate.rule_id];
@@ -143,6 +153,13 @@ fn plan(
     // the facts they cite and folded those into the bindings.
     const written = site.marker.refs;
     const theorem = &candidate.theorem;
+    const bindings = if (names) |used|
+        try nameOpenBinders(allocator, site, rule, candidate, used)
+    else
+        candidate.bindings;
+    // A premise the probe settled names what was renamed the same way as
+    // the premises still open.
+    const renamed = !std.mem.eql(?ExprId, bindings, candidate.bindings);
 
     // The open premises, written out when the `?` is a line of its own.
     var open_lines = std.ArrayListUnmanaged(u8).empty;
@@ -152,6 +169,9 @@ fn plan(
     };
     var tier: u2 = 0;
     var refs = std.ArrayListUnmanaged(u8).empty;
+    // The first `?` the action writes, in `open_lines` on a line, in `refs`
+    // inline.
+    var first_open: ?usize = null;
     // The variables the premises this action states mention: the facts it
     // cites and the lines it adds.
     var stated_deps: u55 = 0;
@@ -177,16 +197,18 @@ fn plan(
         };
         tier = @max(tier, @as(u2, if (known) 1 else 2));
         if (!site.top_level) {
+            if (first_open == null) first_open = refs.items.len;
             try refs.append(allocator, '?');
             continue;
         }
-        const statement = concrete orelse (try OpenTerms.instantiateTemplateHoley(
+        const settled = if (renamed) null else concrete;
+        const statement = settled orelse (try OpenTerms.instantiateTemplateHoley(
             theorem,
             site.context.env,
             site.context.registry,
             rule,
             premise,
-            candidate.bindings,
+            bindings,
             .{ .placeholder_factory = .{ .makeFn = mintHintHole } },
         ) orelse return null);
         const text = (try OpenGoals.formatStatement(
@@ -204,6 +226,7 @@ fn plan(
             label,
             text,
         });
+        if (first_open == null) first_open = open_lines.items.len - "?\n".len;
         try refs.appendSlice(allocator, label);
     }
 
@@ -222,6 +245,7 @@ fn plan(
             .title = title,
             .replacement = application,
             .replace_span = site.marker.span,
+            .cursor = if (first_open) |at| rule.name.len + pins.len + " [".len + at else null,
         },
         .tier = tier,
     };
@@ -241,9 +265,130 @@ fn plan(
             .title = title,
             .replacement = try open_lines.toOwnedSlice(allocator),
             .replace_span = line.span,
+            .cursor = first_open,
         },
         .tier = tier,
     };
+}
+
+/// `candidate.bindings` with each variable the goal leaves open, in a sort
+/// with an `@unknown` prefix, a new named unknown: the prefix and the
+/// variable's name (`?a`), or with a number after it (`?a1`, …) when the
+/// proof uses that name already (`used`). A variable whose name would not
+/// read back as an unknown of its sort stays open. One that stands where the goal has
+/// a part with a hole in it is that part, which the probe bound it to, names
+/// included; a bare anonymous hole says nothing a new name would not, so a
+/// variable bound to one is named too.
+fn nameOpenBinders(
+    allocator: std.mem.Allocator,
+    site: Site,
+    rule: *const RuleDecl,
+    candidate: *ApplyCandidate,
+    used: NameSet,
+) ![]const ?ExprId {
+    const parser = &site.context.parser.core;
+    const bindings = try allocator.dupe(?ExprId, candidate.bindings);
+    if (parser.sort_unknown_prefixes.count() == 0) return bindings;
+    var minted = std.ArrayListUnmanaged([]const u8).empty;
+    for (rule.args, rule.arg_names, 0..) |arg, arg_name, idx| {
+        if (idx >= bindings.len or arg.bound) continue;
+        if (bindings[idx]) |bound| if (!isAnonymousHole(&candidate.theorem, bound)) continue;
+        const prefix = parser.sort_unknown_prefixes.get(arg.sort_name) orelse continue;
+        const base = arg_name orelse continue;
+        const name = (try freshUnknown(allocator, parser, prefix, base, used, minted.items)) orelse continue;
+        try minted.append(allocator, name);
+        bindings[idx] = try candidate.theorem.addNamedLineHolePlaceholder(arg.sort_name, name);
+    }
+    return bindings;
+}
+
+fn isAnonymousHole(theorem: *const TheoremContext, expr: ExprId) bool {
+    const pid = switch (theorem.interner.node(expr).*) {
+        .placeholder => |pid| pid,
+        .app, .variable => return false,
+    };
+    const info = theorem.placeholderInfo(pid) orelse return false;
+    return info.line_hole and info.name == null;
+}
+
+/// `prefix` and `base`, numbered when `used` or `minted` already has that
+/// name. Null when the token would not read as an unknown with `prefix`.
+fn freshUnknown(
+    allocator: std.mem.Allocator,
+    parser: *const TrustedParser,
+    prefix: []const u8,
+    base: []const u8,
+    used: NameSet,
+    minted: []const []const u8,
+) !?[]const u8 {
+    for (base) |c| {
+        if (parser.left_delims[c] or parser.right_delims[c]) return null;
+    }
+    var number: usize = 0;
+    while (true) : (number += 1) {
+        const name = if (number == 0)
+            try std.mem.concat(allocator, u8, &.{ prefix, base })
+        else
+            try std.fmt.allocPrint(allocator, "{s}{s}{d}", .{ prefix, base, number });
+        const read = parser.unknownPrefixOf(name) orelse return null;
+        if (!std.mem.eql(u8, read, prefix) or parser.hole_tokens.contains(name)) return null;
+        if (!used.contains(name) and !hasName(minted, name)) return name;
+    }
+}
+
+/// Names of unknowns, as written.
+const NameSet = std.StringHashMapUnmanaged(void);
+
+/// The unknown names the `?`'s proof writes: every token of a statement or
+/// a binding value, inline applications' included, that reads as a named
+/// unknown.
+fn unknownNames(allocator: std.mem.Allocator, site: Site) !NameSet {
+    var names: NameSet = .empty;
+    const parser = &site.context.parser.core;
+    if (parser.sort_unknown_prefixes.count() == 0) return names;
+    for (site.block_lines) |line| {
+        try addUnknownNames(allocator, parser, &names, line.assertion.text);
+        try addApplicationNames(allocator, parser, &names, line.application);
+    }
+    return names;
+}
+
+fn addApplicationNames(
+    allocator: std.mem.Allocator,
+    parser: *const TrustedParser,
+    names: *NameSet,
+    application: RuleApplication,
+) !void {
+    for (application.arg_bindings) |binding| {
+        try addUnknownNames(allocator, parser, names, binding.formula.text);
+    }
+    for (application.refs) |ref| switch (ref) {
+        .application => |child| try addApplicationNames(allocator, parser, names, child),
+        .hyp, .line => {},
+    };
+}
+
+fn addUnknownNames(
+    allocator: std.mem.Allocator,
+    parser: *const TrustedParser,
+    names: *NameSet,
+    math: []const u8,
+) !void {
+    var tokens: TextUtil.MathTokenCursor = .{
+        .src = math,
+        .left_delims = parser.left_delims,
+        .right_delims = parser.right_delims,
+    };
+    while (tokens.next()) |token| {
+        if (parser.unknownPrefixOf(token.text) != null) try names.put(allocator, token.text, {});
+    }
+}
+
+fn hasName(names: []const []const u8, name: []const u8) bool {
+    for (names) |other| {
+        if (std.mem.eql(u8, other, name)) return true;
+    }
+    return false;
 }
 
 /// The bindings `candidate` must write for its `@fresh` binders: each one

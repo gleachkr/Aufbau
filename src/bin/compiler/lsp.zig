@@ -14,6 +14,9 @@ const lsp_diagnostics = @import("lsp_diagnostics");
 const DiagnosticContext = lsp_diagnostics.DiagnosticContext;
 const LocatedDiagnostic = lsp_diagnostics.LocatedDiagnostic;
 const LSP_SERVER_NAME = lsp_diagnostics.SERVER_NAME;
+/// The command an open-goal action runs after its edit: select the first
+/// open goal `?` it added (arguments: the document uri and the range).
+const show_open_goal_command = "aufbau.showOpenGoal";
 const zeroRange = lsp_diagnostics.zeroRange;
 const sourceRangesToLocations = lsp_diagnostics.sourceRangesToLocations;
 const completionsToLsp = lsp_diagnostics.completionsToLsp;
@@ -650,6 +653,11 @@ pub const Handler = struct {
     check_memo: mm0.CheckMemo,
     offset_encoding: lsp.offsets.Encoding,
     snippet_support: bool,
+    /// Whether the client opens a document at a selection on request
+    /// (`window/showDocument`), which `show_open_goal_command` uses.
+    show_document_support: bool,
+    /// The id of the last request this server sent the client.
+    last_request_id: i64,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -668,6 +676,8 @@ pub const Handler = struct {
             .check_memo = mm0.CheckMemo.init(allocator),
             .offset_encoding = .@"utf-16",
             .snippet_support = false,
+            .show_document_support = false,
+            .last_request_id = 0,
         };
     }
 
@@ -725,6 +735,7 @@ pub const Handler = struct {
         }
 
         self.snippet_support = clientSupportsSnippets(request.capabilities);
+        self.show_document_support = clientSupportsShowDocument(request.capabilities);
 
         const supports_hierarchical_document_symbols =
             clientSupportsHierarchicalDocumentSymbols(request.capabilities);
@@ -764,6 +775,7 @@ pub const Handler = struct {
                 .triggerCharacters = &.{"?"},
             },
             .codeActionProvider = .{ .bool = true },
+            .executeCommandProvider = .{ .commands = &.{show_open_goal_command} },
             .documentSymbolProvider = if (supports_hierarchical_document_symbols)
                 .{ .bool = true }
             else
@@ -1051,6 +1063,7 @@ pub const Handler = struct {
             .@"refactor.rewrite",
             suggestion.replace_span,
             suggestion.replacement,
+            null,
         );
     }
 
@@ -1070,11 +1083,14 @@ pub const Handler = struct {
             .@"refactor.rewrite",
             .{ .start = fill.assertion.start, .end = fill.assertion.end },
             fill.replacement,
+            null,
         );
     }
 
     /// A code action replacing `span` of the joined proof text with
-    /// `replacement`, addressed to the file the span lies in.
+    /// `replacement`, addressed to the file the span lies in. With a
+    /// `cursor` (an offset in `replacement`), the action then runs
+    /// `show_open_goal_command` to select that character.
     fn replacementCodeAction(
         self: *Handler,
         arena: std.mem.Allocator,
@@ -1083,6 +1099,7 @@ pub const Handler = struct {
         kind: types.CodeActionKind,
         span: Search.Span,
         replacement: []const u8,
+        cursor: ?usize,
     ) !?types.CodeAction {
         const hit = proof_side.locate(span) orelse return null;
         const edits = try arena.alloc(types.TextEdit, 1);
@@ -1100,7 +1117,60 @@ pub const Handler = struct {
             .title = title,
             .kind = kind,
             .edit = .{ .changes = changes },
+            .command = if (cursor != null) blk: {
+                const at = positionAfterEdit(
+                    hit.file.text,
+                    hit.span.start,
+                    replacement[0..cursor.?],
+                    self.offset_encoding,
+                );
+                // The character there is a `?`: one code unit in every encoding.
+                const selection: types.Range = .{
+                    .start = at,
+                    .end = .{ .line = at.line, .character = at.character + 1 },
+                };
+                const arguments = try arena.alloc(std.json.Value, 2);
+                arguments[0] = .{ .string = hit.file.uri };
+                arguments[1] = try rangeValue(arena, selection);
+                break :blk .{
+                    .title = "Go to the new open goal",
+                    .command = show_open_goal_command,
+                    .arguments = arguments,
+                };
+            } else null,
         };
+    }
+
+    /// `show_open_goal_command` [uri, range]: ask the client to show the
+    /// document at uri with range selected, when it can
+    /// (`window/showDocument`); a client that cannot may run the command
+    /// itself. Any other command does nothing.
+    pub fn @"workspace/executeCommand"(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        params: types.ExecuteCommandParams,
+    ) !lsp.ResultType("workspace/executeCommand") {
+        if (!std.mem.eql(u8, params.command, show_open_goal_command)) return null;
+        if (!self.show_document_support) return null;
+        const arguments = params.arguments orelse return null;
+        if (arguments.len != 2 or arguments[0] != .string) return null;
+        const selection = std.json.parseFromValueLeaky(
+            types.Range,
+            arena,
+            arguments[1],
+            .{ .ignore_unknown_fields = true },
+        ) catch return null;
+        self.last_request_id += 1;
+        try self.transport.writeRequest(
+            self.io,
+            arena,
+            .{ .number = self.last_request_id },
+            "window/showDocument",
+            types.ShowDocumentParams,
+            .{ .uri = arguments[0].string, .takeFocus = true, .selection = selection },
+            .{ .emit_null_optional_fields = false },
+        );
+        return null;
     }
 
     /// Return the search suggestions for the unit at `offset` (in the joined
@@ -1285,6 +1355,7 @@ pub const Handler = struct {
                 .title = title,
                 .replacement = replacement,
                 .replace_span = suggestion.replace_span,
+                .cursor = suggestion.cursor,
             };
             filled = idx + 1;
         }
@@ -1342,6 +1413,7 @@ pub const Handler = struct {
             .quickfix,
             suggestion.replace_span,
             suggestion.replacement,
+            suggestion.cursor,
         );
     }
 
@@ -2818,6 +2890,41 @@ fn clientSupportsSnippets(capabilities: types.ClientCapabilities) bool {
     const completion = text_document.completion orelse return false;
     const item = completion.completionItem orelse return false;
     return item.snippetSupport orelse false;
+}
+
+fn clientSupportsShowDocument(capabilities: types.ClientCapabilities) bool {
+    const window = capabilities.window orelse return false;
+    const show_document = window.showDocument orelse return false;
+    return show_document.support;
+}
+
+/// `range` as a JSON command argument.
+fn rangeValue(arena: std.mem.Allocator, range: types.Range) !std.json.Value {
+    return .{ .object = try .init(arena, &.{ "start", "end" }, &.{
+        try positionValue(arena, range.start),
+        try positionValue(arena, range.end),
+    }) };
+}
+
+fn positionValue(arena: std.mem.Allocator, position: types.Position) !std.json.Value {
+    return .{ .object = try .init(arena, &.{ "line", "character" }, &.{
+        .{ .integer = position.line },
+        .{ .integer = position.character },
+    }) };
+}
+
+/// The position, once `inserted` replaces the text from byte `start` of
+/// `text` on, of the end of `inserted`.
+fn positionAfterEdit(
+    text: []const u8,
+    start: usize,
+    inserted: []const u8,
+    encoding: lsp.offsets.Encoding,
+) types.Position {
+    const at = lsp_diagnostics.offsets.indexToPosition(text, start, encoding, false);
+    const within = lsp_diagnostics.offsets.indexToPosition(inserted, inserted.len, encoding, false);
+    if (within.line == 0) return .{ .line = at.line, .character = at.character + within.character };
+    return .{ .line = at.line + within.line, .character = within.character };
 }
 
 fn clientSupportsPrepareRename(capabilities: types.ClientCapabilities) bool {
