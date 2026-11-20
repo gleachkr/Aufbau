@@ -704,6 +704,8 @@ pub const GenerateOptions = struct {
 };
 
 pub const SourceSuggestionOptions = struct {
+    /// The most suggestions a search tactic or the completion filter
+    /// returns. An open goal lists every rule that applies.
     max_results: usize = 5,
     /// Probe every rule against the goal of the ordinary rule application
     /// under the requested source offset, and return the names of those
@@ -711,10 +713,10 @@ pub const SourceSuggestionOptions = struct {
     /// a search placeholder or an open goal there.
     apply_at_offset: bool = false,
     /// Optional tighter cap for `exact?`/`auto?`, which want one best result,
-    /// leaving the lists (an open goal's actions, the completion filter's
-    /// rules) on the full `max_results`. When set, it also lets `exact?` short-circuit
-    /// recursive generation once it has enough proofs. `null` = use `max_results`
-    /// for every mode (the bench does this to keep generation hotspots visible).
+    /// leaving the completion filter's rules on the full `max_results`. When
+    /// set, it also lets `exact?` short-circuit recursive generation once it
+    /// has enough proofs. `null` = use `max_results` for every mode (the bench
+    /// does this to keep generation hotspots visible).
     exact_result_limit: ?usize = null,
     counters: ?*SearchCounters = null,
     generate: GenerateOptions = .{},

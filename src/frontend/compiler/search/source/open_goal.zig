@@ -53,10 +53,10 @@ pub const Site = struct {
     theorem: *const TheoremContext,
 };
 
-/// The actions for the `?` at `site`, at most `max_results` rule
-/// applications (those the facts close completely first, then those whose
-/// open premises are all concrete, then the rest, each group in the order
-/// of `candidates`), then the `sorry!` admission when `goal` is concrete.
+/// The actions for the `?` at `site`: every rule application (those the
+/// facts close completely first, then those whose open premises are all
+/// concrete, then the rest, each group in the order of `candidates`), then
+/// the `sorry!` admission when `goal` is concrete.
 /// `candidates` were probed with the `?`'s refs (`ApplyOptions.premises`).
 /// Allocates from `allocator` without freeing: give it an arena.
 pub fn actions(
@@ -64,7 +64,6 @@ pub fn actions(
     site: Site,
     candidates: []ApplyCandidate,
     goal: Goal,
-    max_results: usize,
 ) ![]const SourceSuggestion {
     var items = std.ArrayListUnmanaged(SourceSuggestion).empty;
     const pool = try facts(allocator, site);
@@ -83,7 +82,7 @@ pub fn actions(
     }
     // Stable: each tier keeps the order of `candidates`.
     std.mem.sort(Planned, planned.items, {}, Planned.lessThan);
-    for (planned.items[0..@min(max_results, planned.items.len)]) |p| {
+    for (planned.items) |p| {
         try items.append(allocator, p.suggestion);
     }
 

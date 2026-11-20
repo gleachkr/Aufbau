@@ -103,6 +103,36 @@ test "an open goal line offers the rules its goal matches, those the facts close
     }
 }
 
+test "an open goal lists every rule its goal matches" {
+    const mm0 = comptime theory(
+        \\axiom k1 (a: wff): $ a $ > $ a /\ a $;
+        \\axiom k2 (a: wff): $ a $ > $ a /\ a $;
+        \\axiom k3 (a: wff): $ a $ > $ a /\ a $;
+        \\axiom k4 (a: wff): $ a $ > $ a /\ a $;
+        \\axiom k5 (a: wff): $ a $ > $ a /\ a $;
+        \\theorem t (p: wff): $ p $ > $ p /\ p $;
+    );
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ p /\ p $ by ?
+        \\
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const suggestions = try actionsAt(&arena, mm0, proof_src, "by ?");
+    try expectTitles(suggestions.items, &.{
+        "Apply andi [#1, #1]",
+        "Apply k1 [#1]",
+        "Apply k2 [#1]",
+        "Apply k3 [#1]",
+        "Apply k4 [#1]",
+        "Apply k5 [#1]",
+        "Apply mp [l1_1, l1_2]",
+        "Admit with sorry!",
+    });
+}
+
 test "a premise no fact states becomes an open goal line above" {
     const proof_src =
         \\t

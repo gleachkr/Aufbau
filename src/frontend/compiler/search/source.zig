@@ -395,7 +395,7 @@ pub fn suggestionsAtSourceOffset(
             .top_level = target.path.len == 0,
             .context = &context,
             .theorem = &theorem,
-        }, results.candidates, line_goal, options.max_results);
+        }, results.candidates, line_goal);
         return try copyOutSuggestions(allocator, suggestions);
     }
 
