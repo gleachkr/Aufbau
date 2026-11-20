@@ -1558,6 +1558,61 @@ test "named unknown hovers show the value at every occurrence" {
     try std.testing.expectEqual(@as(usize, 2), seen);
 }
 
+fn expectPartlyInferredHover(
+    mm0_text: []const u8,
+    proof_text: []const u8,
+    token: []const u8,
+    expected: []const u8,
+) !void {
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+    const at = std.mem.indexOf(u8, proof_text, token) orelse unreachable;
+    const hover = snapshot.hoverAt(.proof, at + 1) orelse {
+        return error.MissingPartlyInferredHover;
+    };
+    try std.testing.expectEqualStrings(
+        token,
+        snapshot.proof_text.?[hover.range.start..hover.range.end],
+    );
+    try std.testing.expect(std.mem.startsWith(u8, hover.markdown, "Partly inferred expression:"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, hover.markdown, 1, expected));
+}
+
+const partly_inferred_mm0 =
+    \\delimiter $ ( ) $;
+    \\--| @unknown ?
+    \\--| @hole _wff
+    \\provable sort wff;
+    \\term imp (a b: wff): wff;
+    \\infixr imp: $->$ prec 25;
+    \\axiom mp (a b: wff): $ a -> b $ > $ a $ > $ b $;
+    \\theorem main (p q: wff): $ q -> p $;
+;
+
+test "named unknown hover shows a partly inferred shape with its open names" {
+    try expectPartlyInferredHover(partly_inferred_mm0,
+        \\main
+        \\----
+        \\l1: $ ?a $ by ?
+        \\l2: $ ?b $ by ?
+        \\l3: $ q -> p $ by mp [l1, l2]
+    , "?a", "$ ?b -> q -> p $");
+}
+
+test "named unknown hover prints an anonymous open part as its sort's hole" {
+    try expectPartlyInferredHover(partly_inferred_mm0,
+        \\main
+        \\----
+        \\l1: $ ?a $ by ?
+        \\l2: $ q -> p $ by mp [l1, ?]
+    , "?a", "$ _wff -> q -> p $");
+}
+
 test "proof hole hovers are independent for each occurrence" {
     const mm0_text =
         \\delimiter $ ( ) $;

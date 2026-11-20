@@ -24,6 +24,8 @@ const Inference = @import("./inference.zig");
 pub const HoleInference = struct {
     span: Span,
     expression: []const u8,
+    /// The expression still holds unknowns (a named unknown's forced shape).
+    partial: bool = false,
 };
 
 /// A holey line's assertion with every hole filled in, printed so it
@@ -74,11 +76,21 @@ pub const HoleInferenceSink = struct {
         span: Span,
         expression: []const u8,
     ) !void {
-        errdefer self.allocator.free(expression);
-        try self.items.append(self.allocator, .{
-            .span = span,
-            .expression = expression,
-        });
+        try self.addItemOwned(.{ .span = span, .expression = expression });
+    }
+
+    /// Takes ownership of `item.expression`.
+    pub fn addItemOwned(self: *HoleInferenceSink, item: HoleInference) !void {
+        errdefer self.allocator.free(item.expression);
+        try self.items.append(self.allocator, item);
+    }
+
+    /// Whether an item from `from` on already covers `span`.
+    pub fn covers(self: *const HoleInferenceSink, from: usize, span: Span) bool {
+        for (self.items.items[from..]) |item| {
+            if (item.span.start == span.start and item.span.end == span.end) return true;
+        }
+        return false;
     }
 };
 

@@ -391,6 +391,7 @@ fn buildHoleInfo(
             .markdown = try markdown.inferredHoleMarkdown(
                 allocator,
                 inference.expression,
+                inference.partial,
             ),
         });
     }

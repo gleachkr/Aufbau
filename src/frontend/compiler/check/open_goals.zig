@@ -115,7 +115,20 @@ pub fn formatGoal(
     theorem_vars: *const NameExprMap,
     goal: ExprId,
 ) !?[]const u8 {
-    return try render(allocator, theorem, env, parser, theorem_vars, goal, "_");
+    return try render(allocator, theorem, env, parser, theorem_vars, goal, "_", null);
+}
+
+/// `formatGoal`, with each placeholder in `named` printed as its name.
+pub fn formatGoalNamed(
+    allocator: std.mem.Allocator,
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+    parser: *const MM0Parser,
+    theorem_vars: *const NameExprMap,
+    goal: ExprId,
+    named: *const std.AutoHashMapUnmanaged(PlaceholderId, []const u8),
+) !?[]const u8 {
+    return try render(allocator, theorem, env, parser, theorem_vars, goal, "_", named);
 }
 
 /// `goal` as source text to write into a proof, or null when it cannot be
@@ -129,7 +142,7 @@ pub fn formatStatement(
     theorem_vars: *const NameExprMap,
     goal: ExprId,
 ) !?[]const u8 {
-    return try render(allocator, theorem, env, parser, theorem_vars, goal, null);
+    return try render(allocator, theorem, env, parser, theorem_vars, goal, null, null);
 }
 
 /// `goal` in source notation, each hole named by its sort's hole token, or
@@ -142,6 +155,7 @@ fn render(
     theorem_vars: *const NameExprMap,
     goal: ExprId,
     fallback: ?[]const u8,
+    named: ?*const std.AutoHashMapUnmanaged(PlaceholderId, []const u8),
 ) !?[]const u8 {
     var names = try ViewTrace.DiagNames.build(
         allocator,
@@ -152,6 +166,10 @@ fn render(
     defer names.deinit(allocator);
     var holes: std.AutoHashMapUnmanaged(PlaceholderId, []const u8) = .empty;
     defer holes.deinit(allocator);
+    if (named) |preset| {
+        var it = preset.iterator();
+        while (it.next()) |entry| try holes.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
+    }
     if (!try nameHoles(allocator, theorem, parser, goal, fallback, &holes)) return null;
     const view: interner_view.View = .{
         .names = .{ .vars = &names.map, .placeholders = &holes },

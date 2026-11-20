@@ -98,10 +98,11 @@ pub const CheckMemo = struct {
             }
             const sink = ctx.hole_inference_sink.?;
             for (self.holes) |hole| {
-                try sink.addOwned(
-                    shiftSpan(hole.span, delta),
-                    try sink.allocator.dupe(u8, hole.expression),
-                );
+                try sink.addItemOwned(.{
+                    .span = shiftSpan(hole.span, delta),
+                    .expression = try sink.allocator.dupe(u8, hole.expression),
+                    .partial = hole.partial,
+                });
             }
             for (self.assertions) |filled| {
                 try sink.addAssertionOwned(
@@ -385,6 +386,7 @@ pub const CheckMemo = struct {
             copy.* = .{
                 .span = item.span,
                 .expression = try arena.dupe(u8, item.expression),
+                .partial = item.partial,
             };
         }
         entry.holes = copies;

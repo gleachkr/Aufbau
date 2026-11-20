@@ -500,7 +500,10 @@ that allocation goes through the same `@vars`-pool path used by
 
 The language server reports what each hole was filled with on hover, and
 each occurrence of a named unknown with the value it stands for, whether
-the pre-pass solved it or an earlier line filled it. On
+the pre-pass solved it or a line filled it. A name the pre-pass only
+partly solved shows its forced shape as a "partly inferred expression",
+with the parts still open printed as their own names or, when anonymous,
+as their sort's hole token (`_` for a sort without one). On
 a holey line it also offers a **Fill in the holes** code action, which
 replaces the whole assertion with the line's checked conclusion. It
 reprints the whole assertion rather than splicing each filling, so the

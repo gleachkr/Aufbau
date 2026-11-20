@@ -59,9 +59,22 @@ pub fn solve(inputs: Inputs, out: *Unknowns.Unknowns) !void {
     };
     var it = solver.names.iterator();
     while (it.next()) |entry| {
+        const name = entry.key_ptr.*;
         const value = try solver.resolveFully(entry.value_ptr.*);
-        if (solver.mentionsVariable(value)) continue;
-        try out.bound.put(inputs.allocator, entry.key_ptr.*, value);
+        if (solver.isVariable(value)) {
+            // Open: it stands for this name inside other names' shapes.
+            switch (inputs.theorem.interner.node(value).*) {
+                .placeholder => |pid| {
+                    const open = try out.open.getOrPut(inputs.allocator, pid);
+                    if (!open.found_existing) open.value_ptr.* = name;
+                },
+                else => {},
+            }
+        } else if (solver.mentionsVariable(value)) {
+            try out.partial.put(inputs.allocator, name, value);
+        } else {
+            try out.bound.put(inputs.allocator, name, value);
+        }
     }
 }
 

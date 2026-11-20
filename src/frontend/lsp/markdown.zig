@@ -12,14 +12,16 @@ const findStatementByte = source.findStatementByte;
 const nextMathStringIn = source.nextMathStringIn;
 const trimMathWhitespace = source.trimMathWhitespace;
 
+/// `partial`: the expression still holds unknowns.
 pub fn inferredHoleMarkdown(
     allocator: std.mem.Allocator,
     expression: []const u8,
+    partial: bool,
 ) ![]const u8 {
     return try std.fmt.allocPrint(
         allocator,
-        "Inferred expression:\n\n```mm0\n$ {s} $\n```",
-        .{expression},
+        "{s}:\n\n```mm0\n$ {s} $\n```",
+        .{ if (partial) "Partly inferred expression" else "Inferred expression", expression },
     );
 }
 

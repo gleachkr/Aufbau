@@ -13,6 +13,7 @@ const std = @import("std");
 const ExprModule = @import("../../../trusted/expressions.zig");
 const Expr = ExprModule.Expr;
 const ExprId = @import("../../expr.zig").ExprId;
+const PlaceholderId = @import("../../expr.zig").PlaceholderId;
 const VarId = @import("../../expr.zig").VarId;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
@@ -24,14 +25,59 @@ const Holes = @import("../holes.zig");
 pub const Unknowns = struct {
     /// Each bound name's value.
     bound: std.StringHashMapUnmanaged(ExprId) = .empty,
+    /// The shape the pre-pass forced on a name it did not solve, with its
+    /// open parts as placeholders. Only shown, never written into a line.
+    partial: std.StringHashMapUnmanaged(ExprId) = .empty,
+    /// The name each open placeholder in a `partial` value stands for.
+    open: std.AutoHashMapUnmanaged(PlaceholderId, []const u8) = .empty,
     /// Theorem variables by id, to write a value back as surface syntax.
     var_surfaces: std.AutoHashMapUnmanaged(u64, *const Expr) = .empty,
     var_surfaces_seen: usize = 0,
 
     pub fn deinit(self: *Unknowns, allocator: std.mem.Allocator) void {
         self.bound.deinit(allocator);
+        self.partial.deinit(allocator);
+        self.open.deinit(allocator);
         self.var_surfaces.deinit(allocator);
         self.* = undefined;
+    }
+
+    pub const Known = struct {
+        value: ExprId,
+        /// False while `value` still holds placeholders.
+        complete: bool,
+    };
+
+    /// What is known of `name` now: its value, or its partial shape with
+    /// the open names the walk has bound since written in.
+    pub fn known(self: *const Unknowns, theorem: *TheoremContext, name: []const u8) !?Known {
+        if (self.bound.get(name)) |value| return .{ .value = value, .complete = true };
+        const shape = self.partial.get(name) orelse return null;
+        var complete = true;
+        const value = try self.fillOpen(theorem, shape, &complete);
+        return .{ .value = value, .complete = complete };
+    }
+
+    fn fillOpen(self: *const Unknowns, theorem: *TheoremContext, id: ExprId, complete: *bool) !ExprId {
+        switch (theorem.interner.node(id).*) {
+            .variable => return id,
+            .placeholder => |pid| {
+                if (self.open.get(pid)) |name| if (self.bound.get(name)) |value| return value;
+                complete.* = false;
+                return id;
+            },
+            .app => |app| {
+                const args = try theorem.allocator.alloc(ExprId, app.args.len);
+                defer theorem.allocator.free(args);
+                var changed = false;
+                for (app.args, args) |arg, *out| {
+                    out.* = try self.fillOpen(theorem, arg, complete);
+                    if (out.* != arg) changed = true;
+                }
+                if (!changed) return id;
+                return try theorem.interner.internApp(app.term_id, args);
+            },
+        }
     }
 
     /// `surface` with every bound name written as its value: the same
