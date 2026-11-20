@@ -55,6 +55,9 @@ pub const SourceSpan = struct {
 pub const Hole = struct {
     /// index into sort table
     sort: u7,
+    /// The named unknown's token (`?a`), shared by every occurrence in one
+    /// proof; null for an anonymous hole.
+    name: ?[]const u8 = null,
     /// source token, for diagnostics and debugging
     token: []const u8,
     /// token span inside the parsed math string, when available

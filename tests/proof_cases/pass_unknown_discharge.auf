@@ -1,0 +1,5 @@
+self2
+-----
+
+l1: $ g , ?h |- ?h $ by ax []
+l2: $ g |- p -> p $ by imp_intro [l1]

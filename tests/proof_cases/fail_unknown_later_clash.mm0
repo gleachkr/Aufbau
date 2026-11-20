@@ -1,0 +1,9 @@
+delimiter $ ( ) $;
+--| @hole _
+--| @unknown ?
+provable sort wff;
+term imp (a b: wff): wff;
+infixr imp: $->$ prec 25;
+axiom mp (a b: wff): $ a -> b $ > $ a $ > $ b $;
+axiom ax1 (a b: wff): $ a -> b -> a $;
+theorem tc (p q: wff): $ q -> p -> q $;

@@ -1,0 +1,28 @@
+vac
+---
+
+l1: $ G , ?a ⊢ q $ by wk [#1]
+l2: $ G ⊢ p → q $ by imp_intro [l1]
+
+andl
+----
+
+l1: $ G , ?a , q ⊢ r $ by same [#1]
+l2: $ G , p ∧ q ⊢ r $ by and_l [l1]
+
+andl2
+-----
+
+l1: $ G , ?a , ?b ⊢ r $ by same [#1]
+l2: $ G , p ∧ q ⊢ r $ by and_l [l1]
+
+self
+----
+
+l1: $ G , ?h ⊢ ?h $ by ax
+l2: $ G ⊢ p → p $ by imp_intro [l1]
+
+unit_kept
+---------
+
+l1: $ ?Γa , p ⊢ p $ by axe []

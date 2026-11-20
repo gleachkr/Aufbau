@@ -40,6 +40,9 @@ pub const ParseError = error{
     DuplicateHoleAnnotation,
     DuplicateHoleToken,
     DuplicateInfixToken,
+    DuplicateUnknownAnnotation,
+    DuplicateUnknownPrefix,
+    UnknownPrefixCollision,
     DuplicateSort,
     DuplicateTermName,
     ExpectedBinaryOperator,
@@ -57,6 +60,7 @@ pub const ParseError = error{
     InfixPrecOutOfRange,
     InvalidDependency,
     InvalidHoleAnnotation,
+    InvalidUnknownAnnotation,
     InvalidNotationToken,
     InvalidNotationVariables,
     MathTooDeep,
@@ -415,6 +419,10 @@ pub const MM0Parser = struct {
     infixy_tokens: std.StringHashMap(void),
     hole_tokens: std.StringHashMap(u8),
     sort_hole_tokens: std.StringHashMap([]const u8),
+    /// Named-unknown prefixes (`@unknown`), each with its sort: a math token
+    /// that starts with one, and is longer, is a named hole of that sort.
+    unknown_prefixes: std.StringHashMap(u8),
+    sort_unknown_prefixes: std.StringHashMap([]const u8),
     // For each source sort, store either a direct coercion, a transitive
     // hop through another sort, or a route to the provable target slot.
     coercion_table: [MAX_SORTS][MAX_SORTS + 1]CoercionRoute,
@@ -450,6 +458,8 @@ pub const MM0Parser = struct {
             .infixy_tokens = std.StringHashMap(void).init(allocator),
             .hole_tokens = std.StringHashMap(u8).init(allocator),
             .sort_hole_tokens = std.StringHashMap([]const u8).init(allocator),
+            .unknown_prefixes = std.StringHashMap(u8).init(allocator),
+            .sort_unknown_prefixes = std.StringHashMap([]const u8).init(allocator),
             .coercion_table = std.mem.zeroes(
                 [MAX_SORTS][MAX_SORTS + 1]CoercionRoute,
             ),
@@ -1831,11 +1841,87 @@ pub const MM0Parser = struct {
         }
     }
 
+    /// Whether `token` is claimed by holes: a `@hole` token, or a named
+    /// unknown (`@unknown` prefix followed by a name).
     pub fn isRegisteredHoleToken(
         self: *const MM0Parser,
         token: []const u8,
     ) bool {
-        return self.hole_tokens.contains(token);
+        if (self.hole_tokens.contains(token)) return true;
+        if (self.unknown_prefixes.count() == 0) return false;
+        return self.unknown_prefixes.contains(token) or
+            self.unknownPrefixOf(token) != null;
+    }
+
+    /// The longest `@unknown` prefix `token` starts with and is longer than.
+    /// A token that is itself a prefix names nothing: it is no named
+    /// unknown even when a shorter prefix starts it (`?Γ` beside `?`).
+    pub fn unknownPrefixOf(
+        self: *const MM0Parser,
+        token: []const u8,
+    ) ?[]const u8 {
+        if (self.unknown_prefixes.count() == 0) return null;
+        if (self.unknown_prefixes.contains(token)) return null;
+        var best: ?[]const u8 = null;
+        var it = self.unknown_prefixes.keyIterator();
+        while (it.next()) |prefix| {
+            if (token.len <= prefix.len) continue;
+            if (!std.mem.startsWith(u8, token, prefix.*)) continue;
+            if (best == null or prefix.len > best.?.len) best = prefix.*;
+        }
+        return best;
+    }
+
+    /// Register `prefix` as the named-unknown prefix of `sort_name`. No math
+    /// token declared so far may start with it, except the hole token equal
+    /// to it; later declarations are checked by `isRegisteredHoleToken`.
+    pub fn registerUnknownPrefixForSort(
+        self: *MM0Parser,
+        sort_name: []const u8,
+        prefix: []const u8,
+    ) !void {
+        if (prefix.len == 0) return error.InvalidUnknownAnnotation;
+        for (prefix) |ch| {
+            if (self.left_delims[ch] or self.right_delims[ch]) {
+                return error.InvalidUnknownAnnotation;
+            }
+        }
+        const sort = self.sort_names.get(sort_name) orelse return error.UnknownSort;
+        if (self.sort_unknown_prefixes.contains(sort_name)) {
+            return error.DuplicateUnknownAnnotation;
+        }
+        if (self.unknown_prefixes.contains(prefix)) return error.DuplicateUnknownPrefix;
+        if (anyKeyStartsWith(u32, &self.term_names, prefix) or
+            anyKeyStartsWith(void, &self.formula_markers, prefix) or
+            anyKeyStartsWith(u16, &self.token_precs, prefix) or
+            anyKeyStartsWith(PrefixEnv, &self.prefix_notations, prefix) or
+            anyKeyStartsWith(InfixEnv, &self.infix_notations, prefix))
+        {
+            return error.UnknownPrefixCollision;
+        }
+        var holes = self.hole_tokens.iterator();
+        while (holes.next()) |entry| {
+            const token = entry.key_ptr.*;
+            if (!std.mem.startsWith(u8, token, prefix)) continue;
+            // Only the sort's own hole token may be the prefix itself.
+            if (token.len > prefix.len or entry.value_ptr.* != sort) {
+                return error.UnknownPrefixCollision;
+            }
+        }
+        try self.unknown_prefixes.put(prefix, sort);
+        try self.sort_unknown_prefixes.put(sort_name, prefix);
+    }
+
+    fn anyKeyStartsWith(
+        comptime V: type,
+        map: *const std.StringHashMap(V),
+        prefix: []const u8,
+    ) bool {
+        var it = map.keyIterator();
+        while (it.next()) |key| {
+            if (std.mem.startsWith(u8, key.*, prefix)) return true;
+        }
+        return false;
     }
 
     pub fn registerHoleTokenForSort(
@@ -1849,6 +1935,11 @@ pub const MM0Parser = struct {
             return error.DuplicateHoleAnnotation;
         }
         if (self.hole_tokens.contains(token)) return error.DuplicateHoleToken;
+        if (self.unknownPrefixOf(token) != null) return error.HoleTokenNameCollision;
+        // Only the sort's own `@unknown` prefix may be its hole token.
+        if (self.unknown_prefixes.get(token)) |prefix_sort| {
+            if (prefix_sort != sort) return error.HoleTokenNameCollision;
+        }
         if (self.term_names.contains(token) or
             self.formula_markers.contains(token) or
             self.prefix_notations.contains(token) or
@@ -1874,10 +1965,16 @@ pub const MM0Parser = struct {
         self: *MM0Parser,
         token: MathTokenInfo,
     ) !?*const Expr {
-        const sort = self.hole_tokens.get(token.text) orelse return null;
+        var name: ?[]const u8 = null;
+        const sort = self.hole_tokens.get(token.text) orelse sort: {
+            const prefix = self.unknownPrefixOf(token.text) orelse return null;
+            name = token.text;
+            break :sort self.unknown_prefixes.get(prefix).?;
+        };
         const expr = try self.allocator.create(Expr);
         expr.* = .{ .hole = .{
             .sort = @intCast(sort),
+            .name = name,
             .token = token.text,
             .token_span = .{
                 .start = token.span.start,
@@ -2057,6 +2154,13 @@ pub const MM0Parser = struct {
                 const next_ch = math[pos];
                 if (next_ch != ' ' and next_ch != '\n' and next_ch != '\t' and next_ch != '\r') {
                     return error.MultiCharacterDelimiter;
+                }
+            }
+            // A delimiter inside an `@unknown` prefix would split its names.
+            var prefixes = self.unknown_prefixes.keyIterator();
+            while (prefixes.next()) |prefix| {
+                if (std.mem.indexOfScalar(u8, prefix.*, ch) != null) {
+                    return error.UnknownPrefixCollision;
                 }
             }
             if (set_left) self.left_delims[ch] = true;

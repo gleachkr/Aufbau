@@ -1,0 +1,7 @@
+delimiter $ ( ) $;
+--| @unknown ?
+provable sort wff;
+term imp (a b: wff): wff;
+infixr imp: $->$ prec 25;
+axiom any (a b: wff): $ a -> b $;
+theorem tc (p q: wff): $ p -> q $;

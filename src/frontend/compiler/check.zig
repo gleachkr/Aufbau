@@ -51,6 +51,8 @@ pub const cloneNameExprMap = @import("./check/types.zig").cloneNameExprMap;
 const ensureConcreteCheckedIrRange = @import("./check/checked_range.zig").ensureConcreteCheckedIrRange;
 const findSearchPlaceholder = @import("./check/suggest.zig").findSearchPlaceholder;
 const OpenGoals = @import("./check/open_goals.zig");
+const NamedUnknowns = @import("./check/unknowns.zig");
+const UnknownsSolve = @import("./check/unknowns_solve.zig");
 const Apply = @import("./check/apply.zig");
 
 /// `checkTheoremBlock` behind the context's check memo, when one is
@@ -122,6 +124,7 @@ pub fn checkTheoremBlock(
 ) ![]const CheckedLine {
     var walk = try LineWalk.init(self, allocator, theory, assertion, block.lines, theorem);
     defer walk.deinit();
+    try walk.solveUnknowns(theorem_concl);
 
     const stopped = for (block.lines) |line| {
         if (try walk.step(line) == .stop) break true;
@@ -163,6 +166,8 @@ pub const LineWalk = struct {
     /// Analysis only: what the current line's check learned about its open
     /// goals, reported once the line is done (`reportOpenGoals`).
     open_goals: OpenGoals.Records = .empty,
+    /// Named unknowns the lines checked so far have bound.
+    unknowns: NamedUnknowns.Unknowns = .{},
     /// The last line with a statement, which the final reconciliation
     /// relates to the conclusion.
     last: ?LastLine = null,
@@ -214,6 +219,7 @@ pub const LineWalk = struct {
         self.checked.deinit(self.allocator);
         self.unfinished.deinit(self.allocator);
         self.open_goals.deinit(self.allocator);
+        self.unknowns.deinit(self.allocator);
         self.diag_scratch.deinit();
         self.rule_unify_cache.deinit();
         self.labels.deinit();
@@ -343,7 +349,7 @@ pub const LineWalk = struct {
             return error.DuplicateLabel;
         }
 
-        const parsed_assertion = try parseProofLineAssertion(
+        const parsed_assertion = try self.writeBoundUnknowns(try parseProofLineAssertion(
             compiler,
             &self.theory.parser,
             self.theorem,
@@ -351,7 +357,7 @@ pub const LineWalk = struct {
             &self.theory.sort_vars,
             assertion,
             line,
-        );
+        ));
         const line_assertion = try LineAssertion.fromParsed(
             self.theorem,
             &self.theory.env,
@@ -454,10 +460,79 @@ pub const LineWalk = struct {
                 parsed_assertion.holey,
                 self.checked.items[line_idx].expr,
             );
+            try self.recordUnknowns(
+                line,
+                parsed_assertion.holey,
+                self.checked.items[line_idx].expr,
+            );
         }
 
         try self.admit(line, line_idx);
         return .next;
+    }
+
+    /// Solve the block's named unknowns from all its lines before the walk
+    /// (`unknowns_solve.zig`); `conclusion` is the theorem's, when the last
+    /// line is to prove it.
+    pub fn solveUnknowns(self: *LineWalk, conclusion: ?ExprId) !void {
+        try UnknownsSolve.solve(.{
+            .allocator = self.allocator,
+            .theory = self.theory,
+            .theorem = self.theorem,
+            .theorem_vars = &self.theorem_vars,
+            .lines = self.block_lines,
+            .conclusion = conclusion,
+        }, &self.unknowns);
+    }
+
+    /// `parsed` with the named unknowns earlier lines bound written as
+    /// their values; concrete once no hole is left.
+    fn writeBoundUnknowns(
+        self: *LineWalk,
+        parsed: Holes.ParsedAssertion,
+    ) !Holes.ParsedAssertion {
+        const surface = switch (parsed) {
+            .concrete => return parsed,
+            .holey => |surface| surface,
+        };
+        const written = try self.unknowns.substitute(
+            self.allocator,
+            self.theorem,
+            &self.theory.parser,
+            surface,
+        );
+        if (written == surface) return parsed;
+        if (Holes.contains(written)) return .{ .holey = written };
+        return .{ .concrete = try self.theorem.internParsedExpr(written) };
+    }
+
+    /// Bind the named unknowns `line` fills, now that it checked as
+    /// `checked`; a fill that disagrees with an earlier one fails the line.
+    fn recordUnknowns(
+        self: *LineWalk,
+        line: ProofLine,
+        surface: *const Expr,
+        checked: ExprId,
+    ) !void {
+        const name = try self.unknowns.record(
+            self.allocator,
+            &self.theory.parser,
+            self.theorem,
+            &self.theory.env,
+            &self.theory.registry,
+            surface,
+            checked,
+        ) orelse return;
+        self.compiler.setProof(CompilerDiag.withPhase(.{
+            .kind = .generic,
+            .err = error.NamedUnknownConflict,
+            .theorem_name = self.assertion.name,
+            .line_label = line.label,
+            .rule_name = line.application.rule_name,
+            .name = name,
+            .span = line.assertion.span,
+        }, .theorem_application));
+        return error.NamedUnknownConflict;
     }
 
     /// A line justified by `?`: its goal is the statement it writes, holes
@@ -580,13 +655,13 @@ pub const LineWalk = struct {
         {
             return;
         }
-        const parsed = Holes.parseAssertion(
+        const parsed = if (Holes.parseAssertion(
             &self.theory.parser,
             self.theorem,
             &self.theorem_vars,
             &self.theory.sort_vars,
             line.assertion.text,
-        ) catch |parse_err| switch (parse_err) {
+        )) |written| try self.writeBoundUnknowns(written) else |parse_err| switch (parse_err) {
             error.OutOfMemory => return parse_err,
             else => null,
         };

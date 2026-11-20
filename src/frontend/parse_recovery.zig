@@ -669,6 +669,14 @@ pub const MM0Parser = struct {
         return self.core.registerHoleTokenForSort(sort_name, token);
     }
 
+    pub fn registerUnknownPrefixForSort(
+        self: *MM0Parser,
+        sort_name: []const u8,
+        prefix: []const u8,
+    ) !void {
+        return self.core.registerUnknownPrefixForSort(sort_name, prefix);
+    }
+
     fn clearDiagnosticOverrides(self: *MM0Parser) void {
         self.diagnostic_name_override = null;
         self.diagnostic_span_override = null;

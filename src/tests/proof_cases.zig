@@ -1060,6 +1060,40 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_open_goal_bindings",
         .outcome = .{ .fail = error.OpenGoalBindings },
     },
+    // Named unknowns (`@unknown`, docs/holes.md). A line uses the value
+    // an earlier line filled a name with.
+    .{ .stem = "pass_unknown_forward", .outcome = .pass },
+    // The pre-pass: a name fixed only by a later line (a statement fixed by
+    // its use; three of the four lines of the Hilbert `p → p`).
+    .{ .stem = "pass_unknown_fixed_by_use", .outcome = .pass },
+    // An assumption's formula fixed by the `imp_intro` that discharges it.
+    .{ .stem = "pass_unknown_discharge", .outcome = .pass },
+    // Names inside `@acui` contexts, under each law: weakening, `and_l`
+    // with one name, a context-sorted name; two names a symmetric split
+    // leaves open are left to the walk (`andl2`).
+    .{ .stem = "pass_unknown_bag_set", .outcome = .pass },
+    .{ .stem = "pass_unknown_bag_multiset", .outcome = .pass },
+    .{ .stem = "pass_unknown_bag_sequence", .outcome = .pass },
+    // A unit no unit law removes is a member (`G , emp` stays); one unit
+    // laws remove is kept in a rest's value as the closed side writes it.
+    .{ .stem = "pass_unknown_bag_left_unit", .outcome = .pass },
+    .{ .stem = "pass_unknown_bag_unit_law", .outcome = .pass },
+    // One name filled with two values on one line.
+    .{ .stem = "fail_unknown_conflict", .outcome = .{ .fail = error.NamedUnknownConflict } },
+    // Equations that clash solve nothing; the walk reports the mismatch.
+    .{ .stem = "fail_unknown_later_clash", .outcome = .{ .fail = error.ConclusionMismatch } },
+    // A prefix an earlier token starts with, and a token a later
+    // declaration starts with the prefix.
+    .{ .stem = "fail_unknown_prefix_collision", .outcome = .{ .fail = error.UnknownPrefixCollision } },
+    .{ .stem = "fail_unknown_token_collision", .outcome = .{ .fail = error.HoleTokenNameCollision } },
+    // A delimiter or notation token declared after the prefix.
+    .{ .stem = "fail_unknown_delimiter_after", .outcome = .{ .fail = error.UnknownPrefixCollision } },
+    .{ .stem = "fail_unknown_prefix_token_after", .outcome = .{ .fail = error.HoleTokenNameCollision } },
+    // A definition leaf may stand for several members: the bag waits, and
+    // the walk reports the binder it cannot fix (no `?Γa := emp`).
+    .{ .stem = "fail_unknown_bag_def_leaf", .outcome = .{ .fail = error.MissingBinderAssignment } },
+    // A token that is itself a prefix names nothing.
+    .{ .stem = "fail_unknown_bare_prefix", .outcome = .{ .fail = error.UnknownMathToken } },
 };
 
 const readProofCase = mm0.readProofCase;

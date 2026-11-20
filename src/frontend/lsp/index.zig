@@ -360,7 +360,8 @@ fn buildHoleInfo(
     proof_text: []const u8,
     check_memo: ?*CompilerModule.CheckMemo,
 ) !HoleInfo {
-    if (std.mem.indexOf(u8, mm0_text, "@hole") == null) return .{};
+    if (std.mem.indexOf(u8, mm0_text, "@hole") == null and
+        std.mem.indexOf(u8, mm0_text, "@unknown") == null) return .{};
 
     var sink = CompilerModule.HoleInferenceSink{
         .allocator = allocator,

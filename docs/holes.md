@@ -89,8 +89,81 @@ Each occurrence of a hole token is a **fresh, independent hole**. So:
 $ _wff -> _wff $
 ```
 
-is two holes, not one shared hole. There is no way to write a named
-or shared hole in v1.
+is two holes, not one shared hole. A hole shared across lines is a
+named unknown (below).
+
+---
+
+## Named unknowns: `@unknown`
+
+A named unknown is a hole with an identity that spans the lines of one
+proof: `_wff` means "fill this from this line", `?a` means "fill this from
+anywhere in the proof". They are opt-in per sort, and the theory chooses
+the prefix:
+
+```mm0
+--| @hole _wff
+--| @unknown ?
+provable sort wff;
+
+--| @hole _ctx
+--| @unknown ?Γ
+sort ctx;
+```
+
+A math token that starts with a sort's prefix and is longer than it is a
+named unknown of that sort; the rest of the token is the name. Where
+prefixes overlap, the longest wins (`?Γa` is a context), and a token that
+is itself a prefix names nothing (`?Γ` alone is an unknown token).
+
+```proof
+l1: $ G , ?h ⊢ ?h $ by ax []
+l2: $ G ⊢ p → p $ by imp_intro [l1]
+```
+
+Nothing on `l1` fixes `?h`; `imp_intro` on `l2` does, so `l1` checks as
+`G , p ⊢ p`.
+
+### Validity rules
+
+- exactly one token follows `@unknown`, at most one per sort
+  (`InvalidUnknownAnnotation`, `DuplicateUnknownAnnotation`);
+- no two sorts share a prefix (`DuplicateUnknownPrefix`);
+- the prefix holds no delimiter character (`?a` would split);
+- no math token declared before the annotation may start with the prefix
+  (`UnknownPrefixCollision`), nor any declared after it
+  (`HoleTokenNameCollision`), and no later delimiter may occur in it
+  (`UnknownPrefixCollision`); only the sort's own `@hole` token may equal
+  the prefix.
+
+### How names are solved
+
+A name belongs to one theorem's proof. Before the lines are checked, a
+pre-pass solves the names from all the lines at once: each rule
+application's conclusion equals its statement, each premise equals what
+its reference states, and the last line equals the theorem's conclusion.
+The pre-pass unifies these first-order and commits only what every
+successful check must agree with:
+
+- an equation under a definition or a `@rewrite` head is dropped;
+- two applications of an `@acui` combiner are solved as bags under the
+  combiner's laws, and only where the answer is forced (a member that can
+  equal one member of a side with no rest, a single rest taking what is
+  left). A symmetric split (`{g, p, q} = {Γ, ?a, ?b}`) stays open. A unit
+  is dropped only where unit laws remove it from both sides, and a rest
+  keeps the units its side writes;
+- lines whose rule has `@view`, `@recover`, `@abstract`, `@fresh`,
+  `@freshen` or `@fallback` contribute nothing;
+- equations that clash solve nothing.
+
+Then the lines are checked in order. A solved name is written as its
+value. An unsolved one is a hole whose first fill binds it: every later
+occurrence takes that value, and a later line that fills it differently is
+an error (`NamedUnknownConflict`), as is one line filling it twice
+differently. Within one line the occurrences of a name are still filled
+independently, so a line whose own inference guesses (an ambiguous ACUI
+split) can fill them differently. A line that checks through a rewrite
+that changes its shape binds nothing.
 
 ---
 
@@ -460,8 +533,8 @@ This is the v1 surface. The following are deliberately out of scope:
 
 - holes in `.mm0` source;
 - a generic untyped `_`;
-- holes in bound-variable positions or in explicit binding formulas;
-- named or shared holes;
+- holes in bound-variable positions or in explicit binding formulas
+  (named unknowns included, for now);
 - proof search during elaboration beyond existing inference, view,
   normalization, and fallback machinery (`auto?` searches, but only
   when asked, and its suggestion then elaborates like any other line);

@@ -1,0 +1,5 @@
+tc
+---
+
+l1: $ ?x -> ?x $ by any (a := $ p $, b := $ q $) []
+l2: $ p -> q $ by any []

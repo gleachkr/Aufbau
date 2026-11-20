@@ -37,6 +37,7 @@ files without Aufbau's annotations still show the text.
 | `@vars` | sort | pool of on-demand proof variables | [Ergonomics](ergonomics.md) |
 | `@fresh` / `@freshen` / `@alpha` | assertion | fresh-binder selection and alpha repair | [Ergonomics](ergonomics.md) |
 | `@hole` | sort | hole token for that sort | [Holes](holes.md) |
+| `@unknown` | sort | prefix of named unknowns shared across lines | [Holes](holes.md) |
 | `@fallback` | assertion | retry a failed application with another rule | [Ergonomics](ergonomics.md) |
 
 ## Equality and normalization
@@ -291,6 +292,19 @@ provable sort wff;
 Occurs on a sort declaration, at most one per sort. Registers `TOKEN` as the
 hole marker for that sort: each occurrence in proof math is a fresh,
 independent hole that inference must solve. See [Holes](holes.md).
+
+### `@unknown`
+
+```text
+--| @unknown PREFIX
+provable sort wff;
+```
+
+Occurs on a sort declaration, at most one per sort. A math token that
+starts with `PREFIX` and is longer than it is a named unknown of that sort
+(`?a`): every occurrence in one proof stands for the same expression,
+which any line may fix. No other math token may start with `PREFIX`. See
+`docs/holes.md` in the repository.
 
 ### `@fallback`
 

@@ -1,0 +1,6 @@
+tc
+---
+
+l1: $ q -> p -> ?x $ by ax1 []
+l2: $ ?x -> ?x -> p $ by ax1 []
+l3: $ q -> p -> q $ by ax1 []

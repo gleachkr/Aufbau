@@ -136,6 +136,7 @@ pub fn suggestionsAtSourceOffset(
         &theorem,
     );
     defer walk.deinit();
+    try walk.solveUnknowns(try theorem.internParsedExpr(fixture.assertion.concl));
     for (target.block.lines[0..target.line_index]) |line| {
         const next = walk.step(line) catch |err| switch (err) {
             error.OutOfMemory => return err,

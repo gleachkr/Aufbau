@@ -49,6 +49,7 @@ pub const known_annotations = [_]Annotation{
     .{ .name = "@abstract", .assertion = true, .detail = "abstract theorem" },
     .{ .name = "@fresh", .assertion = true, .detail = "freshness theorem" },
     .{ .name = "@hole", .sort = true, .detail = "proof hole" },
+    .{ .name = "@unknown", .sort = true, .detail = "named unknown prefix" },
     .{ .name = "@auto", .assertion = true, .detail = "search automation" },
     .{ .name = "@freshen", .assertion = true, .detail = "fresh-binder repair" },
     .{ .name = "@alpha", .assertion = true, .detail = "bound-variable renaming rule" },

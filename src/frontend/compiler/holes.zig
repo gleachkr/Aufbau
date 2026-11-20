@@ -63,6 +63,29 @@ pub fn processSortHoleAnnotations(
     if (hole_token) |token| {
         try parser.registerHoleTokenForSort(sort_name, token);
     }
+
+    const unknown_tag = "@unknown";
+    var prefix: ?[]const u8 = null;
+    for (annotations) |ann| {
+        if (!annotationMatchesTag(ann, unknown_tag)) continue;
+
+        if (prefix != null) return error.DuplicateUnknownAnnotation;
+        const tail = std.mem.trim(u8, ann[unknown_tag.len..], " \t\r\n");
+        var iter = std.mem.tokenizeAny(u8, tail, " \t\r\n");
+        const token = iter.next() orelse return error.InvalidUnknownAnnotation;
+        if (iter.next() != null) return error.InvalidUnknownAnnotation;
+        var var_tokens = sort_vars.tokens.keyIterator();
+        while (var_tokens.next()) |var_token| {
+            if (std.mem.startsWith(u8, var_token.*, token) and var_token.len > token.len) {
+                return error.UnknownPrefixCollision;
+            }
+        }
+        prefix = token;
+    }
+
+    if (prefix) |token| {
+        try parser.registerUnknownPrefixForSort(sort_name, token);
+    }
 }
 
 pub const ParsedAssertion = union(enum) {

@@ -1,0 +1,5 @@
+delimiter $ ( ) $;
+--| @unknown ?
+provable sort wff;
+--| A later delimiter inside the prefix would split every name.
+delimiter $ ? $;
