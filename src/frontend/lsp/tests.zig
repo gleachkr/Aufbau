@@ -1509,6 +1509,55 @@ test "proof hole hover shows the inferred expression" {
     ));
 }
 
+test "named unknown hovers show the value at every occurrence" {
+    const mm0_text =
+        \\delimiter $ ( ) $;
+        \\--| @unknown ?
+        \\provable sort wff;
+        \\term imp (a b: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\axiom mp (a b: wff): $ a -> b $ > $ a $ > $ b $;
+        \\axiom ax1 (a b: wff): $ a -> b -> a $;
+        \\theorem main (p q: wff): $ p $ > $ q -> p $;
+    ;
+    // `?c` is fixed only by the later `mp`, so both lines are written
+    // concrete before the walk checks them.
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ ?c $ by ax1 []
+        \\l2: $ ?c $ by ax1 []
+        \\l3: $ q -> p $ by mp [l1, #1]
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+
+    var start: usize = 0;
+    var seen: usize = 0;
+    while (std.mem.indexOfPos(u8, proof_text, start, "?c")) |at| : (start = at + 2) {
+        const hover = snapshot.hoverAt(.proof, at + 1) orelse {
+            return error.MissingNamedUnknownHover;
+        };
+        try std.testing.expectEqualStrings(
+            "?c",
+            snapshot.proof_text.?[hover.range.start..hover.range.end],
+        );
+        try std.testing.expect(std.mem.containsAtLeast(
+            u8,
+            hover.markdown,
+            1,
+            "$ p -> q -> p $",
+        ));
+        seen += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), seen);
+}
+
 test "proof hole hovers are independent for each occurrence" {
     const mm0_text =
         \\delimiter $ ( ) $;

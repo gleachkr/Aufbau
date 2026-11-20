@@ -349,7 +349,7 @@ pub const LineWalk = struct {
             return error.DuplicateLabel;
         }
 
-        const parsed_assertion = try self.writeBoundUnknowns(try parseProofLineAssertion(
+        const parsed_assertion = try self.writeBoundUnknowns(line, true, try parseProofLineAssertion(
             compiler,
             &self.theory.parser,
             self.theorem,
@@ -486,9 +486,12 @@ pub const LineWalk = struct {
     }
 
     /// `parsed` with the named unknowns earlier lines bound written as
-    /// their values; concrete once no hole is left.
+    /// their values; concrete once no hole is left. With `hover`, each
+    /// written name also gets the hover an anonymous hole's fill gets.
     fn writeBoundUnknowns(
         self: *LineWalk,
+        line: ProofLine,
+        hover: bool,
         parsed: Holes.ParsedAssertion,
     ) !Holes.ParsedAssertion {
         const surface = switch (parsed) {
@@ -502,8 +505,49 @@ pub const LineWalk = struct {
             surface,
         );
         if (written == surface) return parsed;
+        if (hover) if (self.compiler.hole_inference_sink) |sink| {
+            var names = try ViewTrace.DiagNames.build(
+                self.allocator,
+                self.theorem,
+                &self.theory.parser,
+                &self.theorem_vars,
+            );
+            defer names.deinit(self.allocator);
+            try self.hoverBoundNames(sink, &names, line.assertion.span.start + 1, surface);
+        };
         if (Holes.contains(written)) return .{ .holey = written };
         return .{ .concrete = try self.theorem.internParsedExpr(written) };
+    }
+
+    /// A hover on each name in `surface` that is bound, showing its value.
+    fn hoverBoundNames(
+        self: *LineWalk,
+        sink: *HoleInferenceSink,
+        names: *const ViewTrace.DiagNames,
+        math_start: usize,
+        surface: *const Expr,
+    ) !void {
+        switch (surface.*) {
+            .variable => {},
+            .hole => |hole| {
+                const name = hole.name orelse return;
+                const value = self.unknowns.bound.get(name) orelse return;
+                const token_span = hole.token_span orelse return;
+                try sink.addOwned(.{
+                    .start = math_start + token_span.start,
+                    .end = math_start + token_span.end,
+                }, try ViewTrace.formatExprNamed(
+                    sink.allocator,
+                    self.theorem,
+                    &self.theory.env,
+                    names,
+                    value,
+                ));
+            },
+            .term => |term| for (term.args) |arg| {
+                try self.hoverBoundNames(sink, names, math_start, arg);
+            },
+        }
     }
 
     /// Bind the named unknowns `line` fills, now that it checked as
@@ -661,7 +705,7 @@ pub const LineWalk = struct {
             &self.theorem_vars,
             &self.theory.sort_vars,
             line.assertion.text,
-        )) |written| try self.writeBoundUnknowns(written) else |parse_err| switch (parse_err) {
+        )) |written| try self.writeBoundUnknowns(line, false, written) else |parse_err| switch (parse_err) {
             error.OutOfMemory => return parse_err,
             else => null,
         };

@@ -498,7 +498,9 @@ that allocation goes through the same `@vars`-pool path used by
 
 ## Editor support
 
-The language server reports what each hole was filled with on hover. On
+The language server reports what each hole was filled with on hover, and
+each occurrence of a named unknown with the value it stands for, whether
+the pre-pass solved it or an earlier line filled it. On
 a holey line it also offers a **Fill in the holes** code action, which
 replaces the whole assertion with the line's checked conclusion. It
 reprints the whole assertion rather than splicing each filling, so the
