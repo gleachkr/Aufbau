@@ -165,6 +165,19 @@ independently, so a line whose own inference guesses (an ambiguous ACUI
 split) can fill them differently. A line that checks through a rewrite
 that changes its shape binds nothing.
 
+An open goal line (`by ?`) is reported once the whole block is checked,
+so its goal shows what any line fixed of its names: a solved name as its
+value, a partly solved one as its shape, and an open one as its name.
+
+```proof
+l1: $ ?c $ by ?
+l2: $ (p → p) → q $ by ?
+l3: $ q $ by mp [l1, l2]
+```
+
+Here `l1`'s goal is `p → p`. An inline `?` still shows the goal its own
+line fixed.
+
 ---
 
 ## Where holes may appear

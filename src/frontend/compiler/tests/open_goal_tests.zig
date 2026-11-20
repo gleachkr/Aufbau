@@ -183,3 +183,56 @@ test "an open goal in a rule application that falls back is reported once" {
     try std.testing.expectEqual(@as(usize, 1), warnings.len);
     try expectOpenGoal(warnings[0], proof_src, "top");
 }
+
+const named_mm0_src =
+    \\delimiter $ ( ) $;
+    \\--| @unknown ?
+    \\--| @hole _wff
+    \\provable sort wff;
+    \\term imp (a b: wff): wff; infixr imp: $->$ prec 25;
+    \\axiom mp (a b: wff): $ a $ > $ a -> b $ > $ b $;
+    \\theorem t (p q: wff): $ q $;
+;
+
+fn namedGoals(proof_src: []const u8, goals: []const []const u8) !void {
+    var compiler = Compiler.initWithProof(std.testing.allocator, named_mm0_src, proof_src);
+    compiler.allow_search_placeholders = true;
+    try compiler.analyze();
+    try std.testing.expectEqual(@as(usize, 0), compiler.primaryDiagnostics().len);
+    var seen: usize = 0;
+    for (compiler.warningDiagnostics()) |warning| {
+        if (warning.err != error.OpenGoal) continue;
+        try std.testing.expect(seen < goals.len);
+        try expectOpenGoal(warning, proof_src, goals[seen]);
+        seen += 1;
+    }
+    try std.testing.expectEqual(goals.len, seen);
+}
+
+test "an open goal line shows the value a later line fixes for its name" {
+    try namedGoals(
+        \\t
+        \\---
+        \\l1: $ ?c $ by ?
+        \\l2: $ (p -> p) -> q $ by ?
+        \\l3: $ q $ by mp [l1, l2]
+    , &.{ "p -> p", "(p -> p) -> q" });
+}
+
+test "an open goal line shows a partly fixed name with its open names" {
+    try namedGoals(
+        \\t
+        \\---
+        \\l1: $ ?c $ by ?
+        \\l2: $ (?d -> _wff) -> q $ by ?
+        \\l3: $ q $ by mp [l1, l2]
+    , &.{ "?d -> _wff", "(?d -> _wff) -> q" });
+}
+
+test "an open goal line keeps its statement when nothing fixes its names" {
+    try namedGoals(
+        \\t
+        \\---
+        \\l1: $ ?c -> p $ by ?
+    , &.{"?c -> p"});
+}

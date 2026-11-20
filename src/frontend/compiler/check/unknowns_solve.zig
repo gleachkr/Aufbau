@@ -773,7 +773,7 @@ fn dedupe(list: *std.ArrayListUnmanaged(ExprId)) void {
 /// Whether any line could hold a named unknown: some line's statement holds
 /// an `@unknown` prefix. A cheap text test, so blocks without names (and
 /// theories without `@unknown`) pay nothing.
-fn mayNameUnknowns(parser: *const MM0Parser, lines: []const ProofLine) bool {
+pub fn mayNameUnknowns(parser: *const MM0Parser, lines: []const ProofLine) bool {
     const prefixes = &parser.core.unknown_prefixes;
     if (prefixes.count() == 0) return false;
     for (lines) |line| {

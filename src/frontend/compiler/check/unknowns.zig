@@ -21,6 +21,7 @@ const MM0Parser = @import("../../parse_recovery.zig").MM0Parser;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
 const Canonicalizer = @import("../../normalizer.zig").Canonicalizer;
 const Holes = @import("../holes.zig");
+const SurfaceExpr = @import("../../surface_expr.zig");
 
 pub const Unknowns = struct {
     /// Each bound name's value.
@@ -76,6 +77,89 @@ pub const Unknowns = struct {
                 }
                 if (!changed) return id;
                 return try theorem.interner.internApp(app.term_id, args);
+            },
+        }
+    }
+
+    /// `surface` with what is known of each name written in: a solved name
+    /// as its value, a partly solved one as its shape. Every other hole is
+    /// a fresh placeholder, one per name; `names` maps each placeholder
+    /// that stands for a name (these, and the open parts of the shapes) to
+    /// it. Null when nothing is known of any name in `surface`, or a hole's
+    /// sort is unknown.
+    pub fn writeKnown(
+        self: *const Unknowns,
+        allocator: std.mem.Allocator,
+        theorem: *TheoremContext,
+        env: *const GlobalEnv,
+        surface: *const Expr,
+        names: *std.AutoHashMapUnmanaged(PlaceholderId, []const u8),
+    ) !?ExprId {
+        var minted: std.StringHashMapUnmanaged(ExprId) = .empty;
+        defer minted.deinit(allocator);
+        var any_known = false;
+        const goal = (try self.writeKnownExpr(
+            allocator,
+            theorem,
+            env,
+            surface,
+            names,
+            &minted,
+            &any_known,
+        )) orelse return null;
+        if (!any_known) return null;
+        var it = self.open.iterator();
+        while (it.next()) |entry| {
+            const slot = try names.getOrPut(allocator, entry.key_ptr.*);
+            if (!slot.found_existing) slot.value_ptr.* = entry.value_ptr.*;
+        }
+        return goal;
+    }
+
+    fn writeKnownExpr(
+        self: *const Unknowns,
+        allocator: std.mem.Allocator,
+        theorem: *TheoremContext,
+        env: *const GlobalEnv,
+        expr: *const Expr,
+        names: *std.AutoHashMapUnmanaged(PlaceholderId, []const u8),
+        minted: *std.StringHashMapUnmanaged(ExprId),
+        any_known: *bool,
+    ) !?ExprId {
+        if (!SurfaceExpr.containsHole(expr)) return try theorem.internParsedExpr(expr);
+        switch (expr.*) {
+            .variable => unreachable,
+            .hole => |hole| {
+                if (hole.name) |name| {
+                    if (try self.known(theorem, name)) |known_value| {
+                        any_known.* = true;
+                        return known_value.value;
+                    }
+                    if (minted.get(name)) |id| return id;
+                }
+                const sort_name = SurfaceExpr.sortNameById(env, hole.sort) orelse return null;
+                const id = try theorem.addLineHolePlaceholder(sort_name);
+                if (hole.name) |name| {
+                    try minted.put(allocator, name, id);
+                    try names.put(allocator, theorem.interner.node(id).placeholder, name);
+                }
+                return id;
+            },
+            .term => |term| {
+                const args = try allocator.alloc(ExprId, term.args.len);
+                defer allocator.free(args);
+                for (term.args, args) |arg, *out| {
+                    out.* = (try self.writeKnownExpr(
+                        allocator,
+                        theorem,
+                        env,
+                        arg,
+                        names,
+                        minted,
+                        any_known,
+                    )) orelse return null;
+                }
+                return try theorem.interner.internApp(term.id, args);
             },
         }
     }

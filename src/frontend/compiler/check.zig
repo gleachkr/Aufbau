@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const ExprId = @import("../expr.zig").ExprId;
+const PlaceholderId = @import("../expr.zig").PlaceholderId;
 const TheoremContext = @import("../expr.zig").TheoremContext;
 const GlobalEnv = @import("../env.zig").GlobalEnv;
 const AssertionStmt = @import("../parse_recovery.zig").AssertionStmt;
@@ -125,11 +126,13 @@ pub fn checkTheoremBlock(
     var walk = try LineWalk.init(self, allocator, theory, assertion, block.lines, theorem);
     defer walk.deinit();
     try walk.solveUnknowns(theorem_concl);
+    errdefer walk.reportHeldGoals(false) catch {};
 
     const stopped = for (block.lines) |line| {
         if (try walk.step(line) == .stop) break true;
     } else false;
     try walk.hoverUnknowns();
+    try walk.reportHeldGoals(true);
     // The block ends on an unfinished line: there is no final statement to
     // reconcile with the conclusion yet.
     if (!stopped and !walk.ends_unfinished) {
@@ -167,6 +170,11 @@ pub const LineWalk = struct {
     /// Analysis only: what the current line's check learned about its open
     /// goals, reported once the line is done (`reportOpenGoals`).
     open_goals: OpenGoals.Records = .empty,
+    /// The open-goal reports of the lines walked so far, held to the end
+    /// of the block when it may name unknowns: a later line can still fix
+    /// a name a goal shows (`reportHeldGoals`).
+    held_goals: std.ArrayListUnmanaged(HeldGoals) = .empty,
+    hold_goals: bool = false,
     /// Named unknowns the lines checked so far have bound.
     unknowns: NamedUnknowns.Unknowns = .{},
     /// The hole sink's length when the block began (`hoverUnknowns`).
@@ -180,6 +188,11 @@ pub const LineWalk = struct {
     /// diagnostic. It is held back so the theorem's own failure carries it;
     /// an earlier one is reported when a later line fails.
     failure: ?CompilerDiag.Diagnostic = null,
+
+    const HeldGoals = struct {
+        line: ProofLine,
+        records: []const OpenGoals.Record,
+    };
 
     pub const LastLine = struct {
         expr: ExprId,
@@ -222,6 +235,8 @@ pub const LineWalk = struct {
         self.checked.deinit(self.allocator);
         self.unfinished.deinit(self.allocator);
         self.open_goals.deinit(self.allocator);
+        for (self.held_goals.items) |held| self.allocator.free(held.records);
+        self.held_goals.deinit(self.allocator);
         self.unknowns.deinit(self.allocator);
         self.diag_scratch.deinit();
         self.rule_unify_cache.deinit();
@@ -256,25 +271,100 @@ pub const LineWalk = struct {
                     .span = line.ruleApplicationSpan(),
                 });
             }
-            self.reportOpenGoals(line);
+            try self.reportOpenGoals(line);
             const keep = self.compiler.keep_checking orelse return err;
             try self.admitFailedLine(keep, line, checked_mark);
             return .next;
         };
-        self.reportOpenGoals(line);
+        try self.reportOpenGoals(line);
         return next;
     }
 
     /// Report each open goal in `line` once, with what its check learned of
     /// it. A compile refuses the first open goal instead (`checkLine`).
-    fn reportOpenGoals(self: *LineWalk, line: ProofLine) void {
+    fn reportOpenGoals(self: *LineWalk, line: ProofLine) !void {
         if (line.incomplete or !OpenGoals.admitted(self.compiler)) return;
+        if (self.hold_goals) {
+            const records = try self.allocator.dupe(OpenGoals.Record, self.open_goals.items);
+            errdefer self.allocator.free(records);
+            try self.held_goals.append(self.allocator, .{ .line = line, .records = records });
+            return;
+        }
         OpenGoals.reportLine(
             self.compiler,
             self.assertion.name,
             line.label,
             line.application,
             self.open_goals.items,
+        );
+    }
+
+    /// Report the held open goals, in source order. With `rewrite`, a line
+    /// `?` whose statement names unknowns shows what the block fixed of
+    /// them: values, partial shapes, and the names still open.
+    pub fn reportHeldGoals(self: *LineWalk, rewrite: bool) !void {
+        defer {
+            for (self.held_goals.items) |held| self.allocator.free(held.records);
+            self.held_goals.clearRetainingCapacity();
+        }
+        for (self.held_goals.items) |held| {
+            var records = held.records;
+            var extended: ?[]OpenGoals.Record = null;
+            defer if (extended) |owned| self.allocator.free(owned);
+            if (rewrite) if (try self.knownGoal(held.line)) |goal| {
+                const owned = try self.allocator.alloc(OpenGoals.Record, records.len + 1);
+                @memcpy(owned[0..records.len], records);
+                owned[records.len] = .{ .at = held.line.application.rule_span.start, .goal = goal };
+                extended = owned;
+                records = owned;
+            };
+            OpenGoals.reportLine(
+                self.compiler,
+                self.assertion.name,
+                held.line.label,
+                held.line.application,
+                records,
+            );
+        }
+    }
+
+    /// The goal of the line `?` on `line` with what is known of its named
+    /// unknowns written in, or null when its statement as written stands.
+    fn knownGoal(self: *LineWalk, line: ProofLine) !?[]const u8 {
+        const app = line.application;
+        if (!ProofScript.isOpenGoalRuleName(app.rule_name) or OpenGoals.hasBindings(app)) return null;
+        const parsed = Holes.parseAssertion(
+            &self.theory.parser,
+            self.theorem,
+            &self.theorem_vars,
+            &self.theory.sort_vars,
+            line.assertion.text,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return null,
+        };
+        const surface = switch (parsed) {
+            .concrete => return null,
+            .holey => |surface| surface,
+        };
+        if (!NamedUnknowns.hasNamed(surface)) return null;
+        var names: std.AutoHashMapUnmanaged(PlaceholderId, []const u8) = .empty;
+        defer names.deinit(self.allocator);
+        const goal = (try self.unknowns.writeKnown(
+            self.allocator,
+            self.theorem,
+            &self.theory.env,
+            surface,
+            &names,
+        )) orelse return null;
+        return try OpenGoals.formatGoalNamed(
+            self.allocator,
+            self.theorem,
+            &self.theory.env,
+            &self.theory.parser,
+            &self.theorem_vars,
+            goal,
+            &names,
         );
     }
 
@@ -479,6 +569,7 @@ pub const LineWalk = struct {
     /// line is to prove it.
     pub fn solveUnknowns(self: *LineWalk, conclusion: ?ExprId) !void {
         if (self.compiler.hole_inference_sink) |sink| self.hover_from = sink.items.items.len;
+        self.hold_goals = UnknownsSolve.mayNameUnknowns(&self.theory.parser, self.block_lines);
         try UnknownsSolve.solve(.{
             .allocator = self.allocator,
             .theory = self.theory,
@@ -724,7 +815,7 @@ pub const LineWalk = struct {
             else => {},
         };
         self.compiler.restoreDiagnostic(null);
-        self.reportOpenGoals(line);
+        try self.reportOpenGoals(line);
         try self.admitAsWritten(line);
     }
 
