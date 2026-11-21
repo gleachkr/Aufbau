@@ -14,8 +14,11 @@
 //! then reports it where it meets it.
 //!
 //! Rules whose match is not their literal conclusion (`@view`, `@recover`,
-//! `@abstract`, `@fresh`, `@freshen`, `@fallback`) contribute nothing; the
-//! walk fills names there.
+//! `@abstract`, `@fresh`, `@freshen`) contribute nothing; the walk fills
+//! names there. A line citing a `@fallback` chain checks by one of the
+//! chain's rules: each rule is tried on a trail, and when only one can
+//! check, its equations are committed; otherwise only the values every
+//! rule that can check agrees on are.
 
 const std = @import("std");
 const ExprModule = @import("../../../trusted/expressions.zig");
@@ -91,6 +94,21 @@ const Solver = struct {
     postponed: std.ArrayListUnmanaged([2]ExprId) = .empty,
     /// Bindings made so far, to tell whether a retry round made progress.
     progress: usize = 0,
+    /// The variables a trial bound, in order, so it can undo them.
+    trail: std.ArrayListUnmanaged(ExprId) = .empty,
+    /// Lines citing a `@fallback` chain, decided after the other lines.
+    choices: std.ArrayListUnmanaged(Choice) = .empty,
+    /// Inside a trial of one rule of a chain, where a nested chain
+    /// contributes nothing.
+    in_trial: bool = false,
+
+    const Choice = struct {
+        app: RuleApplication,
+        goal: ExprId,
+        /// The chain, in the order the walk tries it.
+        rules: []const u32,
+        decided: bool = false,
+    };
 
     fn deinit(self: *Solver) void {
         const allocator = self.inputs.allocator;
@@ -99,6 +117,9 @@ const Solver = struct {
         self.statements.deinit(allocator);
         self.work.deinit(allocator);
         self.postponed.deinit(allocator);
+        self.trail.deinit(allocator);
+        for (self.choices.items) |choice| allocator.free(choice.rules);
+        self.choices.deinit(allocator);
     }
 
     fn run(self: *Solver) !void {
@@ -145,6 +166,13 @@ const Solver = struct {
         if (lines.len == self.inputs.lines.len) if (last) |statement| if (self.inputs.conclusion) |conclusion| {
             try self.equate(statement, conclusion);
         };
+        try self.settle();
+        try self.decideChoices();
+    }
+
+    /// Solve the pending equations, retrying the postponed ones while
+    /// bindings are made.
+    fn settle(self: *Solver) !void {
         try self.drain();
         while (self.postponed.items.len != 0) {
             const before = self.progress;
@@ -158,12 +186,38 @@ const Solver = struct {
     /// The equations of `app`, whose conclusion is `goal`.
     fn application(self: *Solver, app: RuleApplication, goal: ExprId) anyerror!void {
         const theory = self.inputs.theory;
-        const theorem = self.inputs.theorem;
         if (!isOrdinaryRuleName(app.rule_name)) return;
         const rule_id = theory.env.rule_names.get(app.rule_name) orelse return;
-        if (!self.literalRule(rule_id)) return;
+        if (theory.registry.getFallbackRule(rule_id) == null) {
+            if (!self.literalRule(rule_id)) return;
+            const rule: *const RuleDecl = &theory.env.rules.items[rule_id];
+            if (app.refs.len != rule.hyps.len) return;
+            return self.ruleApplication(app, rule_id, goal);
+        }
+        if (self.in_trial) return;
+        const allocator = self.inputs.allocator;
+        var rules: std.ArrayListUnmanaged(u32) = .empty;
+        defer rules.deinit(allocator);
+        var next: ?u32 = rule_id;
+        while (next) |candidate| : (next = theory.registry.getFallbackRule(candidate)) {
+            // A cycle is the walk's error to report.
+            if (std.mem.indexOfScalar(u32, rules.items, candidate) != null) return;
+            // A rule the pass cannot read could always be the one that
+            // checks, so the chain forces nothing.
+            if (!self.literalRule(candidate)) return;
+            try rules.append(allocator, candidate);
+        }
+        const owned = try rules.toOwnedSlice(allocator);
+        errdefer allocator.free(owned);
+        try self.choices.append(allocator, .{ .app = app, .goal = goal, .rules = owned });
+    }
+
+    /// The equations of `app` read with the rule `rule_id`, whose premise
+    /// count matches.
+    fn ruleApplication(self: *Solver, app: RuleApplication, rule_id: u32, goal: ExprId) anyerror!void {
+        const theory = self.inputs.theory;
+        const theorem = self.inputs.theorem;
         const rule: *const RuleDecl = &theory.env.rules.items[rule_id];
-        if (app.refs.len != rule.hyps.len) return;
 
         const allocator = self.inputs.allocator;
         const binders = try allocator.alloc(ExprId, rule.args.len);
@@ -215,8 +269,108 @@ const Solver = struct {
         const theory = self.inputs.theory;
         return !theory.views.contains(rule_id) and
             !theory.fresh_bindings.contains(rule_id) and
-            !theory.freshen_bindings.contains(rule_id) and
-            theory.registry.getFallbackRule(rule_id) == null;
+            !theory.freshen_bindings.contains(rule_id);
+    }
+
+    // ---------------------------------------------------------------
+    // Choices: the walk checks a `@fallback` line by the first rule of
+    // its chain that checks. Each rule is tried on a trail against
+    // everything else solved so far. A rule that clashes cannot check.
+    // When one rule is left, its equations are committed; when several
+    // are, a name every one of them gives the same value takes it. Either
+    // is forced: every successful check agrees with it. Committing one
+    // choice may decide another, so the choices are retried while
+    // bindings are made.
+
+    fn decideChoices(self: *Solver) !void {
+        while (true) {
+            const before = self.progress;
+            // Committing a rule may add the choices of its inline
+            // sub-proofs, so the list may grow while it is walked.
+            var i: usize = 0;
+            while (i < self.choices.items.len) : (i += 1) {
+                if (!self.choices.items[i].decided) try self.decide(i);
+            }
+            if (self.progress == before) return;
+        }
+    }
+
+    fn decide(self: *Solver, index: usize) !void {
+        const allocator = self.inputs.allocator;
+        const choice = self.choices.items[index];
+        // The names known before the trials; a trial may add more, and
+        // those stay open.
+        const name_count = self.names.count();
+        var agreed: ?[]?ExprId = null;
+        defer if (agreed) |values| allocator.free(values);
+        var survivor: ?u32 = null;
+        var survivors: usize = 0;
+        for (choice.rules) |rule_id| {
+            const values = (try self.trial(choice, rule_id, name_count)) orelse continue;
+            survivors += 1;
+            survivor = rule_id;
+            if (agreed) |previous| {
+                defer allocator.free(values);
+                for (previous, values) |*value, other| {
+                    if (value.* != other) value.* = null;
+                }
+            } else agreed = values;
+        }
+        if (survivors == 0) return error.Clash;
+        if (survivors == 1) {
+            self.choices.items[index].decided = true;
+            try self.ruleApplication(choice.app, survivor.?, choice.goal);
+            return self.settle();
+        }
+        for (agreed.?, self.names.values()[0..name_count]) |value, variable| {
+            if (value) |agreed_value| try self.equate(variable, agreed_value);
+        }
+        try self.settle();
+    }
+
+    /// Try the rule `rule_id` for `choice` and undo it: the values of the
+    /// first `name_count` names when it can check, null when it clashes.
+    /// Caller frees.
+    fn trial(self: *Solver, choice: Choice, rule_id: u32, name_count: usize) !?[]?ExprId {
+        const allocator = self.inputs.allocator;
+        std.debug.assert(self.work.items.len == 0);
+        const rule: *const RuleDecl = &self.inputs.theory.env.rules.items[rule_id];
+        if (choice.app.refs.len != rule.hyps.len) return null;
+        const trail_mark = self.trail.items.len;
+        const progress_mark = self.progress;
+        const postponed = try allocator.dupe([2]ExprId, self.postponed.items);
+        defer allocator.free(postponed);
+        defer {
+            for (self.trail.items[trail_mark..]) |variable| {
+                self.variables.getPtr(variable).?.* = null;
+            }
+            self.trail.shrinkRetainingCapacity(trail_mark);
+            self.work.clearRetainingCapacity();
+            self.postponed.clearRetainingCapacity();
+            // Restores what was copied out; capacity is already there.
+            self.postponed.appendSliceAssumeCapacity(postponed);
+            self.progress = progress_mark;
+            self.in_trial = false;
+        }
+        self.in_trial = true;
+        const checks = blk: {
+            self.ruleApplication(choice.app, rule_id, choice.goal) catch |err| switch (err) {
+                error.Clash => break :blk false,
+                else => return err,
+            };
+            self.settle() catch |err| switch (err) {
+                error.Clash => break :blk false,
+                else => return err,
+            };
+            break :blk true;
+        };
+        if (!checks) return null;
+        const values = try allocator.alloc(?ExprId, name_count);
+        errdefer allocator.free(values);
+        for (self.names.values()[0..name_count], values) |variable, *value| {
+            value.* = try self.resolveFully(variable);
+        }
+        return values;
     }
 
     fn internSurface(self: *Solver, expr: *const Expr) !?ExprId {
@@ -656,6 +810,7 @@ const Solver = struct {
         const want = try SurfaceExpr.exprIdSortName(theorem, env, variable);
         const have = try SurfaceExpr.exprIdSortName(theorem, env, value);
         if (!std.mem.eql(u8, want, have)) return error.Clash;
+        if (self.in_trial) try self.trail.append(self.inputs.allocator, variable);
         self.variables.getPtr(variable).?.* = value;
         self.progress += 1;
     }

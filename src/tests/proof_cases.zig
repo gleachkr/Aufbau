@@ -1110,6 +1110,13 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "fail_unknown_pairing_limit", .outcome = .{ .fail = error.NamedUnknownPairingLimit } },
     // Equations that clash solve nothing; the walk reports the mismatch.
     .{ .stem = "fail_unknown_later_clash", .outcome = .{ .fail = error.ConclusionMismatch } },
+    // A `@fallback` line: when one rule of the chain is left that can
+    // check, its equations are committed (also inline, and when another
+    // rule's premise count rules it out); with several, only the values
+    // they all agree on are; an open choice leaves its name unsolved.
+    .{ .stem = "pass_unknown_fallback_choice", .outcome = .pass },
+    .{ .stem = "pass_unknown_fallback_agree", .outcome = .pass },
+    .{ .stem = "fail_unknown_fallback_ambiguous", .outcome = .{ .fail = error.MissingBinderAssignment } },
     // A prefix an earlier token starts with, and a token a later
     // declaration starts with the prefix.
     .{ .stem = "fail_unknown_prefix_collision", .outcome = .{ .fail = error.UnknownPrefixCollision } },

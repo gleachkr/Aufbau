@@ -1,0 +1,15 @@
+delimiter $ ( ) $;
+--| @hole _
+--| @unknown ?
+provable sort wff;
+term imp (a b: wff): wff;
+infixr imp: $->$ prec 25;
+term and (a b: wff): wff;
+infixr and: $/\$ prec 30;
+axiom id (a: wff): $ a -> a $;
+axiom mp (a b: wff): $ a -> b $ > $ a $ > $ b $;
+axiom keep (a b: wff): $ a $ > $ b $ > $ a $;
+axiom and_elim_l (a b: wff): $ a /\ b $ > $ a $;
+--| @fallback and_elim_l
+axiom and_elim (a b: wff): $ a /\ b $ > $ b $;
+theorem choice_ambiguous (p q: wff): $ p /\ q $ > $ q $;

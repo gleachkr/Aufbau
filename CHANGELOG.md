@@ -41,7 +41,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   `P u ∧ _`, so a ∀-elimination with `@recover` can read its term off it.
   A line that fails while it holds names the proof does not determine yet
   says so in a note on its error ("the proof does not determine ?h yet;
-  this line may check once it does").
+  this line may check once it does"). A line citing a `@fallback` chain
+  fixes names too: by the one rule of the chain that can check, or by the
+  values all the rules that can check agree on.
 
 ### Changed
 

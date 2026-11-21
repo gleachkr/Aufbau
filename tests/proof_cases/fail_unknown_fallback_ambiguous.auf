@@ -1,0 +1,8 @@
+choice_ambiguous
+----------------
+
+l1: $ ?c -> ?c $ by id []
+l2: $ ?c $ by and_elim [#1]
+l3: $ ?c $ by mp [l1, l2]
+l4: $ q $ by and_elim [#1]
+l5: $ q $ by keep [l4, l3]

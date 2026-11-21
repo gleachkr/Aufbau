@@ -153,8 +153,16 @@ successful check must agree with:
   left). A symmetric split (`{g, p, q} = {Γ, ?a, ?b}`) stays open. A unit
   is dropped only where unit laws remove it from both sides, and a rest
   keeps the units its side writes;
-- lines whose rule has `@view`, `@recover`, `@abstract`, `@fresh`,
-  `@freshen` or `@fallback` contribute nothing;
+- lines whose rule has `@view`, `@recover`, `@abstract`, `@fresh` or
+  `@freshen` contribute nothing;
+- a line whose rule has `@fallback` checks by one rule of the chain. Each
+  rule is tried against everything else the pre-pass solved; a rule that
+  clashes, or takes another number of premises, cannot be the one that
+  checks. When one rule is left, its equations are committed; when several
+  are, a name takes a value only if every one of them gives it that value.
+  A `↔E` pair with an open conclusion is decided by its minor premise; a
+  `∧E` pair whose side is open still fixes the context both rules share.
+  A chain holding a rule of the kinds above forces nothing;
 - equations that clash solve nothing.
 
 Then the lines are checked in order. A solved name is written as its

@@ -1,0 +1,20 @@
+delimiter $ ( ) $;
+--| @hole _
+--| @unknown ?
+provable sort wff;
+term imp (a b: wff): wff;
+infixr imp: $->$ prec 25;
+term iff (a b: wff): wff;
+infixr iff: $<->$ prec 20;
+axiom id (a: wff): $ a -> a $;
+axiom mp (a b: wff): $ a -> b $ > $ a $ > $ b $;
+axiom keep (a b: wff): $ a $ > $ b $ > $ a $;
+axiom iff_elim_l (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+--| @fallback iff_elim_l
+axiom iff_elim (a b: wff): $ a <-> b $ > $ b $ > $ a $;
+axiom one_premise (a b: wff): $ a <-> b $ > $ b $;
+--| @fallback one_premise
+axiom two_premises (a b: wff): $ a <-> b $ > $ b $ > $ a $;
+theorem choice_forced (p q: wff): $ p <-> q $ > $ p $ > $ p $;
+theorem choice_inline (p q: wff): $ p <-> q $ > $ p $ > $ p $;
+theorem choice_premise_count (p q: wff): $ p <-> q $ > $ p $ > $ p $;

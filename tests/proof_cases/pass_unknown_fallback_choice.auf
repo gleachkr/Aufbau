@@ -1,0 +1,22 @@
+choice_forced
+-------------
+
+l1: $ ?c -> ?c $ by id []
+l2: $ ?c $ by iff_elim [#1, #2]
+l3: $ ?c $ by mp [l1, l2]
+l4: $ p $ by keep [#2, l3]
+
+choice_inline
+-------------
+
+l1: $ ?c -> ?c $ by id []
+l2: $ ?c $ by mp [l1, iff_elim [#1, #2]]
+l3: $ p $ by keep [#2, l2]
+
+choice_premise_count
+--------------------
+
+l1: $ ?c -> ?c $ by id []
+l2: $ ?c $ by two_premises [#1]
+l3: $ ?c $ by mp [l1, l2]
+l4: $ p $ by keep [#2, l3]

@@ -1,0 +1,6 @@
+choice_agree
+------------
+
+l1: $ ?Gx |- q -> q $ by id []
+l2: $ ?Gx |- ?c $ by and_elim [#1]
+l3: $ G |- q $ by and_elim [#1]
