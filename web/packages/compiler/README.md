@@ -26,6 +26,8 @@ if (!result.ok) {
 
 `mm0Text` and `proofText` are strings. On success, `mmbBytes` is a
 `Uint8Array`. The result also includes compiler metadata and `durationMs`.
+With or without success, `unknowns` lists what the proofs fix of their
+named unknowns (`?a`), one `{ theorem, name, value, partial }` per name.
 
 Theories spread over several files compile from an in-memory file table:
 

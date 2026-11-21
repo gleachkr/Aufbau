@@ -165,12 +165,14 @@ pub const CheckMemo = struct {
 
     /// Start a run over `ctx`'s sources. The memo stays inactive, and every
     /// block is checked, unless the run collects exactly what an entry
-    /// records: hole inferences, and neither inline conclusions nor solver
-    /// stats (whose running maximum cannot be replayed).
+    /// records: hole inferences, and neither inline conclusions, named
+    /// unknowns' values nor solver stats (whose running maximum cannot be
+    /// replayed).
     pub fn beginRun(self: *CheckMemo, ctx: *const CompilerContext) void {
         self.run +%= 1;
         self.active = ctx.hole_inference_sink != null and
             ctx.inline_conclusion_sink == null and
+            ctx.unknown_value_sink == null and
             ctx.inference_stats_sink == null;
         self.fingerprint = 0;
         self.mm0_cursor = 0;

@@ -180,6 +180,7 @@ fn analyzeInternal(
     // early in several places), while the parser and env are still alive.
     defer if (self.statement_sink) |sink|
         sink.capture(&state.theory.parser, &state.theory.env);
+    if (self.unknown_value_sink) |sink| sink.reset();
     try walk(self, allocator, &state, with_proof);
 }
 

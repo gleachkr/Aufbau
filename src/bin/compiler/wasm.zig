@@ -134,8 +134,13 @@ fn compileUnit(unit: Unit) u32 {
     // resets and re-captures with recovery's richer environment).
     var statements = mm0.StatementSink.init(allocator);
     defer statements.deinit();
+    // Each theorem's named unknowns, for hosts that show them without a
+    // language server; the analysis rerun starts them afresh too.
+    var unknowns = mm0.UnknownValueSink.init(allocator);
+    defer unknowns.deinit();
     var compiler = unit.compiler();
     compiler.statement_sink = &statements;
+    compiler.unknown_value_sink = &unknowns;
 
     result_mmb = compiler.compileMmb(allocator) catch |err| {
         var analysis_compiler = compiler.failureAnalysis();
@@ -150,12 +155,13 @@ fn compileUnit(unit: Unit) u32 {
             &compiler,
             &analysis_compiler,
             &statements,
+            &unknowns,
             unit.proof,
             err,
         ) catch clearState();
         return 0;
     };
-    writeCompileSuccess(&compiler, result_mmb.len, &statements) catch {
+    writeCompileSuccess(&compiler, result_mmb.len, &statements, &unknowns) catch {
         clearState();
         return 0;
     };
@@ -206,6 +212,7 @@ fn writeCompileSuccess(
     compiler: *const mm0.Compiler,
     mmb_len: usize,
     statements: *const mm0.StatementSink,
+    unknowns: *const mm0.UnknownValueSink,
 ) !void {
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
@@ -224,6 +231,7 @@ fn writeCompileSuccess(
     // above all, which the editor must see to withhold its seal.
     try writeDiagnosticsField(&jw, compiler, null);
     try writeStatementsField(&jw, statements);
+    try writeUnknownsField(&jw, unknowns);
     try jw.endObject();
 
     result_json = try out.toOwnedSlice();
@@ -233,6 +241,7 @@ fn writeCompileFailure(
     compiler: *const mm0.Compiler,
     analysis_compiler: *const mm0.Compiler,
     statements: *const mm0.StatementSink,
+    unknowns: *const mm0.UnknownValueSink,
     proof_src: []const u8,
     err: anyerror,
 ) !void {
@@ -258,6 +267,7 @@ fn writeCompileFailure(
     }
     try writeDiagnosticsField(&jw, analysis_compiler, proof_src);
     try writeStatementsField(&jw, statements);
+    try writeUnknownsField(&jw, unknowns);
     try jw.endObject();
 
     result_json = try out.toOwnedSlice();
@@ -274,6 +284,7 @@ fn writeRequestFailure(err: anyerror) !void {
         .diagnostic = null,
         .diagnostics = no_items,
         .statements = no_items,
+        .unknowns = no_items,
     }, .{});
 }
 
@@ -318,6 +329,7 @@ fn writeLoadFailure(
         .diagnostic = synthetic,
         .diagnostics = diagnostics,
         .statements = no_items,
+        .unknowns = no_items,
     }, .{});
 }
 
@@ -540,4 +552,13 @@ fn writeStatementsField(
         });
     }
     try jw.endArray();
+}
+
+// Each theorem's named unknowns: `[{theorem, name, value, partial}]`.
+fn writeUnknownsField(
+    jw: *std.json.Stringify,
+    unknowns: *const mm0.UnknownValueSink,
+) !void {
+    try jw.objectField("unknowns");
+    try jw.write(unknowns.items.items);
 }

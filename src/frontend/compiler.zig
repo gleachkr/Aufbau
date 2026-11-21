@@ -18,6 +18,7 @@ pub const HoleInferenceSink = Context.HoleInferenceSink;
 pub const InlineConclusion = Context.InlineConclusion;
 pub const InlineConclusionSink = Context.InlineConclusionSink;
 pub const StatementSink = @import("./statement_sink.zig").StatementSink;
+pub const UnknownValueSink = Context.UnknownValueSink;
 pub const CheckMemo = @import("./compiler/check_memo.zig").CheckMemo;
 
 pub const Compiler = struct {
@@ -35,6 +36,7 @@ pub const Compiler = struct {
     hole_inference_sink: ?*HoleInferenceSink,
     inline_conclusion_sink: ?*InlineConclusionSink,
     statement_sink: ?*StatementSink,
+    unknown_value_sink: ?*UnknownValueSink,
     inference_stats_sink: ?*InferenceStatsSink,
     /// Search work ceiling for every inference solver this compiler
     /// constructs (`CompilerContext.work_budget`); null on the compile path.
@@ -78,6 +80,7 @@ pub const Compiler = struct {
             .hole_inference_sink = null,
             .inline_conclusion_sink = null,
             .statement_sink = null,
+            .unknown_value_sink = null,
             .inference_stats_sink = null,
         };
     }
@@ -154,6 +157,7 @@ pub const Compiler = struct {
         result.diagnostics.setMapping(.mm0, self.diagnostics.mm0_mapping);
         result.diagnostics.setMapping(.proof, self.diagnostics.proof_mapping);
         result.statement_sink = self.statement_sink;
+        result.unknown_value_sink = self.unknown_value_sink;
         return result;
     }
 
@@ -248,6 +252,7 @@ pub const Compiler = struct {
         result.hole_inference_sink = self.hole_inference_sink;
         result.inline_conclusion_sink = self.inline_conclusion_sink;
         result.statement_sink = self.statement_sink;
+        result.unknown_value_sink = self.unknown_value_sink;
         result.inference_stats_sink = self.inference_stats_sink;
         result.work_budget = self.work_budget;
         result.check_memo = self.check_memo;

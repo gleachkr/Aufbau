@@ -6,6 +6,7 @@ pub const ArenaAllocator = @import("./frontend/arena_allocator.zig").ArenaAlloca
 pub const ReclaimingAllocator = @import("./frontend/reclaiming_allocator.zig").ReclaimingAllocator;
 pub const StatementSink =
     @import("./frontend/statement_sink.zig").StatementSink;
+pub const UnknownValueSink = @import("./frontend/compiler.zig").UnknownValueSink;
 pub const CheckMemo = @import("./frontend/compiler/check_memo.zig").CheckMemo;
 pub const DebugConfig = @import("./frontend/debug.zig").DebugConfig;
 pub const advertised_channel_list =

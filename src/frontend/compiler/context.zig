@@ -95,6 +95,48 @@ pub const HoleInferenceSink = struct {
     }
 };
 
+/// What a theorem's check left known of one of its named unknowns.
+pub const UnknownValue = struct {
+    theorem: []const u8,
+    /// The name as written, prefix included.
+    name: []const u8,
+    /// The value in source notation; a partial one names its open parts.
+    value: []const u8,
+    /// The value is only the shape the checker forced on the name.
+    partial: bool,
+};
+
+/// The named unknowns' values of the theorems a run checks, for hosts that
+/// read them without hovers (the wasm compile result). Each pipeline run
+/// starts it afresh.
+pub const UnknownValueSink = struct {
+    arena: ArenaAllocator,
+    items: std.ArrayListUnmanaged(UnknownValue) = .empty,
+
+    pub fn init(backing: std.mem.Allocator) UnknownValueSink {
+        return .{ .arena = ArenaAllocator.init(backing) };
+    }
+
+    pub fn deinit(self: *UnknownValueSink) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
+
+    pub fn reset(self: *UnknownValueSink) void {
+        self.items = .empty;
+        _ = self.arena.reset(.retain_capacity);
+    }
+
+    pub fn allocator(self: *UnknownValueSink) std.mem.Allocator {
+        return self.arena.allocator();
+    }
+
+    /// `item`'s strings must live in `allocator()`.
+    pub fn add(self: *UnknownValueSink, item: UnknownValue) !void {
+        try self.items.append(self.arena.allocator(), item);
+    }
+};
+
 pub const InlineConclusion = struct {
     /// Span of the inline rule application in the proof source.
     span: Span,
@@ -333,6 +375,7 @@ pub const CompilerContext = struct {
     /// Set while a search trims a suggestion's bindings; null otherwise.
     binding_oracle: ?*BindingOracle = null,
     statement_sink: ?*StatementSink = null,
+    unknown_value_sink: ?*UnknownValueSink = null,
     inference_stats_sink: ?*InferenceStatsSink = null,
     /// Work ceiling installed by a budgeted search for the duration of one
     /// generation call; every inference solver constructed under it polls

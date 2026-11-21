@@ -134,6 +134,7 @@ pub fn checkTheoremBlock(
         if (try walk.step(line) == .stop) break true;
     } else false;
     try walk.hoverUnknowns();
+    try walk.recordUnknownValues();
     try walk.reportHeldGoals(true);
     // The block ends on an unfinished line: there is no final statement to
     // reconcile with the conclusion yet.
@@ -751,6 +752,48 @@ pub const LineWalk = struct {
                 .holey => |surface| try self.hoverNames(sink, &names, line.assertion.span.start + 1, surface),
             }
             try self.hoverBindings(sink, &names, line.application);
+        }
+    }
+
+    /// Once the lines are walked, hand the run's value sink what is known of
+    /// each name, by name: its value, or the shape the pre-pass forced on it,
+    /// printed as an open-goal report prints it.
+    pub fn recordUnknownValues(self: *LineWalk) !void {
+        const sink = self.compiler.unknown_value_sink orelse return;
+        // A name the walk bound after the pre-pass shaped it is in both maps.
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer names.deinit(self.allocator);
+        var bound = self.unknowns.bound.keyIterator();
+        while (bound.next()) |name| try names.append(self.allocator, name.*);
+        var partial = self.unknowns.partial.keyIterator();
+        while (partial.next()) |name| {
+            if (!self.unknowns.bound.contains(name.*)) try names.append(self.allocator, name.*);
+        }
+        if (names.items.len == 0) return;
+        std.mem.sort([]const u8, names.items, {}, struct {
+            fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.lessThan(u8, a, b);
+            }
+        }.lessThan);
+        const out = sink.allocator();
+        const theorem = try out.dupe(u8, self.assertion.name);
+        for (names.items) |name| {
+            const known = (try self.unknowns.known(self.theorem, name)) orelse continue;
+            const value = (try OpenGoals.formatGoalNamed(
+                out,
+                self.theorem,
+                &self.theory.env,
+                &self.theory.parser,
+                &self.theorem_vars,
+                known.value,
+                &self.unknowns.open,
+            )) orelse continue;
+            try sink.add(.{
+                .theorem = theorem,
+                .name = try out.dupe(u8, name),
+                .value = value,
+                .partial = !known.complete,
+            });
         }
     }
 

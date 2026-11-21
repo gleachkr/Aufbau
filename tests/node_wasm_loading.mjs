@@ -119,6 +119,29 @@ assert.equal(unresolved.ok, false);
 assert.equal(unresolved.diagnostics[0].file, "/doc/c2.mm0");
 assert.match(unresolved.diagnostics[0].message, /unable to import 'missing.mm0'/);
 
+// Named unknowns come back with their values, on success and on failure.
+const namedTheory = [
+  "delimiter $ ( ) $;",
+  "--| @unknown ?",
+  "provable sort wff;",
+  "term imp (a b: wff): wff; infixr imp: $->$ prec 25;",
+  "axiom id (a: wff): $ a -> a $;",
+  "axiom mp (a b: wff): $ a -> b $ > $ a $ > $ b $;",
+  "theorem t (p: wff): $ p $ > $ p $;",
+  "",
+].join("\n");
+const namedProof = "t\n---\nl1: $ ?c -> ?c $ by id []\nl2: $ p $ by mp [l1, #1]\n";
+const cValue = [{ theorem: "t", name: "?c", value: "p", partial: false }];
+const named = compiler.compile(namedTheory, namedProof);
+assert.equal(named.ok, true, JSON.stringify(named.meta));
+assert.deepEqual(named.unknowns, cValue);
+const namedOpen = compiler.compile(
+  namedTheory,
+  namedProof.replace("l1:", "l0: $ ?e $ by ?\nl1:"),
+);
+assert.equal(namedOpen.ok, false);
+assert.deepEqual(namedOpen.unknowns, cValue);
+
 const lsp = await loadLspServer();
 const output = lsp.process({
   jsonrpc: "2.0",

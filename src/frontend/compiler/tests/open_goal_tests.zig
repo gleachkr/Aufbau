@@ -236,3 +236,58 @@ test "an open goal line keeps its statement when nothing fixes its names" {
         \\l1: $ ?c -> p $ by ?
     , &.{"?c -> p"});
 }
+
+fn expectUnknownValue(
+    item: anytype,
+    name: []const u8,
+    value: []const u8,
+    partial: bool,
+) !void {
+    try std.testing.expectEqualStrings("t", item.theorem);
+    try std.testing.expectEqualStrings(name, item.name);
+    try std.testing.expectEqualStrings(value, item.value);
+    try std.testing.expectEqual(partial, item.partial);
+}
+
+test "the value sink holds each name's value, by name, past a failed line" {
+    const proof_src =
+        \\t
+        \\---
+        \\l0: $ p $ by nothing []
+        \\l1: $ ?e -> ?c $ by ?
+        \\l2: $ ?c $ by ?
+        \\l3: $ (p -> p) -> q $ by ?
+        \\l4: $ q $ by mp [l2, l3]
+    ;
+    var sink = helpers.mm0.UnknownValueSink.init(std.testing.allocator);
+    defer sink.deinit();
+    // Twice through the same sink: each run starts it afresh.
+    for (0..2) |_| {
+        var compiler = Compiler.initWithProof(std.testing.allocator, named_mm0_src, proof_src);
+        compiler.allow_search_placeholders = true;
+        compiler.unknown_value_sink = &sink;
+        try compiler.analyze();
+        try std.testing.expect(compiler.primaryDiagnostics().len > 0);
+    }
+    // `?e` is fixed by nothing, so it is left out.
+    try std.testing.expectEqual(@as(usize, 1), sink.items.items.len);
+    try expectUnknownValue(sink.items.items[0], "?c", "p -> p", false);
+}
+
+test "the value sink holds a forced shape with its open names" {
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ ?c $ by ?
+        \\l2: $ (?d -> _wff) -> q $ by ?
+        \\l3: $ q $ by mp [l1, l2]
+    ;
+    var sink = helpers.mm0.UnknownValueSink.init(std.testing.allocator);
+    defer sink.deinit();
+    var compiler = Compiler.initWithProof(std.testing.allocator, named_mm0_src, proof_src);
+    compiler.allow_search_placeholders = true;
+    compiler.unknown_value_sink = &sink;
+    try compiler.analyze();
+    try std.testing.expectEqual(@as(usize, 1), sink.items.items.len);
+    try expectUnknownValue(sink.items.items[0], "?c", "?d -> _wff", true);
+}

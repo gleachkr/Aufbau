@@ -30,6 +30,7 @@ pub fn run(
     // Snapshot pretty-printed statements on every exit path, while the parser
     // (the notation provider) and env still live in this call's arena.
     defer if (self.statement_sink) |sink| sink.capture(parser, env);
+    if (self.unknown_value_sink) |sink| sink.reset();
     var proof_stream = if (self.proof_source) |proof|
         ProofItemStream.init(allocator, proof)
     else
