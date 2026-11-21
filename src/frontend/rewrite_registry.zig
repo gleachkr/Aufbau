@@ -5,6 +5,7 @@ const TemplateExpr = @import("./rules.zig").TemplateExpr;
 const hasPremiseOnlyBinder = @import("./rules.zig").hasPremiseOnlyBinder;
 const templateBinderMask = @import("./rules.zig").templateBinderMask;
 const Containers = @import("./containers.zig");
+const MathSpan = @import("./parse_recovery.zig").MathSpan;
 
 /// True when a rule has a premise-only binder (see
 /// `rules.hasPremiseOnlyBinder`): an application would have to leave it as
@@ -23,6 +24,8 @@ pub const RelationBundle = struct {
     trans_name: []const u8,
     symm_name: []const u8,
     transport_name: []const u8,
+    /// The `@relation` annotation, for `firstUndeclaredLaw`.
+    annotation_span: ?MathSpan = null,
     /// Resolved lazily from names.
     rel_term_id: ?u32 = null,
     refl_id: ?u32 = null,
@@ -148,6 +151,8 @@ pub const StructuralCombiner = struct {
     assoc_name: []const u8,
     comm_name: ?[]const u8,
     idem_name: ?[]const u8,
+    /// The `@acui` annotation, for `firstUndeclaredLaw`.
+    annotation_span: ?MathSpan = null,
     unit_term_id: ?u32 = null,
     assoc_id: ?u32 = null,
     comm_id: ?u32 = null,
@@ -321,14 +326,18 @@ pub const RewriteRegistry = struct {
         return out;
     }
 
+    /// `spans` holds each annotation's span, or is empty where there are
+    /// none (a proof-local item's annotations).
     pub fn processAnnotations(
         self: *RewriteRegistry,
         env: *const GlobalEnv,
         stmt_name: []const u8,
         annotations: []const []const u8,
+        spans: []const MathSpan,
     ) !void {
-        for (annotations) |ann| {
-            try self.processOneAnnotation(env, stmt_name, ann);
+        for (annotations, 0..) |ann, idx| {
+            const span = if (idx < spans.len) spans[idx] else null;
+            try self.processOneAnnotation(env, stmt_name, ann, span);
         }
     }
 
@@ -337,13 +346,14 @@ pub const RewriteRegistry = struct {
         env: *const GlobalEnv,
         stmt_name: []const u8,
         annotation: []const u8,
+        span: ?MathSpan,
     ) !void {
         var iter = std.mem.tokenizeAny(u8, annotation, " \t");
         const word = iter.next() orelse return;
         if (!std.mem.startsWith(u8, word, "@")) return;
         const directive = std.meta.stringToEnum(Directive, word[1..]) orelse return;
         switch (directive) {
-            .relation => try self.processRelation(env, &iter),
+            .relation => try self.processRelation(env, &iter, span),
             .rewrite => try self.processRewrite(env, stmt_name, &iter),
             .alpha => try self.processAlpha(env, stmt_name, &iter),
             .conversion => try self.processConversion(env, stmt_name, &iter),
@@ -351,7 +361,7 @@ pub const RewriteRegistry = struct {
             .congr => try self.processCongr(env, stmt_name),
             .fallback => try self.processFallback(env, stmt_name, &iter),
             .auto => try self.processAuto(env, stmt_name, &iter),
-            .acui => try self.processAcui(env, stmt_name, &iter),
+            .acui => try self.processAcui(env, stmt_name, &iter, span),
         }
     }
 
@@ -374,6 +384,7 @@ pub const RewriteRegistry = struct {
         self: *RewriteRegistry,
         env: *const GlobalEnv,
         iter: *std.mem.TokenIterator(u8, .any),
+        span: ?MathSpan,
     ) !void {
         const sort_name = iter.next() orelse return;
         const rel_term = iter.next() orelse return;
@@ -395,6 +406,7 @@ pub const RewriteRegistry = struct {
             .trans_name = trans,
             .symm_name = symm,
             .transport_name = transport,
+            .annotation_span = span,
         };
         // Members usually follow the annotation and are checked as they
         // are declared (`checkDeclaredMember`); these are the ones already
@@ -444,6 +456,47 @@ pub const RewriteRegistry = struct {
             try checkAcuiLaw(env, head, entry.value_ptr, rel, rule);
             try noteUnitLaw(env, head, entry.value_ptr, rel, rule_id);
         }
+    }
+
+    pub const UndeclaredLaw = struct {
+        name: []const u8,
+        annotation_span: ?MathSpan,
+    };
+
+    /// A name a `@relation` or `@acui` annotation gives that, once every
+    /// statement is in, declares nothing: a relation term that is no term,
+    /// or a law that is no rule. Laws may follow their annotation, so this
+    /// is only known at the end; until then the law is simply unavailable.
+    /// The earliest annotation's first such name; null when every name is
+    /// declared.
+    pub fn firstUndeclaredLaw(
+        self: *const RewriteRegistry,
+        env: *const GlobalEnv,
+    ) ?UndeclaredLaw {
+        var first: ?UndeclaredLaw = null;
+        var relations = self.relations.valueIterator();
+        while (relations.next()) |bundle| {
+            const missing = if (env.term_names.get(bundle.rel_term_name) == null)
+                bundle.rel_term_name
+            else
+                firstUndeclaredRule(env, &.{
+                    bundle.refl_name,
+                    bundle.trans_name,
+                    bundle.symm_name,
+                    bundle.transport_name,
+                }) orelse continue;
+            first = earlierLaw(first, .{ .name = missing, .annotation_span = bundle.annotation_span });
+        }
+        var combiners = self.acui_by_head.valueIterator();
+        while (combiners.next()) |combiner| {
+            const missing = firstUndeclaredRule(env, &.{
+                combiner.assoc_name,
+                combiner.comm_name orelse "_",
+                combiner.idem_name orelse "_",
+            }) orelse continue;
+            first = earlierLaw(first, .{ .name = missing, .annotation_span = combiner.annotation_span });
+        }
+        return first;
     }
 
     /// True when `term_id` is the registered `@relation` term for the
@@ -1117,6 +1170,7 @@ pub const RewriteRegistry = struct {
         env: *const GlobalEnv,
         stmt_name: []const u8,
         iter: *std.mem.TokenIterator(u8, .any),
+        span: ?MathSpan,
     ) !void {
         const head_term_id = env.term_names.get(stmt_name) orelse return;
 
@@ -1159,6 +1213,7 @@ pub const RewriteRegistry = struct {
             .assoc_name = assoc_name,
             .comm_name = comm_name,
             .idem_name = idem_name,
+            .annotation_span = span,
         };
         if (self.relationTermIdForSort(env, head.ret_sort_name)) |rel| {
             for (env.rules.items, 0..) |*rule, rule_id| {
@@ -1476,6 +1531,27 @@ fn noteUnitLaw(
 const RelationRole = enum { refl, trans, symm, transport };
 
 const AcuiLaw = enum { assoc, comm, idem };
+
+/// The first of `names` that names no rule; `_` stands for no law.
+fn firstUndeclaredRule(env: *const GlobalEnv, names: []const []const u8) ?[]const u8 {
+    for (names) |name| {
+        if (std.mem.eql(u8, name, "_")) continue;
+        if (env.getRuleId(name) == null) return name;
+    }
+    return null;
+}
+
+/// Whichever of two undeclared laws is named earlier in the source; one
+/// without a span (a proof-local item's annotation) comes last.
+fn earlierLaw(
+    current: ?RewriteRegistry.UndeclaredLaw,
+    candidate: RewriteRegistry.UndeclaredLaw,
+) RewriteRegistry.UndeclaredLaw {
+    const kept = current orelse return candidate;
+    const kept_span = kept.annotation_span orelse return candidate;
+    const candidate_span = candidate.annotation_span orelse return kept;
+    return if (candidate_span.start < kept_span.start) candidate else kept;
+}
 
 /// Check `rule` against each role of `bundle` it is named as.
 fn checkRelationMember(

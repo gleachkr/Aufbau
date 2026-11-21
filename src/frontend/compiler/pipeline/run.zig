@@ -212,4 +212,9 @@ pub fn run(
             emit,
         );
     }
+
+    if (Common.undeclaredLawDiagnostic(&theory)) |diag| {
+        self.setIfMissing(diag);
+        return error.UndeclaredAnnotationLaw;
+    }
 }

@@ -244,6 +244,21 @@ pub fn registerTerm(
     }
 }
 
+/// The error for a `@relation` or `@acui` annotation naming a law or
+/// relation that no statement declared, at that annotation; null when every
+/// name is declared. Only known once the walk is through: laws may follow
+/// their annotation.
+pub fn undeclaredLawDiagnostic(theory: *const TheoryState) ?Diagnostic {
+    const law = theory.registry.firstUndeclaredLaw(&theory.env) orelse return null;
+    return .{
+        .kind = .generic,
+        .err = error.UndeclaredAnnotationLaw,
+        .source = .mm0,
+        .name = law.name,
+        .span = CompilerDiag.mathSpanToSpanOpt(law.annotation_span),
+    };
+}
+
 /// Register an axiom, theorem, or lemma whose proof (if any) is already
 /// checked: the env entry, the unused-parameter lint, then its annotations
 /// (`@auto`, `@view`/`@recover`, `@fresh`, ...). Registration is atomic:

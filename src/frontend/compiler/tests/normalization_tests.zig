@@ -365,6 +365,21 @@ test "compiler checks @acui combiners, units, and laws" {
         \\--| @relation ctx ceq crefl ctrans csym _
         \\axiom crefl (g: ctx): $ ceq g g $;
     , error.AcuiAssocShape, "crefl", "crefl");
+    // A law no statement declares is reported at the annotation naming it,
+    // once every statement is in (a law may follow its annotation).
+    try expectShapeError(acui_prelude ++
+        \\--| @acui cassoc ccomm emp
+        \\term join (g h: ctx): ctx;
+    ++ acui_assoc, error.UndeclaredAnnotationLaw, "ccomm", "@acui cassoc ccomm emp");
+    try expectShapeError(
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort ctx;
+        \\term ceq (g h: ctx): wff;
+        \\--| @relation ctx ceq crefl ctrans csym _
+        \\axiom crefl (g: ctx): $ ceq g g $;
+        \\axiom ctrans (g h i: ctx): $ ceq g h $ > $ ceq h i $ > $ ceq g i $;
+    , error.UndeclaredAnnotationLaw, "csym", "@relation ctx ceq crefl ctrans csym _");
 
     var compiler = Compiler.init(std.testing.allocator, acui_prelude ++
         \\--| @acui cassoc ccomm emp cidem

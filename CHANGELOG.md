@@ -43,6 +43,10 @@ This file records notable user-facing changes to Aufbau. The project follows
 - LSP completions report rules as Constant and terms and definitions as
   Constructor, not Method and Function, so editors that add call brackets
   by kind (blink.cmp) no longer write `imp()` or `mp [?](?)`.
+- An `@relation` or `@acui` annotation that names a law or relation no
+  statement declares is an error at the annotation
+  (`UndeclaredAnnotationLaw`). Before, the name was accepted, and the
+  conversions it should have allowed failed later with no hint why.
 
 ### Fixed
 

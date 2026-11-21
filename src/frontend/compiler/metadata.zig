@@ -163,6 +163,7 @@ pub fn processTermMetadataAt(
                 env,
                 term_stmt.name,
                 annotations[idx .. idx + 1],
+                if (idx < annotation_spans.len) annotation_spans[idx .. idx + 1] else &.{},
             );
         }
     }
@@ -195,7 +196,7 @@ pub fn processAssertionMetadata(
     if (env.getRuleId(assertion.name)) |rule_id| {
         try registry.checkDeclaredMember(env, rule_id);
     }
-    try registry.processAnnotations(env, assertion.name, annotations);
+    try registry.processAnnotations(env, assertion.name, annotations, annotation_spans);
     try FreshSelect.processFreshAnnotations(
         allocator,
         parser,

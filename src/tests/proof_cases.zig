@@ -948,6 +948,11 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_abstract_without_view",
         .outcome = .{ .fail = error.AbstractWithoutView },
     },
+    // An @acui annotation naming a law no statement declares (`ctx_comm`).
+    .{
+        .stem = "fail_acui_undeclared_law",
+        .outcome = .{ .fail = error.UndeclaredAnnotationLaw },
+    },
     .{
         .stem = "fail_abstract_pattern_conflict",
         .outcome = .{ .fail = error.AbstractPatternConflict },

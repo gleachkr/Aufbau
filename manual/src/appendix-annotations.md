@@ -56,6 +56,8 @@ compiler cites it at, binders in this order: `(a): rel a a`,
 `(a b c): rel a b > rel b c > rel a c`, `(a b): rel a b > rel b a`, and
 `(a b): rel a b > a > b`. Hypotheses are rule-form (`>`, not object-level
 implications) and no binder is bound. A sort has at most one `@relation`.
+Members may be declared after the annotation, but a name no statement
+declares is an error at the annotation.
 
 ```text
 --| @relation wff bi biid bitr bisym mpbi
@@ -102,7 +104,9 @@ proof emitted during `.auf` compilation for every step. Requires a `@relation`
 for the result sort and a `@congr` rule for the combiner. The combiner takes
 two arguments of its result sort and the unit is a constant of that sort. With
 `∘` the combiner, the laws must be exactly `(a b c): rel ((a ∘ b) ∘ c) (a ∘ (b
-∘ c))`, `(a b): rel (a ∘ b) (b ∘ a)`, and `(a): rel (a ∘ a) a`.
+∘ c))`, `(a b): rel (a ∘ b) (b ∘ a)`, and `(a): rel (a ∘ a) a`. The laws may
+be declared after the annotation; a law no statement declares is an error at
+the annotation.
 
 ```text
 --| @acui ctx_assoc ctx_comm emp ctx_idem

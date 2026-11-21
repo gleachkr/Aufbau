@@ -199,6 +199,7 @@ pub const RewriteFixture = struct {
                         &env,
                         term_stmt.name,
                         parser.last_annotations,
+                        parser.last_annotation_spans,
                     );
                 },
                 .assertion => |assertion| {
@@ -207,6 +208,7 @@ pub const RewriteFixture = struct {
                         &env,
                         assertion.name,
                         parser.last_annotations,
+                        parser.last_annotation_spans,
                     );
                     if (std.mem.eql(u8, assertion.name, "host")) {
                         host_assertion = assertion;
@@ -408,6 +410,7 @@ pub const AcuiExposureFixture = struct {
                         &env,
                         term_stmt.name,
                         parser.last_annotations,
+                        parser.last_annotation_spans,
                     );
                 },
                 .assertion => |assertion| {
@@ -416,6 +419,7 @@ pub const AcuiExposureFixture = struct {
                         &env,
                         assertion.name,
                         parser.last_annotations,
+                        parser.last_annotation_spans,
                     );
                     if (std.mem.eql(u8, assertion.name, "host")) {
                         host_assertion = assertion;
@@ -615,6 +619,7 @@ pub const WrappedAcuiDefFixture = struct {
                         &env,
                         term_stmt.name,
                         parser.last_annotations,
+                        parser.last_annotation_spans,
                     );
                 },
                 .assertion => |assertion| {
@@ -623,6 +628,7 @@ pub const WrappedAcuiDefFixture = struct {
                         &env,
                         assertion.name,
                         parser.last_annotations,
+                        parser.last_annotation_spans,
                     );
                     if (std.mem.eql(u8, assertion.name, "host")) {
                         host_assertion = assertion;
@@ -846,6 +852,7 @@ pub const QuantifiedAcuiDefFixture = struct {
                         &env,
                         term_stmt.name,
                         parser.last_annotations,
+                        parser.last_annotation_spans,
                     );
                 },
                 .assertion => |assertion| {
@@ -854,6 +861,7 @@ pub const QuantifiedAcuiDefFixture = struct {
                         &env,
                         assertion.name,
                         parser.last_annotations,
+                        parser.last_annotation_spans,
                     );
                     if (std.mem.eql(u8, assertion.name, "host")) {
                         host_assertion = assertion;

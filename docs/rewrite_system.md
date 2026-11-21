@@ -207,7 +207,9 @@ transitivity, symmetry, and (optionally) a modus-ponens-style transport rule.
 ```
 
 The annotation line may appear before an MM0 assertion or before a local
-`.auf` lemma. The named relation rules may be declared before or after it.
+`.auf` lemma. The named relation rules may be declared before or after it;
+a name that no statement declares is an error at the annotation, reported
+once every statement is in.
 
 | Field | Meaning |
 |-------|---------|
@@ -836,7 +838,9 @@ term join (g h: ctx): ctx;
 ```
 
 The combiner must take two arguments of its own result sort, and the unit
-must be a constant of that sort declared before the annotation. Each law is
+must be a constant of that sort declared before the annotation. The laws may
+follow it, but a law no statement declares is an error at the annotation,
+reported once every statement is in. Each law is
 checked against the shape the normalizer cites it at, with `f` the combiner
 and `rel` the `@relation` term of its sort, once the law, the annotation,
 and that `@relation` all exist:

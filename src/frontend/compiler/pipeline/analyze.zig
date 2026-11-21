@@ -307,6 +307,10 @@ fn walk(
     if (state.proof) |*proof| {
         try analyzeExtraProofBlocks(self, allocator, state, proof);
     }
+
+    if (Common.undeclaredLawDiagnostic(&state.theory)) |diag| {
+        self.addPrimaryDiagnostic(diag);
+    }
 }
 
 fn stopAtTheorem(state: *AnalysisState, stmt: MM0Stmt) !void {

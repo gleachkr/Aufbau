@@ -1,0 +1,14 @@
+delimiter $ ( ) , $;
+provable sort wff;
+sort ctx;
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+
+--| @acui ctx_assoc ctx_comm emp _
+term join (g h: ctx): ctx; infixl join: $,$ prec 5;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h k: ctx): $ ctx_eq g h $ > $ ctx_eq h k $ > $ ctx_eq g k $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h k: ctx): $ ctx_eq ((g , h) , k) (g , (h , k)) $;
