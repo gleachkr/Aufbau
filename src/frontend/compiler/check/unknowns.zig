@@ -27,7 +27,8 @@ pub const Unknowns = struct {
     /// Each bound name's value.
     bound: std.StringHashMapUnmanaged(ExprId) = .empty,
     /// The shape the pre-pass forced on a name it did not solve, with its
-    /// open parts as placeholders. Only shown, never written into a line.
+    /// open parts as placeholders. `substitute` writes it into a line with
+    /// those parts as holes.
     partial: std.StringHashMapUnmanaged(ExprId) = .empty,
     /// The name each open placeholder in a `partial` value stands for.
     open: std.AutoHashMapUnmanaged(PlaceholderId, []const u8) = .empty,
@@ -164,26 +165,48 @@ pub const Unknowns = struct {
         }
     }
 
-    /// `surface` with every bound name written as its value: the same
-    /// pointer when it names nothing bound. A value that cannot be written
-    /// as surface syntax (it holds a placeholder) leaves its name a hole;
-    /// `record` then checks the line's fill against it.
+    /// `surface` with what is known of each name written in: a bound name
+    /// as its value, and a name the pre-pass forced a shape on as that
+    /// shape, its open parts holes (named where they stand for a name).
+    /// The same pointer when nothing is known of any name in `surface`. A
+    /// bound value that cannot be written as surface syntax (it holds a
+    /// placeholder) leaves its name a hole; `record` then checks the
+    /// line's fill against it. A line with a shape written in no longer
+    /// shows its name: `record` reads the names off the line as written
+    /// by the user (`writesShape`).
     pub fn substitute(
         self: *Unknowns,
         allocator: std.mem.Allocator,
-        theorem: *const TheoremContext,
+        theorem: *TheoremContext,
         parser: *const MM0Parser,
         surface: *const Expr,
     ) !*const Expr {
-        if (self.bound.count() == 0 or !hasNamed(surface)) return surface;
+        if (self.bound.count() == 0 and self.partial.count() == 0) return surface;
+        if (!hasNamed(surface)) return surface;
         try self.refreshVarSurfaces(allocator, theorem);
         return try self.substituteExpr(allocator, theorem, parser, surface);
+    }
+
+    /// Whether `substitute` writes a shape into `surface`: a name in it is
+    /// not bound but has a shape from the pre-pass.
+    pub fn writesShape(self: *const Unknowns, surface: *const Expr) bool {
+        if (self.partial.count() == 0) return false;
+        return switch (surface.*) {
+            .variable => false,
+            .hole => |hole| if (hole.name) |name|
+                !self.bound.contains(name) and self.partial.contains(name)
+            else
+                false,
+            .term => |term| for (term.args) |arg| {
+                if (self.writesShape(arg)) break true;
+            } else false,
+        };
     }
 
     fn substituteExpr(
         self: *Unknowns,
         allocator: std.mem.Allocator,
-        theorem: *const TheoremContext,
+        theorem: *TheoremContext,
         parser: *const MM0Parser,
         expr: *const Expr,
     ) !*const Expr {
@@ -191,8 +214,12 @@ pub const Unknowns = struct {
             .variable => return expr,
             .hole => |hole| {
                 const name = hole.name orelse return expr;
-                const value = self.bound.get(name) orelse return expr;
-                return (try self.surfaceOf(allocator, theorem, parser, value)) orelse expr;
+                if (self.bound.get(name)) |value| {
+                    return (try self.surfaceOf(allocator, theorem, parser, value, false)) orelse expr;
+                }
+                if (!self.partial.contains(name)) return expr;
+                const shape = (try self.known(theorem, name)).?;
+                return (try self.surfaceOf(allocator, theorem, parser, shape.value, true)) orelse expr;
             },
             .term => |term| {
                 const args = try allocator.alloc(*const Expr, term.args.len);
@@ -219,24 +246,39 @@ pub const Unknowns = struct {
         }
     }
 
-    /// `id` as surface syntax, or null when it holds a placeholder. Nodes
-    /// are not freed: `allocator` is the walk's arena.
+    /// `id` as surface syntax. A placeholder is a hole when `holes` (named
+    /// for the open name it stands for, else anonymous), and otherwise
+    /// makes the whole null. Nodes are not freed: `allocator` is the walk's
+    /// arena.
     fn surfaceOf(
         self: *Unknowns,
         allocator: std.mem.Allocator,
         theorem: *const TheoremContext,
         parser: *const MM0Parser,
         id: ExprId,
+        holes: bool,
     ) !?*const Expr {
         switch (theorem.interner.node(id).*) {
             .variable => |var_id| return self.var_surfaces.get(var_id.hashKey()),
-            .placeholder => return null,
+            .placeholder => |pid| {
+                if (!holes) return null;
+                const info = theorem.placeholderInfo(pid) orelse return null;
+                const sort = parser.core.sort_names.get(info.sort_name) orelse return null;
+                const name = self.open.get(pid);
+                const node = try allocator.create(Expr);
+                node.* = .{ .hole = .{
+                    .sort = @intCast(sort),
+                    .name = name,
+                    .token = name orelse parser.core.sort_hole_tokens.get(info.sort_name) orelse "_",
+                } };
+                return node;
+            },
             .app => |app| {
                 const term = parser.core.terms.items[app.term_id];
                 const args = try allocator.alloc(*const Expr, app.args.len);
                 var deps: u55 = 0;
                 for (app.args, args) |arg, *out| {
-                    out.* = (try self.surfaceOf(allocator, theorem, parser, arg)) orelse {
+                    out.* = (try self.surfaceOf(allocator, theorem, parser, arg, holes)) orelse {
                         allocator.free(args);
                         return null;
                     };

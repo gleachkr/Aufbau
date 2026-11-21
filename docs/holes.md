@@ -158,7 +158,14 @@ successful check must agree with:
 - equations that clash solve nothing.
 
 Then the lines are checked in order. A solved name is written as its
-value. An unsolved one is a hole whose first fill binds it: every later
+value. A name the pre-pass solved only in part is written as its forced
+shape, with the parts still open as holes: a part that stands for another
+name as that name, any other part as an anonymous hole. With a later
+conjunction elimination `l2: $ P u $ by and_l [l1]`, the line
+`l1: $ ?f $ by all_elim [#1]` is checked as `$ P u ∧ _ $`, so
+`all_elim`'s `@recover` can read `u` off the visible conjunct. The line still binds the name itself, to
+all of what it checked as. An unsolved name is a hole whose first fill
+binds it: every later
 occurrence takes that value, and a later line that fills it differently is
 an error (`NamedUnknownConflict`), as is one line filling it twice
 differently. The occurrences of a name in one line are filled alike: in

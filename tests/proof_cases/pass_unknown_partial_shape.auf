@@ -1,0 +1,12 @@
+unknown_partial_shape
+---------------------
+
+l1: $ nd (hyp a) ?f $ by all_elim [#1]
+l2: $ nd (hyp a) (P u) $ by and_l [l1]
+
+unknown_partial_shape_named
+---------------------------
+
+l1: $ nd (hyp a) ?f $ by all_elim [#1]
+l2: $ nd (hyp a) ?g $ by and_l [l1]
+l3: $ nd (hyp a) (Q u) $ by and_r [l1]

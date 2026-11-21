@@ -36,6 +36,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   take one value: in an ACUI context the members holding names are paired
   with the context's (`G , ?a , ?b , ?a` against `G , p , p , q`), by a
   search that stops after 1,000,000 tries (`NamedUnknownPairingLimit`).
+  A name the proof forces only in part is checked with that part written
+  in: `?f`, later split by an ∧-elimination giving `P u`, is checked as
+  `P u ∧ _`, so a ∀-elimination with `@recover` can read its term off it.
 
 ### Changed
 

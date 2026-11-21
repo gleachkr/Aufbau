@@ -444,7 +444,7 @@ pub const LineWalk = struct {
             return error.DuplicateLabel;
         }
 
-        const parsed_assertion = try self.writeBoundUnknowns(try parseProofLineAssertion(
+        const written_assertion = try parseProofLineAssertion(
             compiler,
             &self.theory.parser,
             self.theorem,
@@ -452,7 +452,14 @@ pub const LineWalk = struct {
             &self.theory.sort_vars,
             assertion,
             line,
-        ));
+        );
+        // A shape written in hides its name: the names are read back off
+        // the line as the user wrote it.
+        const read_surface: ?*const Expr = switch (written_assertion) {
+            .holey => |surface| if (self.unknowns.writesShape(surface)) surface else null,
+            .concrete => null,
+        };
+        const parsed_assertion = try self.writeBoundUnknowns(written_assertion);
         const line_assertion = try LineAssertion.fromParsed(
             self.theorem,
             &self.theory.env,
@@ -556,11 +563,13 @@ pub const LineWalk = struct {
                 parsed_assertion.holey,
                 self.checked.items[line_idx].expr,
             );
-            try self.recordUnknowns(
-                line,
-                parsed_assertion.holey,
-                self.checked.items[line_idx].expr,
-            );
+        }
+        const record_surface = read_surface orelse switch (parsed_assertion) {
+            .holey => |surface| surface,
+            .concrete => null,
+        };
+        if (record_surface) |surface| {
+            try self.recordUnknowns(line, surface, self.checked.items[line_idx].expr);
         }
         try self.checkHoleyBindings(line, line.application, line_idx);
 

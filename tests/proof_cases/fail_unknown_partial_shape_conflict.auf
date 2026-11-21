@@ -1,0 +1,7 @@
+unknown_partial_shape_conflict
+------------------------------
+
+l1: $ nd (hyp a) ?f $ by all_elim [#1]
+l2: $ nd (hyp a) (P u) $ by and_l [l1]
+l3: $ nd (hyp a) ?f $ by all_elim (t := $ v $) [#1]
+l4: $ nd (hyp a) (P u) $ by and_l [l1]
