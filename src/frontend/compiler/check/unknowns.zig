@@ -286,9 +286,10 @@ pub const Unknowns = struct {
         if (!hasNamed(surface)) return null;
         var canonicalizer = Canonicalizer.init(allocator, theorem, registry, env, {});
         defer canonicalizer.deinit();
-        const fill = (try fillOf(parser, theorem, env, registry, &canonicalizer, surface, checked)) orelse
-            return null;
-        return try self.bindFills(allocator, theorem, &canonicalizer, surface, fill);
+        return switch (try self.readLine(allocator, parser, theorem, env, registry, &canonicalizer, surface, checked)) {
+            .no_fill, .fits => null,
+            .clash => |name| name,
+        };
     }
 
     pub const BindingFit = union(enum) {
@@ -314,47 +315,127 @@ pub const Unknowns = struct {
     ) !BindingFit {
         var canonicalizer = Canonicalizer.init(allocator, theorem, registry, env, {});
         defer canonicalizer.deinit();
-        const fill = (try fillOf(parser, theorem, env, registry, &canonicalizer, surface, value)) orelse
-            return .mismatch;
-        if (!hasNamed(surface)) return .fits;
-        const name = (try self.bindFills(allocator, theorem, &canonicalizer, surface, fill)) orelse
-            return .fits;
-        return .{ .conflict = name };
+        return switch (try self.readLine(allocator, parser, theorem, env, registry, &canonicalizer, surface, value)) {
+            .no_fill => .mismatch,
+            .fits => .fits,
+            .clash => |name| .{ .conflict = name },
+        };
     }
 
-    /// Bind the names `surface` holds from `fill`, which has its shape.
-    /// Null when every fill agrees with every earlier one; otherwise the
-    /// first name filled differently, and nothing is bound.
-    fn bindFills(
+    const LineReading = union(enum) {
+        /// `surface` does not fit the checked expression.
+        no_fill,
+        /// The names are bound: the fill agrees with every earlier one.
+        /// Also when the fill cannot be read back, which binds nothing.
+        fits,
+        /// The first name filled differently; nothing is bound.
+        clash: []const u8,
+    };
+
+    /// Bind the names `surface` holds from `checked`. The positional fill
+    /// comes first. When it fills a name two ways, or there is none, the
+    /// fill modulo ACUI that keeps each name to one value may still fit;
+    /// failing that, the fill modulo ACUI with every hole on its own says
+    /// which name clashes. `error.NamedUnknownPairingLimit` when the search
+    /// for a fill that keeps names alike gave up.
+    fn readLine(
         self: *Unknowns,
+        allocator: std.mem.Allocator,
+        parser: *MM0Parser,
+        theorem: *TheoremContext,
+        env: *const GlobalEnv,
+        registry: *RewriteRegistry,
+        canonicalizer: *Canonicalizer,
+        surface: *const Expr,
+        checked: ExprId,
+    ) !LineReading {
+        var fills: std.StringArrayHashMapUnmanaged(ExprId) = .empty;
+        defer fills.deinit(allocator);
+        var reading: LineReading = .no_fill;
+        if (try Holes.fillThroughDefs(parser, theorem, env, surface, checked)) |fill| {
+            reading = try self.readFill(allocator, theorem, canonicalizer, surface, fill, &fills);
+            // An empty reading of a line with names is a fill not read back.
+            if (reading == .fits and fills.count() != 0) return try self.bindAll(allocator, &fills);
+        }
+        if (!registry.hasStructuralCombiners()) return try self.settle(allocator, reading, &fills);
+        if (hasNamed(surface)) {
+            var names: Holes.NameFills = .{ .bound = &self.bound };
+            defer names.deinit(allocator);
+            if (try fillModuloAcui(parser, theorem, env, registry, canonicalizer, surface, checked, &names)) |fill| {
+                var alike: std.StringArrayHashMapUnmanaged(ExprId) = .empty;
+                defer alike.deinit(allocator);
+                if (try self.readFill(allocator, theorem, canonicalizer, surface, fill, &alike) == .fits and
+                    alike.count() != 0)
+                {
+                    return try self.bindAll(allocator, &alike);
+                }
+            }
+            if (names.limit_hit) return error.NamedUnknownPairingLimit;
+        }
+        if (reading == .no_fill) {
+            if (try fillModuloAcui(parser, theorem, env, registry, canonicalizer, surface, checked, null)) |fill| {
+                reading = try self.readFill(allocator, theorem, canonicalizer, surface, fill, &fills);
+            }
+        }
+        return try self.settle(allocator, reading, &fills);
+    }
+
+    /// `reading` of the fill `fills` was read from, its names bound when
+    /// it fits.
+    fn settle(
+        self: *Unknowns,
+        allocator: std.mem.Allocator,
+        reading: LineReading,
+        fills: *const std.StringArrayHashMapUnmanaged(ExprId),
+    ) !LineReading {
+        if (reading != .fits) return reading;
+        return try self.bindAll(allocator, fills);
+    }
+
+    fn bindAll(
+        self: *Unknowns,
+        allocator: std.mem.Allocator,
+        fills: *const std.StringArrayHashMapUnmanaged(ExprId),
+    ) !LineReading {
+        for (fills.keys(), fills.values()) |name, value| {
+            const entry = try self.bound.getOrPut(allocator, name);
+            if (!entry.found_existing) entry.value_ptr.* = value;
+        }
+        return .fits;
+    }
+
+    /// Read the names `surface` holds off `fill`, which has its shape, into
+    /// `fills`, and check them against each other and the bound names.
+    /// `.fits` with `fills` empty when `fill` cannot be read back.
+    fn readFill(
+        self: *const Unknowns,
         allocator: std.mem.Allocator,
         theorem: *TheoremContext,
         canonicalizer: *Canonicalizer,
         surface: *const Expr,
         fill: ExprId,
-    ) !?[]const u8 {
-        var fills: std.StringArrayHashMapUnmanaged(ExprId) = .empty;
-        defer fills.deinit(allocator);
-        const clash = readFills(allocator, theorem, canonicalizer, surface, fill, &fills) catch |err| switch (err) {
-            error.NamedUnknownUnread => return null,
+        fills: *std.StringArrayHashMapUnmanaged(ExprId),
+    ) !LineReading {
+        const clash = readFills(allocator, theorem, canonicalizer, surface, fill, fills) catch |err| switch (err) {
+            error.NamedUnknownUnread => {
+                fills.clearRetainingCapacity();
+                return .fits;
+            },
             else => return err,
         };
-        if (clash) |name| return name;
+        if (clash) |name| return .{ .clash = name };
         for (fills.keys(), fills.values()) |name, value| {
             const bound = self.bound.get(name) orelse continue;
-            if (!try sameValue(canonicalizer, bound, value)) return name;
+            if (!try sameValue(canonicalizer, bound, value)) return .{ .clash = name };
         }
-        for (fills.keys(), fills.values()) |name, value| {
-            const entry = try self.bound.getOrPut(allocator, name);
-            if (!entry.found_existing) entry.value_ptr.* = value;
-        }
-        return null;
+        return .fits;
     }
 };
 
-/// `surface` filled from `checked`, read through definitions and, in a
-/// theory with ACUI combiners, modulo them; null when it does not fit.
-fn fillOf(
+/// `surface` filled from `checked` modulo the ACUI combiners
+/// (`Holes.materializeSurfaceModuloAcui`), when the fill is `checked`
+/// modulo them.
+fn fillModuloAcui(
     parser: *MM0Parser,
     theorem: *TheoremContext,
     env: *const GlobalEnv,
@@ -362,10 +443,9 @@ fn fillOf(
     canonicalizer: *Canonicalizer,
     surface: *const Expr,
     checked: ExprId,
+    names: ?*Holes.NameFills,
 ) !?ExprId {
-    if (try Holes.fillThroughDefs(parser, theorem, env, surface, checked)) |fill| return fill;
-    if (!registry.hasStructuralCombiners()) return null;
-    return try Holes.materializeSurfaceModuloAcui(
+    const fill = (try Holes.materializeSurfaceModuloAcui(
         parser,
         theorem,
         env,
@@ -373,7 +453,9 @@ fn fillOf(
         canonicalizer,
         surface,
         checked,
-    );
+        names,
+    )) orelse return null;
+    return if (try sameValue(canonicalizer, fill, checked)) fill else null;
 }
 
 /// Walk `surface` and its `fill` (which has the surface's shape) together,
@@ -423,12 +505,4 @@ fn sameValue(canonicalizer: *Canonicalizer, lhs: ExprId, rhs: ExprId) !bool {
 }
 
 /// Whether `expr` holds a named unknown.
-pub fn hasNamed(expr: *const Expr) bool {
-    return switch (expr.*) {
-        .variable => false,
-        .hole => |hole| hole.name != null,
-        .term => |term| for (term.args) |arg| {
-            if (hasNamed(arg)) break true;
-        } else false,
-    };
-}
+pub const hasNamed = SurfaceExpr.containsNamedHole;

@@ -111,10 +111,6 @@ pub fn concreteMatchFailureSpan(
             line,
             info.token_span,
         ),
-        .acui_hole_in_member => |info| proofSpanForSourceSpan(
-            line,
-            info.token_span,
-        ),
         .visible_structure_mismatch => null,
     };
 }
@@ -374,11 +370,6 @@ pub fn addHoleConcreteMatchNotes(
         .acui_several_holes => |info| addProofNoteSpan(
             diag,
             .{ .acui_several_holes = .{ .combiner = info.combiner_name } },
-            proofSpanForSourceSpan(line, info.token_span),
-        ),
-        .acui_hole_in_member => |info| addProofNoteSpan(
-            diag,
-            .{ .acui_hole_in_member = .{ .combiner = info.combiner_name } },
             proofSpanForSourceSpan(line, info.token_span),
         ),
     }

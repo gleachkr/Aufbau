@@ -1,0 +1,7 @@
+-- Every pairing of these members fills `?z` with both `b` and `c`, and
+-- finding that out tries them all: the search stops at its limit.
+
+limit
+-----
+
+l1: $ G , ?x1 → ?z , ?x2 → ?z , ?x3 → ?z , ?x4 → ?z , ?x5 → ?z , ?x6 → ?z , ?x7 → ?z , ?x8 → ?z , ?x9 → ?z , ?x10 → ?z ⊢ r $ by same [#1]

@@ -2115,21 +2115,9 @@ test "two holes in one reordered ACUI context say why they were not filled" {
     try expectAcuiHoleNote(
         line,
         error.HoleConclusionMismatch,
-        "this 'join' combination has more than one hole; its members " ++
-            "are filled out of order only when a single hole stands for " ++
-            "all the members left over",
-        std.mem.lastIndexOf(u8, line, "_ctx").?,
-    );
-}
-
-test "a hole inside a member of a reordered ACUI context says why it was not filled" {
-    const line = "l1: $ ok2 _ctx (B , wk _ctx , A) $ by dup [ok_abwc []]";
-    try expectAcuiHoleNote(
-        line,
-        error.HoleConclusionMismatch,
-        "a hole inside a member of a 'join' combination is filled by " ++
-            "position only; if the rule's conclusion lists the members in " ++
-            "another order, write that member out or reorder the members",
+        "this 'join' combination has more than one hole standing for " ++
+            "whole members; they could share out the members left over " ++
+            "in any way, so write one of them out",
         std.mem.lastIndexOf(u8, line, "_ctx").?,
     );
 }
@@ -2139,9 +2127,9 @@ test "a wrong positional fill of two holes in one ACUI context says why" {
     try expectAcuiHoleNote(
         line,
         error.ConclusionMismatch,
-        "this 'join' combination has more than one hole; its members " ++
-            "are filled out of order only when a single hole stands for " ++
-            "all the members left over",
+        "this 'join' combination has more than one hole standing for " ++
+            "whole members; they could share out the members left over " ++
+            "in any way, so write one of them out",
         std.mem.indexOf(u8, line, ", _ctx)").? + 2,
     );
 }

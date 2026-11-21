@@ -976,7 +976,7 @@ fn validateHoleyAssertionAgainstCandidate(
             expected_line,
             &materialized_report,
         );
-        if (try fillAcuiFrameIfPositionalMisses(
+        if (try fillAcuiIfPositionalMisses(
             parser,
             theorem,
             env,
@@ -1056,10 +1056,11 @@ fn validateHoleyAssertionAgainstCandidate(
     return error.HoleConclusionMismatch;
 }
 
-/// The out-of-order fill of an ACUI combination's hole, when the positional
-/// fill does not equal `candidate` modulo ACUI and the out-of-order one does.
+/// The out-of-order fill of the line's ACUI combinations, when the
+/// positional fill does not equal `candidate` modulo ACUI and the
+/// out-of-order one does.
 /// Null leaves the positional fill to the later checks, as before.
-fn fillAcuiFrameIfPositionalMisses(
+fn fillAcuiIfPositionalMisses(
     parser: *MM0Parser,
     theorem: *TheoremContext,
     env: *const GlobalEnv,
@@ -1083,6 +1084,7 @@ fn fillAcuiFrameIfPositionalMisses(
         canonicalizer,
         holey,
         candidate,
+        null,
     ) orelse return null;
     const canonical = try canonicalizer.canonicalize(framed_line);
     return if (canonical == canonical_candidate) framed_line else null;

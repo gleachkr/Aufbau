@@ -350,9 +350,6 @@ pub const NoteMessage = union(enum) {
     acui_several_holes: struct {
         combiner: []const u8,
     },
-    acui_hole_in_member: struct {
-        combiner: []const u8,
-    },
     expected_expr: struct {
         text: []const u8,
     },
@@ -519,6 +516,7 @@ pub const DiagnosticError = error{
     UnknownPrefixCollision,
     DuplicateInfixToken,
     NamedUnknownConflict,
+    NamedUnknownPairingLimit,
     DuplicateLabel,
     DuplicateRuleName,
     DuplicateSort,
@@ -1578,6 +1576,7 @@ fn compilerErrorSummary(err: DiagnosticError) []const u8 {
         error.DuplicateUnknownPrefix => t("err_DuplicateUnknownPrefix"),
         error.UnknownPrefixCollision => t("err_UnknownPrefixCollision"),
         error.NamedUnknownConflict => t("err_NamedUnknownConflict"),
+        error.NamedUnknownPairingLimit => t("err_NamedUnknownPairingLimit"),
         error.InvalidVarsAnnotation => t("err_InvalidVarsAnnotation"),
         error.VarsStrictSort => t("err_VarsStrictSort"),
         error.VarsFreeSort => t("err_VarsFreeSort"),
@@ -1927,7 +1926,6 @@ pub fn renderNoteMessage(writer: anytype, message: NoteMessage) !void {
         .at_the_mismatch => |info| try printT(writer, "note_at_the_mismatch", .{info.text}),
         .hole_sort_mismatch => |info| try printT(writer, "note_hole_sort_mismatch", .{ info.token, info.expected_sort, info.actual_sort }),
         .acui_several_holes => |info| try printT(writer, "note_acui_several_holes", .{info.combiner}),
-        .acui_hole_in_member => |info| try printT(writer, "note_acui_hole_in_member", .{info.combiner}),
         .expected_expr => |info| try printT(writer, "note_expected_expr", .{info.text}),
         .actual_expr => |info| try printT(writer, "note_actual_expr", .{info.text}),
         .normalized_expected_expr => |info| try printT(writer, "note_normalized_expected_expr", .{info.text}),

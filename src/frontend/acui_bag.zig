@@ -408,3 +408,80 @@ pub fn rightFold(
     }
     return result;
 }
+
+/// Kuhn's augmenting-path matching of members into targets over a
+/// compatibility matrix (`compat[member * targets + target]`), optionally
+/// with one pair forbidden.
+pub const Matching = struct {
+    compat: []const bool,
+    members: usize,
+    targets: usize,
+    /// The member matched to each target.
+    owner: []?usize,
+    seen: []bool,
+    banned: ?[2]usize = null,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        compat: []const bool,
+        members: usize,
+        targets: usize,
+    ) !Matching {
+        std.debug.assert(compat.len == members * targets);
+        const owner = try allocator.alloc(?usize, targets);
+        errdefer allocator.free(owner);
+        return .{
+            .compat = compat,
+            .members = members,
+            .targets = targets,
+            .owner = owner,
+            .seen = try allocator.alloc(bool, targets),
+        };
+    }
+
+    pub fn deinit(self: *Matching, allocator: std.mem.Allocator) void {
+        allocator.free(self.owner);
+        allocator.free(self.seen);
+        self.* = undefined;
+    }
+
+    /// Whether every member can be matched.
+    pub fn run(self: *Matching, banned: ?[2]usize) bool {
+        self.banned = banned;
+        @memset(self.owner, null);
+        for (0..self.members) |member| {
+            @memset(self.seen, false);
+            if (!self.augment(member)) return false;
+        }
+        return true;
+    }
+
+    /// Match as many members as possible; returns how many.
+    pub fn runMaximum(self: *Matching) usize {
+        self.banned = null;
+        @memset(self.owner, null);
+        var matched: usize = 0;
+        for (0..self.members) |member| {
+            @memset(self.seen, false);
+            if (self.augment(member)) matched += 1;
+        }
+        return matched;
+    }
+
+    fn edge(self: *const Matching, member: usize, target: usize) bool {
+        if (self.banned) |pair| if (pair[0] == member and pair[1] == target) return false;
+        return self.compat[member * self.targets + target];
+    }
+
+    fn augment(self: *Matching, member: usize) bool {
+        for (0..self.targets) |target| {
+            if (self.seen[target] or !self.edge(member, target)) continue;
+            self.seen[target] = true;
+            if (self.owner[target] == null or self.augment(self.owner[target].?)) {
+                self.owner[target] = member;
+                return true;
+            }
+        }
+        return false;
+    }
+};

@@ -171,14 +171,9 @@ pub const ConcreteMatchFailure = union(enum) {
         expected_sort_name: []const u8,
         actual_sort_name: []const u8,
     },
-    /// Out-of-order filling needs one hole per ACUI combination.
+    /// Out-of-order filling takes at most one bare hole per ACUI
+    /// combination.
     acui_several_holes: struct {
-        combiner_name: []const u8,
-        token_span: ?SourceSpan,
-    },
-    /// A hole inside one member of an ACUI combination is filled only by
-    /// position.
-    acui_hole_in_member: struct {
         combiner_name: []const u8,
         token_span: ?SourceSpan,
     },
@@ -636,12 +631,41 @@ fn matchDefBody(
     return try session.materializeOptionalBindings();
 }
 
+/// Names filled while filling a line (`materializeSurfaceModuloAcui`): each
+/// occurrence of a named unknown takes one value.
+pub const NameFills = struct {
+    /// Values names already have.
+    bound: *const std.StringHashMapUnmanaged(ExprId),
+    /// Names this fill binds, in binding order, so a failed pairing can
+    /// drop the ones it added.
+    fills: std.StringArrayHashMapUnmanaged(ExprId) = .empty,
+    /// The pairing search stopped at `pairing_step_limit`.
+    limit_hit: bool = false,
+
+    pub fn deinit(self: *NameFills, allocator: std.mem.Allocator) void {
+        self.fills.deinit(allocator);
+    }
+};
+
+/// Pairings one `materializeSurfaceModuloAcui` call with names may try.
+/// Only names make pairing a search: without them each member's fit is
+/// independent, and one matching decides.
+pub const pairing_step_limit = 1_000_000;
+
 /// Fill holes like `materializeSurfaceWithCandidate`, except under an ACUI
-/// combiner: there one hole standing for whole members takes the members of
-/// the candidate the visible ones leave over, in any order (the fewest, under
-/// idempotence; the unit when none are left). Null for a combination with
-/// several holes or a hole inside a member (`acuiFrameObstacle` says which),
-/// and wherever the visible parts do not fit.
+/// combiner, where a member holding a hole is not tied to its position.
+/// Under commutativity each such member is paired with a member of the
+/// candidate the hole-free ones leave, and a bare hole takes the members
+/// left after that: the fewest, under idempotence, and the unit when none
+/// are left. In a sequence the members before and after the bare hole are
+/// the candidate's first and last ones, in order, and the hole takes the
+/// run between them. Null for a combination with two bare holes
+/// (`acuiFrameObstacle`), and wherever the visible parts do not fit.
+///
+/// With `names`, every occurrence of a named unknown takes one value: a
+/// pairing that fills a name two ways is undone and another one tried, up
+/// to `pairing_step_limit` tries (then null, with `names.limit_hit` set).
+/// Without `names` holes are independent.
 ///
 /// Like the positional fill, the result is only a proposal: callers compare
 /// it with the candidate modulo ACUI.
@@ -653,155 +677,380 @@ pub fn materializeSurfaceModuloAcui(
     canonicalizer: *Canonicalizer,
     holey: *const Expr,
     candidate: ExprId,
+    names: ?*NameFills,
 ) !?ExprId {
-    var report = ConcreteMatchReport{};
-    const holey_term = switch (holey.*) {
-        .term => |term| term,
-        else => return try materializeSurfaceWithCandidate(
-            parser,
-            theorem,
-            env,
-            holey,
-            candidate,
-            &report,
-        ),
+    var fill: AcuiFill = .{
+        .parser = parser,
+        .theorem = theorem,
+        .env = env,
+        .registry = registry,
+        .canonicalizer = canonicalizer,
+        .names = names,
     };
-    if (!contains(holey)) {
-        return try materializeSurfaceWithCandidate(
-            parser,
-            theorem,
-            env,
-            holey,
-            candidate,
-            &report,
-        );
-    }
-    if (holey_term.args.len == 2) {
-        if (try registry.resolveStructuralCombiner(env, holey_term.id)) |acui| {
-            return try fillAcuiFrame(
-                parser,
-                theorem,
-                env,
-                canonicalizer,
-                acui,
-                holey,
-                candidate,
-            );
-        }
-    }
-
-    const candidate_app = switch (theorem.interner.node(candidate).*) {
-        .app => |app| app,
-        else => return null,
-    };
-    if (holey_term.id != candidate_app.term_id or
-        holey_term.args.len != candidate_app.args.len)
-    {
-        return null;
-    }
-    const args = try theorem.allocator.alloc(ExprId, holey_term.args.len);
-    errdefer theorem.allocator.free(args);
-    for (holey_term.args, candidate_app.args, 0..) |arg, candidate_arg, idx| {
-        args[idx] = (try materializeSurfaceModuloAcui(
-            parser,
-            theorem,
-            env,
-            registry,
-            canonicalizer,
-            arg,
-            candidate_arg,
-        )) orelse {
-            theorem.allocator.free(args);
+    return fill.fill(holey, candidate) catch |err| switch (err) {
+        error.PairingStepLimit => {
+            names.?.limit_hit = true;
             return null;
-        };
-    }
-    return try theorem.interner.internAppOwned(holey_term.id, args);
+        },
+        else => return err,
+    };
 }
 
-fn fillAcuiFrame(
+const AcuiFill = struct {
     parser: *MM0Parser,
     theorem: *TheoremContext,
     env: *const GlobalEnv,
+    registry: *RewriteRegistry,
     canonicalizer: *Canonicalizer,
-    acui: ResolvedStructuralCombiner,
-    holey: *const Expr,
-    candidate: ExprId,
-) !?ExprId {
-    const allocator = theorem.allocator;
-    var members = std.ArrayListUnmanaged(*const Expr).empty;
-    defer members.deinit(allocator);
-    try collectSurfaceMembers(allocator, holey, acui.head_term_id, &members);
-    const frame_hole = switch (frameOf(env, acui, members.items)) {
-        .frame => |hole| hole,
-        .obstacle => return null,
+    names: ?*NameFills,
+    steps: usize = 0,
+
+    fn fill(self: *AcuiFill, holey: *const Expr, candidate: ExprId) anyerror!?ExprId {
+        var report = ConcreteMatchReport{};
+        if (!contains(holey)) {
+            // A part without holes must be its candidate, as written: a
+            // pairing is chosen by what fits.
+            const written = try self.theorem.internParsedExpr(holey);
+            if (try self.same(written, candidate)) return written;
+            return try keepIfConverts(self.theorem, self.env, candidate, written);
+        }
+        switch (holey.*) {
+            .variable => unreachable,
+            .hole => |hole| {
+                if (!try holeFits(self.parser, self.theorem, self.env, hole, candidate, &report)) {
+                    return null;
+                }
+                const name = hole.name orelse return candidate;
+                const names = self.names orelse return candidate;
+                const value = names.bound.get(name) orelse names.fills.get(name) orelse {
+                    try names.fills.put(self.theorem.allocator, name, candidate);
+                    return candidate;
+                };
+                return if (try self.same(value, candidate)) candidate else null;
+            },
+            .term => |term| {
+                if (term.args.len == 2) {
+                    if (try self.registry.resolveStructuralCombiner(self.env, term.id)) |acui| {
+                        return try self.fillCombination(acui, holey, candidate);
+                    }
+                }
+                const app = switch (self.theorem.interner.node(candidate).*) {
+                    .app => |app| app,
+                    else => return null,
+                };
+                if (term.id != app.term_id or term.args.len != app.args.len) return null;
+                const args = try self.theorem.allocator.alloc(ExprId, term.args.len);
+                defer self.theorem.allocator.free(args);
+                for (term.args, app.args, args) |arg, candidate_arg, *out| {
+                    out.* = (try self.fill(arg, candidate_arg)) orelse return null;
+                }
+                return try self.theorem.interner.internApp(term.id, args);
+            },
+        }
+    }
+
+    fn same(self: *AcuiFill, lhs: ExprId, rhs: ExprId) !bool {
+        if (lhs == rhs) return true;
+        return (try self.canonicalizer.canonicalize(lhs)) ==
+            (try self.canonicalizer.canonicalize(rhs));
+    }
+
+    /// The members of a combination holding a hole, sorted out.
+    const Bag = struct {
+        combiner: AcuiBag.Combiner,
+        members: []const *const Expr,
+        /// Each member's fill, set as members are placed.
+        member_fills: []ExprId,
+        /// The members that take an item of the candidate, in order: the
+        /// visible ones (units written out take none) and those holding
+        /// a hole that are not a bare hole.
+        placed: std.ArrayListUnmanaged(usize) = .empty,
+        /// How many of `placed` come before the bare hole.
+        before: usize = 0,
+        /// The bare hole taking the members nothing else takes.
+        frame: ?usize = null,
+
+        fn isOpen(self: *const Bag, idx: usize) bool {
+            return contains(self.members[idx]);
+        }
     };
 
-    const combiner = AcuiBag.Combiner.fromResolved(acui);
-    const items_bag = combiner.flatten(
-        theorem,
-        try canonicalizer.canonicalize(candidate),
-    ) orelse return null;
-    const items = items_bag.slice();
-    var before = AcuiBag.ExprBag{};
-    var after = AcuiBag.ExprBag{};
-    var past_hole = false;
-    for (members.items) |member| {
-        if (member == frame_hole) {
-            past_hole = true;
-            continue;
+    fn fillCombination(
+        self: *AcuiFill,
+        acui: ResolvedStructuralCombiner,
+        holey: *const Expr,
+        candidate: ExprId,
+    ) !?ExprId {
+        const allocator = self.theorem.allocator;
+        var members: std.ArrayListUnmanaged(*const Expr) = .empty;
+        defer members.deinit(allocator);
+        try collectSurfaceMembers(allocator, holey, acui.head_term_id, &members);
+        const combiner = AcuiBag.Combiner.fromResolved(acui);
+        const items = combiner.flatten(
+            self.theorem,
+            try self.canonicalizer.canonicalize(candidate),
+        ) orelse return null;
+
+        var bag: Bag = .{
+            .combiner = combiner,
+            .members = members.items,
+            .member_fills = try allocator.alloc(ExprId, members.items.len),
+        };
+        defer allocator.free(bag.member_fills);
+        defer bag.placed.deinit(allocator);
+        for (members.items, 0..) |member, idx| {
+            if (member.* == .hole) {
+                if (bag.frame != null) return null;
+                bag.frame = idx;
+                continue;
+            }
+            if (!contains(member)) {
+                const written = try self.theorem.internParsedExpr(member);
+                bag.member_fills[idx] = written;
+                if (combiner.isUnit(self.theorem, try self.canonicalizer.canonicalize(written))) {
+                    continue;
+                }
+            }
+            try bag.placed.append(allocator, idx);
+            if (bag.frame == null) bag.before += 1;
         }
-        const visible = try canonicalizer.canonicalize(
-            try theorem.internParsedExpr(member),
+
+        const placed = if (combiner.law.isCommutative())
+            try self.pairMembers(&bag, items.slice())
+        else
+            try self.alignMembers(&bag, items.slice());
+        if (!placed) return null;
+        var next: usize = 0;
+        return try rebuildMembers(
+            self.theorem,
+            holey,
+            acui.head_term_id,
+            bag.member_fills,
+            &next,
         );
-        if (combiner.isUnit(theorem, visible)) continue;
-        if (!(if (past_hole) after.append(visible) else before.append(visible))) return null;
     }
 
-    // The hole takes the members the visible ones leave. Under C that is a
-    // bag difference; in a sequence the visible members must be the
-    // candidate's leading and trailing ones, and the hole takes the run
-    // between them.
-    var rest: std.ArrayListUnmanaged(ExprId) = .empty;
-    defer rest.deinit(allocator);
-    if (combiner.law.isCommutative()) {
-        var visible = before;
-        for (after.slice()) |member| if (!visible.append(member)) return null;
-        rest = (try Views.subtractMembers(
+    /// A visible member's value as the candidate's members are read.
+    fn visibleValue(self: *AcuiFill, bag: *const Bag, idx: usize) !ExprId {
+        return try self.canonicalizer.canonicalize(bag.member_fills[idx]);
+    }
+
+    /// Sequence: the members before the bare hole fill from the candidate's
+    /// first ones, those after it from its last ones; the hole takes the
+    /// run between. Without a bare hole the counts agree.
+    fn alignMembers(self: *AcuiFill, bag: *Bag, items: []const ExprId) !bool {
+        const placed = bag.placed.items;
+        if (placed.len > items.len) return false;
+        if (bag.frame == null and placed.len != items.len) return false;
+        const tail = items.len - (placed.len - bag.before);
+        for (placed, 0..) |idx, k| {
+            const item = if (k < bag.before) items[k] else items[tail + (k - bag.before)];
+            if (!bag.isOpen(idx)) {
+                if (try self.visibleValue(bag, idx) != item) return false;
+                continue;
+            }
+            bag.member_fills[idx] = (try self.fill(bag.members[idx], item)) orelse return false;
+        }
+        return try self.fillFrame(bag, items[bag.before..tail]);
+    }
+
+    /// Commutative: visible members take their copies of the candidate's
+    /// members, and each open member is paired with one of the rest.
+    fn pairMembers(self: *AcuiFill, bag: *Bag, items: []const ExprId) !bool {
+        const allocator = self.theorem.allocator;
+        var visible = AcuiBag.ExprBag{};
+        var open: std.ArrayListUnmanaged(usize) = .empty;
+        defer open.deinit(allocator);
+        for (bag.placed.items) |idx| {
+            if (bag.isOpen(idx)) {
+                try open.append(allocator, idx);
+            } else if (!visible.append(try self.visibleValue(bag, idx))) return false;
+        }
+        var rest = (try Views.subtractMembers(
             allocator,
-            theorem,
+            self.theorem,
             items,
             visible.slice(),
-            combiner.law.isIdempotent(),
+            bag.combiner.law.isIdempotent(),
             true,
-        )) orelse return null;
-    } else {
-        if (before.len + after.len > items.len) return null;
-        const tail = items.len - after.len;
-        if (!std.mem.eql(ExprId, items[0..before.len], before.slice())) return null;
-        if (!std.mem.eql(ExprId, items[tail..], after.slice())) return null;
-        try rest.appendSlice(allocator, items[before.len..tail]);
+        )) orelse return false;
+        defer rest.deinit(allocator);
+
+        var pairing: Pairing = .{
+            .allocator = allocator,
+            .bag = bag,
+            .open = open.items,
+            .rest = rest.items,
+            .idempotent = bag.combiner.law.isIdempotent(),
+            .fits = try allocator.alloc(?ExprId, open.items.len * rest.items.len),
+            .compat = try allocator.alloc(bool, open.items.len * rest.items.len),
+            .taken = try allocator.alloc(usize, rest.items.len),
+        };
+        defer pairing.deinit();
+        @memset(pairing.taken, 0);
+        // Each open member against each item, its names filled on their
+        // own: a pairing that fits with names fits here.
+        var named = false;
+        {
+            const names = self.names;
+            defer self.names = names;
+            self.names = null;
+            for (open.items, 0..) |idx, i| {
+                if (SurfaceExpr.containsNamedHole(bag.members[idx])) named = true;
+                for (rest.items, 0..) |item, j| {
+                    const fit = try self.fill(bag.members[idx], item);
+                    pairing.fits[i * rest.items.len + j] = fit;
+                    pairing.compat[i * rest.items.len + j] = fit != null;
+                }
+            }
+        }
+        const chosen = try allocator.alloc(usize, open.items.len);
+        defer allocator.free(chosen);
+        if (!try pairing.match(chosen)) return false;
+        if (!named or self.names == null) {
+            for (open.items, chosen, 0..) |idx, j, i| {
+                bag.member_fills[idx] = pairing.fits[i * rest.items.len + j].?;
+                pairing.taken[j] += 1;
+            }
+            return try self.fillLeft(&pairing);
+        }
+        return try self.search(&pairing, 0);
     }
 
-    var report = ConcreteMatchReport{};
-    const filled = (try materializeSurfaceWithCandidate(
-        parser,
-        theorem,
-        env,
-        frame_hole,
-        (try combiner.build(theorem, rest.items)) orelse return null,
-        &report,
-    )) orelse return null;
-    return try internWithFrame(
-        theorem,
-        holey,
-        acui.head_term_id,
-        frame_hole,
-        filled,
-    );
+    const Pairing = struct {
+        allocator: std.mem.Allocator,
+        bag: *Bag,
+        open: []const usize,
+        rest: []const ExprId,
+        idempotent: bool,
+        /// `fits[i * rest.len + j]`: open member `i` filled from item `j`,
+        /// names filled on their own.
+        fits: []?ExprId,
+        compat: []bool,
+        /// How many open members each item is paired with.
+        taken: []usize,
+
+        fn deinit(self: *Pairing) void {
+            self.allocator.free(self.fits);
+            self.allocator.free(self.compat);
+            self.allocator.free(self.taken);
+        }
+
+        fn fitsItem(self: *const Pairing, i: usize, j: usize) bool {
+            return self.compat[i * self.rest.len + j];
+        }
+
+        /// A pairing of every open member, names ignored, into `chosen`.
+        /// Without idempotence each member takes an item of its own, and
+        /// without a bare hole they take every item. Under idempotence an
+        /// item may be shared; the most items are taken, so the bare hole
+        /// takes the fewest, and without one every item is taken.
+        fn match(self: *const Pairing, chosen: []usize) !bool {
+            const open = self.open.len;
+            const items = self.rest.len;
+            if (!self.idempotent) {
+                if (open > items) return false;
+                if (self.bag.frame == null and open != items) return false;
+                var matching = try AcuiBag.Matching.init(self.allocator, self.compat, open, items);
+                defer matching.deinit(self.allocator);
+                if (!matching.run(null)) return false;
+                for (matching.owner, 0..) |owner, j| if (owner) |i| {
+                    chosen[i] = j;
+                };
+                return true;
+            }
+            const transposed = try self.allocator.alloc(bool, open * items);
+            defer self.allocator.free(transposed);
+            for (0..open) |i| for (0..items) |j| {
+                transposed[j * open + i] = self.fitsItem(i, j);
+            };
+            var matching = try AcuiBag.Matching.init(self.allocator, transposed, items, open);
+            defer matching.deinit(self.allocator);
+            if (matching.runMaximum() != items and self.bag.frame == null) return false;
+            for (chosen, 0..) |*out, i| {
+                out.* = matching.owner[i] orelse for (0..items) |j| {
+                    if (self.fitsItem(i, j)) break j;
+                } else return false;
+            }
+            return true;
+        }
+    };
+
+    /// Pair `pairing.open[k..]` with names filled alike, by search over the
+    /// pairs `match` allows; then fill the bare hole.
+    fn search(self: *AcuiFill, pairing: *Pairing, k: usize) !bool {
+        if (k == pairing.open.len) return try self.fillLeft(pairing);
+        const names = self.names.?;
+        const idx = pairing.open[k];
+        for (pairing.rest, 0..) |item, j| {
+            if (!pairing.fitsItem(k, j)) continue;
+            if (pairing.taken[j] != 0 and !pairing.idempotent) continue;
+            // An item equal to one tried before, in the same state, fills
+            // alike.
+            if (std.mem.indexOfScalar(ExprId, pairing.rest[0..j], item)) |earlier| {
+                if ((pairing.taken[earlier] == 0) == (pairing.taken[j] == 0)) continue;
+            }
+            self.steps += 1;
+            if (self.steps > pairing_step_limit) return error.PairingStepLimit;
+            const mark = names.fills.count();
+            if (try self.fill(pairing.bag.members[idx], item)) |member_fill| {
+                pairing.taken[j] += 1;
+                pairing.bag.member_fills[idx] = member_fill;
+                if (try self.search(pairing, k + 1)) return true;
+                pairing.taken[j] -= 1;
+            }
+            names.fills.shrinkRetainingCapacity(mark);
+        }
+        return false;
+    }
+
+    /// The bare hole takes the items no open member takes; without one,
+    /// there must be none.
+    fn fillLeft(self: *AcuiFill, pairing: *const Pairing) !bool {
+        var left: std.ArrayListUnmanaged(ExprId) = .empty;
+        defer left.deinit(self.theorem.allocator);
+        for (pairing.rest, pairing.taken) |item, taken| {
+            if (taken == 0) try left.append(self.theorem.allocator, item);
+        }
+        return try self.fillFrame(pairing.bag, left.items);
+    }
+
+    fn fillFrame(self: *AcuiFill, bag: *Bag, left: []const ExprId) !bool {
+        const frame = bag.frame orelse return left.len == 0;
+        const value = (try bag.combiner.build(self.theorem, left)) orelse return false;
+        const mark = if (self.names) |names| names.fills.count() else 0;
+        bag.member_fills[frame] = (try self.fill(bag.members[frame], value)) orelse {
+            if (self.names) |names| names.fills.shrinkRetainingCapacity(mark);
+            return false;
+        };
+        return true;
+    }
+};
+
+/// `expr`'s spine under `head` with its members, left to right, replaced
+/// by `fills`.
+fn rebuildMembers(
+    theorem: *TheoremContext,
+    expr: *const Expr,
+    head: u32,
+    fills: []const ExprId,
+    next: *usize,
+) !ExprId {
+    switch (expr.*) {
+        .term => |term| if (term.id == head and term.args.len == 2) {
+            const lhs = try rebuildMembers(theorem, term.args[0], head, fills, next);
+            const rhs = try rebuildMembers(theorem, term.args[1], head, fills, next);
+            return try theorem.interner.internApp(head, &.{ lhs, rhs });
+        },
+        else => {},
+    }
+    defer next.* += 1;
+    return fills[next.*];
 }
 
 /// Why the first ACUI combination of `holey` that holds a hole cannot be
-/// filled out of order, if one cannot.
+/// filled out of order, if one cannot: it has two bare holes, which could
+/// split the leftover members any way.
 pub fn acuiFrameObstacle(
     allocator: std.mem.Allocator,
     env: *const GlobalEnv,
@@ -817,18 +1066,22 @@ pub fn acuiFrameObstacle(
         if (try registry.resolveStructuralCombiner(env, term.id)) |acui| {
             var members = std.ArrayListUnmanaged(*const Expr).empty;
             defer members.deinit(allocator);
-            try collectSurfaceMembers(
-                allocator,
-                holey,
-                acui.head_term_id,
-                &members,
-            );
-            // A member holding a hole is itself an obstacle, so there is
-            // nothing further down to report.
-            return switch (frameOf(env, acui, members.items)) {
-                .frame => null,
-                .obstacle => |obstacle| obstacle,
-            };
+            try collectSurfaceMembers(allocator, holey, acui.head_term_id, &members);
+            var frame: ?*const Expr = null;
+            for (members.items) |member| {
+                if (member.* != .hole) {
+                    if (try acuiFrameObstacle(allocator, env, registry, member)) |obstacle| {
+                        return obstacle;
+                    }
+                    continue;
+                }
+                if (frame != null) return .{ .acui_several_holes = .{
+                    .combiner_name = env.terms.items[acui.head_term_id].name,
+                    .token_span = member.hole.token_span,
+                } };
+                frame = member;
+            }
+            return null;
         }
     }
     for (term.args) |arg| {
@@ -839,45 +1092,8 @@ pub fn acuiFrameObstacle(
     return null;
 }
 
-const Frame = union(enum) {
-    /// The combination's one hole, standing for whole members.
-    frame: *const Expr,
-    obstacle: ConcreteMatchFailure,
-};
-
-/// The hole that stands for the leftover members of a combination holding
-/// at least one hole.
-fn frameOf(
-    env: *const GlobalEnv,
-    acui: ResolvedStructuralCombiner,
-    members: []const *const Expr,
-) Frame {
-    const combiner_name = env.terms.items[acui.head_term_id].name;
-    var frame: ?*const Expr = null;
-    for (members) |member| {
-        switch (member.*) {
-            .hole => |hole| {
-                if (frame != null) return .{ .obstacle = .{
-                    .acui_several_holes = .{
-                        .combiner_name = combiner_name,
-                        .token_span = hole.token_span,
-                    },
-                } };
-                frame = member;
-            },
-            else => if (contains(member)) return .{ .obstacle = .{
-                .acui_hole_in_member = .{
-                    .combiner_name = combiner_name,
-                    .token_span = firstHoleSourceSpan(member),
-                },
-            } },
-        }
-    }
-    return .{ .frame = frame.? };
-}
-
 /// The members of a surface combination: its leaves under `head`.
-fn collectSurfaceMembers(
+pub fn collectSurfaceMembers(
     allocator: std.mem.Allocator,
     expr: *const Expr,
     head: u32,
@@ -892,28 +1108,6 @@ fn collectSurfaceMembers(
         else => {},
     }
     try out.append(allocator, expr);
-}
-
-/// Intern a surface combination as written, with `filled` in place of the
-/// frame hole.
-fn internWithFrame(
-    theorem: *TheoremContext,
-    expr: *const Expr,
-    head: u32,
-    frame: *const Expr,
-    filled: ExprId,
-) !ExprId {
-    if (expr == frame) return filled;
-    switch (expr.*) {
-        .term => |term| if (term.id == head and term.args.len == 2) {
-            return try theorem.interner.internApp(head, &.{
-                try internWithFrame(theorem, term.args[0], head, frame, filled),
-                try internWithFrame(theorem, term.args[1], head, frame, filled),
-            });
-        },
-        else => {},
-    }
-    return try theorem.internParsedExpr(expr);
 }
 
 /// Match a holey assertion against a selected concrete candidate.

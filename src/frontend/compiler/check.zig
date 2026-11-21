@@ -735,7 +735,7 @@ pub const LineWalk = struct {
         surface: *const Expr,
         checked: ExprId,
     ) !void {
-        const name = try self.unknowns.record(
+        const name = (self.unknowns.record(
             self.allocator,
             &self.theory.parser,
             self.theorem,
@@ -743,17 +743,29 @@ pub const LineWalk = struct {
             &self.theory.registry,
             surface,
             checked,
-        ) orelse return;
+        ) catch |err| switch (err) {
+            error.NamedUnknownPairingLimit => return self.failUnknowns(line, error.NamedUnknownPairingLimit, null),
+            else => return err,
+        }) orelse return;
+        return self.failUnknowns(line, error.NamedUnknownConflict, name);
+    }
+
+    fn failUnknowns(
+        self: *LineWalk,
+        line: ProofLine,
+        err: CompilerDiag.DiagnosticError,
+        name: ?[]const u8,
+    ) CompilerDiag.DiagnosticError {
         self.compiler.setProof(CompilerDiag.withPhase(.{
             .kind = .generic,
-            .err = error.NamedUnknownConflict,
+            .err = err,
             .theorem_name = self.assertion.name,
             .line_label = line.label,
             .rule_name = line.application.rule_name,
             .name = name,
             .span = line.assertion.span,
         }, .theorem_application));
-        return error.NamedUnknownConflict;
+        return err;
     }
 
     /// Check each explicit binding of `app` and its inline sub-proofs that
@@ -779,7 +791,7 @@ pub const LineWalk = struct {
         for (app.arg_bindings) |binding| {
             const surface = (try self.bindingSurface(rule, binding)) orelse continue;
             if (!Holes.contains(surface.expr)) continue;
-            const fit = try self.unknowns.recordBinding(
+            const fit = self.unknowns.recordBinding(
                 self.allocator,
                 &self.theory.parser,
                 self.theorem,
@@ -787,7 +799,13 @@ pub const LineWalk = struct {
                 &self.theory.registry,
                 surface.expr,
                 rule_line.bindings[surface.arg_index],
-            );
+            ) catch |err| switch (err) {
+                error.NamedUnknownPairingLimit => {
+                    self.reportBinding(line, app, binding, error.NamedUnknownPairingLimit, binding.name);
+                    return error.NamedUnknownPairingLimit;
+                },
+                else => return err,
+            };
             switch (fit) {
                 .fits => continue,
                 .mismatch => {

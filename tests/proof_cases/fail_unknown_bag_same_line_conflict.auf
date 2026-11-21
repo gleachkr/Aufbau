@@ -1,0 +1,6 @@
+-- `?a` would have to be both `p` and `q`.
+
+split
+-----
+
+l1: $ G , ?a , ?a ⊢ r $ by same [#1]

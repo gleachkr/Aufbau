@@ -590,15 +590,8 @@ const Solver = struct {
         for (members, 0..) |member, i| for (targets, 0..) |target, j| {
             compat[i * targets.len + j] = try self.compatible(member, target);
         };
-        var matcher = Matching{
-            .compat = compat,
-            .members = members.len,
-            .targets = targets.len,
-            .owner = try allocator.alloc(?usize, targets.len),
-            .seen = try allocator.alloc(bool, targets.len),
-        };
-        defer allocator.free(matcher.owner);
-        defer allocator.free(matcher.seen);
+        var matcher = try AcuiBag.Matching.init(allocator, compat, members.len, targets.len);
+        defer matcher.deinit(allocator);
         if (!matcher.run(null)) return error.Clash;
         const assignment = try allocator.alloc(usize, members.len);
         errdefer allocator.free(assignment);
@@ -704,45 +697,6 @@ const Solver = struct {
             } else false,
             else => false,
         };
-    }
-};
-
-/// Kuhn's augmenting-path matching of members into targets over a
-/// compatibility matrix, optionally with one pair forbidden.
-const Matching = struct {
-    compat: []const bool,
-    members: usize,
-    targets: usize,
-    owner: []?usize,
-    seen: []bool,
-    banned: ?[2]usize = null,
-
-    /// Whether every member can be matched.
-    fn run(self: *Matching, banned: ?[2]usize) bool {
-        self.banned = banned;
-        @memset(self.owner, null);
-        for (0..self.members) |member| {
-            @memset(self.seen, false);
-            if (!self.augment(member)) return false;
-        }
-        return true;
-    }
-
-    fn edge(self: *const Matching, member: usize, target: usize) bool {
-        if (self.banned) |pair| if (pair[0] == member and pair[1] == target) return false;
-        return self.compat[member * self.targets + target];
-    }
-
-    fn augment(self: *Matching, member: usize) bool {
-        for (0..self.targets) |target| {
-            if (self.seen[target] or !self.edge(member, target)) continue;
-            self.seen[target] = true;
-            if (self.owner[target] == null or self.augment(self.owner[target].?)) {
-                self.owner[target] = member;
-                return true;
-            }
-        }
-        return false;
     }
 };
 

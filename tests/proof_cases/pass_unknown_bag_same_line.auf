@@ -1,0 +1,38 @@
+-- Two occurrences of a name in one context are filled alike: `?a` takes
+-- the member that occurs twice, wherever the line puts its copies.
+
+alone
+-----
+
+l1: $ G , ?a , ?b , ?a ⊢ r $ by same [#1]
+
+-- A later line fixes `?b`, so the first line is checked with a visible
+-- member among its holes.
+forced
+------
+
+l1: $ G , ?a , ?b , ?a ⊢ r $ by same [#1]
+l2: $ G , p , ?b , p ⊢ r $ by same [l1]
+
+inner
+-----
+
+l1: $ G , ?a , q , ?a ⊢ r $ by same [#1]
+
+framed
+------
+
+l1: $ ?Γa , ?a , ?a ⊢ r $ by same [#1]
+l2: $ ?Γa , p , p ⊢ r $ by same [l1]
+
+-- Holes inside members are paired out of order without names too.
+anonymous
+---------
+
+l1: $ G , _wff , q , _wff ⊢ r $ by same [#1]
+
+-- The visible part of a member decides which member it pairs with.
+visible
+-------
+
+l1: $ G , _wff ∧ q , _wff ∧ r ⊢ s $ by same [#1]

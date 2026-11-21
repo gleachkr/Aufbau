@@ -500,16 +500,13 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_hole_structure_mismatch",
         .outcome = .{ .fail = error.HoleConclusionMismatch },
     },
-    // Holes that cannot be filled out of order: several in one ACUI
-    // context, or one inside a member.
+    // Two holes standing for whole members of one ACUI context cannot be
+    // filled out of order; a hole inside a member can.
     .{
         .stem = "fail_hole_acui_several_holes",
         .outcome = .{ .fail = error.HoleConclusionMismatch },
     },
-    .{
-        .stem = "fail_hole_acui_hole_in_member",
-        .outcome = .{ .fail = error.HoleConclusionMismatch },
-    },
+    .{ .stem = "pass_hole_acui_hole_in_member", .outcome = .pass },
     .{
         .stem = "fail_hole_acui_positional_wrong",
         .outcome = .{ .fail = error.ConclusionMismatch },
@@ -1098,6 +1095,13 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "fail_unknown_binding_conflict", .outcome = .{ .fail = error.NamedUnknownConflict } },
     // One name filled with two values on one line.
     .{ .stem = "fail_unknown_conflict", .outcome = .{ .fail = error.NamedUnknownConflict } },
+    // The occurrences of a name in one ACUI context take one value
+    // wherever the line puts them, also once a later line fixes a sibling
+    // name; a line that would need two values is a conflict, and a pairing
+    // search that cannot finish stops at its limit.
+    .{ .stem = "pass_unknown_bag_same_line", .outcome = .pass },
+    .{ .stem = "fail_unknown_bag_same_line_conflict", .outcome = .{ .fail = error.NamedUnknownConflict } },
+    .{ .stem = "fail_unknown_pairing_limit", .outcome = .{ .fail = error.NamedUnknownPairingLimit } },
     // Equations that clash solve nothing; the walk reports the mismatch.
     .{ .stem = "fail_unknown_later_clash", .outcome = .{ .fail = error.ConclusionMismatch } },
     // A prefix an earlier token starts with, and a token a later

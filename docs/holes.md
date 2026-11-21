@@ -161,10 +161,13 @@ Then the lines are checked in order. A solved name is written as its
 value. An unsolved one is a hole whose first fill binds it: every later
 occurrence takes that value, and a later line that fills it differently is
 an error (`NamedUnknownConflict`), as is one line filling it twice
-differently. Within one line the occurrences of a name are still filled
-independently, so a line whose own inference guesses (an ambiguous ACUI
-split) can fill them differently. A line that checks through a rewrite
-that changes its shape binds nothing.
+differently. The occurrences of a name in one line are filled alike: in
+an ACUI context the members that hold names are paired with the context's
+members so that each name takes one value, so `G , ?a , ?b , ?a` against
+`G , p , p , q` fills `?a` with `p` and `?b` with `q`. That pairing is a
+search; it stops after 1,000,000 tries with `NamedUnknownPairingLimit`.
+A line that checks through a rewrite that changes its shape binds
+nothing.
 
 A name may also stand in an explicit binding, so that a rule application
 says which unknown a binder is: `imp_intro (a := $ ?h $)` discharges the
@@ -458,9 +461,11 @@ l1: $ ok2 (A , _ctx) (_ctx , A) $ by dup [ok_ab []]
 checks, with each `_ctx` standing for `B`. Order is ignored only under a
 commutative combiner. Without commutativity the visible members must be the
 context's first and last ones, in order, and the hole takes the run between
-them. This takes exactly one hole among a context's members. A context with two holes, or with a hole inside
-a member such as `wk _ctx`, is filled by position only; when the line then
-fails, the error says which hole is in the way.
+them. A member that holds a hole, such as `wk _ctx`, is paired with a
+context member it fits (in a sequence, with the one at its place). Only
+one hole may stand for whole members: two could share out the leftover
+members in any way, so such a context is filled by position only, and
+when the line then fails the error names the second hole.
 
 ACUI matching can sometimes admit more than one valid context
 binding — for example, both `g = ∅` and `g = P` may satisfy

@@ -32,7 +32,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   name with its value, or with its shape so far ("Partly inferred
   expression"); an open goal's report shows what later lines fix of its
   names; and the apply-rule action names a rule variable the goal leaves
-  open, so the premises that mention it share it.
+  open, so the premises that mention it share it. The occurrences of a name in one line
+  take one value: in an ACUI context the members holding names are paired
+  with the context's (`G , ?a , ?b , ?a` against `G , p , p , q`), by a
+  search that stops after 1,000,000 tries (`NamedUnknownPairingLimit`).
 
 ### Changed
 
@@ -47,6 +50,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   statement declares is an error at the annotation
   (`UndeclaredAnnotationLaw`). Before, the name was accepted, and the
   conversions it should have allowed failed later with no hint why.
+
+- A hole inside a member of an ACUI context (`wk _ctx`, `_wff → q`) is
+  filled whatever order the rule's conclusion puts the members in: each
+  such member is paired with a member it fits. Before, it was filled by
+  position only. A context may still hold only one hole standing for whole
+  members.
 
 ### Fixed
 

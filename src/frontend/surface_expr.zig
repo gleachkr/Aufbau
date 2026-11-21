@@ -22,6 +22,17 @@ pub fn containsHole(expr: *const Expr) bool {
     };
 }
 
+/// Whether `expr` holds a named unknown (`?a`).
+pub fn containsNamedHole(expr: *const Expr) bool {
+    return switch (expr.*) {
+        .hole => |hole| hole.name != null,
+        .variable => false,
+        .term => |term| for (term.args) |arg| {
+            if (containsNamedHole(arg)) break true;
+        } else false,
+    };
+}
+
 pub fn firstHoleSourceSpan(expr: *const Expr) ?SourceSpan {
     return switch (expr.*) {
         .hole => |hole| hole.token_span,
