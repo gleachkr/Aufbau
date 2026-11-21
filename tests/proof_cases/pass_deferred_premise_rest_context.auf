@@ -1,0 +1,7 @@
+gen0
+----
+l1: $ q ⊢ A. x P x $ by all_intro [#1]
+
+gen2
+----
+l1: $ r , q , s ⊢ A. x P x $ by all_intro [#1]

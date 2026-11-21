@@ -659,8 +659,9 @@ test "a definition's dummy is a variable the proof names" {
     var counters = types.SearchCounters{};
     // `some_p` unfolds to `∃ y P y` with `y` a dummy; `ex_intro` takes the
     // witness `C` from the context, and the dummy, which the printed proof
-    // leaves to the checker, is named at close-out. The checker reads
-    // `ax`'s `a` through `some_p`, so the suggestion leaves it out.
+    // leaves to the checker, is named at close-out. Either of `ax`'s
+    // binders alone lets the checker infer the other (`a` read through
+    // `some_p`, or `g` as the empty side context); trimming drops `g` first.
     var suggestions = try ndFolSearch(
         &arena,
         "def some_p {.y: obj}: wff = $ ∃ y P y $;\n" ++
@@ -672,7 +673,7 @@ test "a definition's dummy is a variable the proof names" {
     );
     defer suggestions.deinit();
 
-    try expectOffered(suggestions.items, &.{"ex_intro [ax (g := $ ∅ $) []]"});
+    try expectOffered(suggestions.items, &.{"ex_intro [ax (a := $ P C $) []]"});
     try std.testing.expectEqual(@as(usize, 0), counters.core_rejects);
 }
 

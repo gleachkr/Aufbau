@@ -1,0 +1,61 @@
+-- #662: ∀I with a side context and no @view. The conclusion `g , d ⊢ A. x p`
+-- is compared with the line after the premise binds `g`; the side context
+-- `d` takes whatever the line's context holds besides `g` — nothing (`gen0`)
+-- or several members (`gen2`) — not just a member it happens to line up with
+-- in the sorted normal form.
+delimiter $ [ / ] $;
+import "lib/ctx.mm0";
+
+sort var;
+sort nm;
+sort tm;
+term v2t (v: var): tm;
+coercion v2t: var > tm;
+term n2t (a: nm): tm;
+coercion n2t: nm > tm;
+
+term iff (p q: wff): wff;
+infixr iff: $↔$ prec 20;
+term eq (s t: tm): wff;
+infixl eq: $=$ prec 50;
+term P (t: tm): wff;
+term all {x: var} (p: wff x): wff;
+notation all {x: var} (p: wff x): wff = ($A.$:41) x p;
+term nd (g: ctx) (p: wff): wff;
+infixl nd: $⊢$ prec 0;
+
+term sb_t {x: var} (t: tm x) (s: tm x): tm;
+notation sb_t {x: var} (t: tm x) (s: tm x): tm = ($subst$:41) x ($/$:0) t s;
+term sb_f {x: var} (t: tm x) (p: wff x): wff;
+notation sb_f {x: var} (t: tm x) (p: wff x): wff = ($[$:41) x ($/$:0) t ($]$:0) p;
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (p: wff): $ p ↔ p $;
+axiom iff_trans (p q r: wff): $ p ↔ q $ > $ q ↔ r $ > $ p ↔ r $;
+axiom iff_sym (p q: wff): $ p ↔ q $ > $ q ↔ p $;
+axiom iff_mp (p q: wff): $ p ↔ q $ > $ p $ > $ q $;
+--| @relation tm eq eq_refl eq_trans eq_sym _
+axiom eq_refl (s: tm): $ s = s $;
+axiom eq_trans (s t v: tm): $ s = t $ > $ t = v $ > $ s = v $;
+axiom eq_sym (s t: tm): $ s = t $ > $ t = s $;
+
+--| @congr
+axiom P_congr (s t: tm): $ s = t $ > $ P s ↔ P t $;
+--| @congr
+axiom hyp_congr (p q: wff): $ p ↔ q $ > $ ctx_eq (hyp p) (hyp q) $;
+--| @congr
+axiom nd_congr (g h: ctx) (p q: wff): $ ctx_eq g h $ > $ p ↔ q $ > $ (g ⊢ p) ↔ (h ⊢ q) $;
+
+--| @rewrite
+axiom sb_f_P {x: var} (t: tm x) (s: tm x): $ [x/t] (P s) ↔ P (subst x / t s) $;
+--| @rewrite
+axiom sb_t_var {x: var} (t: tm x): $ (subst x / t x) = t $;
+--| @rewrite
+axiom sb_t_irrel {x: var} (t: tm x) (s: tm): $ (subst x / t s) = s $;
+
+axiom all_intro {x: var} {a: nm} (g d: ctx x) (p: wff x):
+  $ g ⊢ [x/a] p $ > $ g , d ⊢ A. x p $;
+
+theorem gen0 {x: var} {a: nm} (q: wff): $ q ⊢ P a $ > $ q ⊢ A. x P x $;
+theorem gen2 {x: var} {a: nm} (q r s: wff):
+  $ q ⊢ P a $ > $ r , q , s ⊢ A. x P x $;

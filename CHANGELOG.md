@@ -75,6 +75,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   did not match it, and `@recover` could not read its target through the
   hole. The target is now read off the visible parts (`a` from `F a`), so
   such a line checks and the hole is filled.
+- ∀I without a `@view` (`$ g ⊢ [x/a] p $ > $ g , d ⊢ A. x p $`) failed
+  unless `x` and `p` were given, although the conclusion fixes them and the
+  premise then fixes `a`, as `docs/view_recover.md` describes. Reading `a`
+  off the premise stopped on the still unknown `a`, and the side context `d`
+  matched only when the line's context had exactly one member beside `g`.
+  `d` now takes whatever the line's context holds besides `g`, the empty
+  context included.
 - A line that needs a fact converted along a relation declared with `_`
   for its transport failed with "unexpected internal error". It is now
   `MissingTransport`, naming the sort whose `@relation` lacks the rule.

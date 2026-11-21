@@ -11,6 +11,7 @@ const MatchState = @import("./match_state.zig");
 const SharedContext = @import("./shared_context.zig").SharedContext;
 const SymbolicEngine = @import("./symbolic_engine.zig").SymbolicEngine;
 const Containers = @import("../containers.zig");
+const AcuiBag = @import("../acui_bag.zig");
 
 const cloneMap = Containers.cloneMap;
 
@@ -983,6 +984,60 @@ pub const RuleMatchSession = struct {
         };
     }
 
+    /// A commutative `@acui` pattern bag whose members are known except for
+    /// one bare binder, as `ga ; de` is once `ga` is bound: the binder takes
+    /// what the actual bag holds besides the known members, the unit when
+    /// that is nothing. The walk below compares normal forms position by
+    /// position, which pairs such a binder with one member only when the
+    /// two bags happen to line up. Null when the pattern is not such a bag,
+    /// or a known member is missing from the actual one; the walk then
+    /// decides. False when the binder cannot take the rest (its dependency
+    /// restrictions), which no other pairing would change.
+    fn matchNormalizedRestMember(
+        self: *RuleMatchSession,
+        view: *NormalizedView,
+        pattern_expr: ExprId,
+        actual_expr: ExprId,
+    ) anyerror!?bool {
+        const registry = self.shared.registry orelse return null;
+        const theorem = &view.mirror.theorem;
+        const head = switch (theorem.interner.node(pattern_expr).*) {
+            .app => |app| app.term_id,
+            .variable, .placeholder => return null,
+        };
+        // Read the bags as the normal forms hold them: without a unit law,
+        // the unit is a member and no bag is empty.
+        const combiner = AcuiBag.Combiner.provable(registry, self.shared.env, head) orelse
+            return null;
+        if (!combiner.law.isCommutative()) return null;
+        if ((try self.mirrorExprToConcrete(actual_expr, view)) == null) return null;
+        const pattern_bag = combiner.flatten(theorem, pattern_expr) orelse return null;
+        var rest = combiner.flatten(theorem, actual_expr) orelse return null;
+
+        var target: ?NormalizedPlaceholderTarget = null;
+        for (pattern_bag.slice()) |member| {
+            if (view.placeholderTarget(member)) |member_target| {
+                if (member_target == .hole or target != null) return null;
+                target = member_target;
+                continue;
+            }
+            if ((try self.mirrorExprToConcrete(member, view)) == null) return null;
+            // Normal forms are interned in one mirror, so equal members are
+            // one expression.
+            const idx = std.mem.indexOfScalar(ExprId, rest.slice(), member) orelse
+                return null;
+            std.mem.copyForwards(
+                ExprId,
+                rest.items[idx .. rest.len - 1],
+                rest.items[idx + 1 .. rest.len],
+            );
+            rest.len -= 1;
+        }
+        const rest_target = target orelse return null;
+        const rest_expr = try combiner.build(theorem, rest.slice()) orelse return null;
+        return try self.assignNormalizedTarget(rest_target, rest_expr, view);
+    }
+
     fn matchNormalizedPattern(
         self: *RuleMatchSession,
         view: *NormalizedView,
@@ -995,6 +1050,9 @@ pub const RuleMatchSession = struct {
         }
         if (view.placeholderTarget(actual_expr)) |target| {
             if (target == .hole) return true;
+        }
+        if (try self.matchNormalizedRestMember(view, pattern_expr, actual_expr)) |matched| {
+            return matched;
         }
 
         var symbolic_engine = self.engine();

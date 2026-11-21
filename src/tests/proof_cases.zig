@@ -763,6 +763,9 @@ const proof_cases = [_]ProofCase{
     // #662: the retried premise `[x/a] p` reads the eigenvariable `a` off
     // its normal form once the conclusion has fixed `x` and `p`.
     .{ .stem = "pass_deferred_premise_reads_eigenvariable", .outcome = .pass },
+    // #662: the same rule beside a side context that the conclusion's
+    // normal form leaves empty or gives several members.
+    .{ .stem = "pass_deferred_premise_rest_context", .outcome = .pass },
     // Lean0 model-levels: a premise keeping a def application matches a
     // pattern holding the def's body, whose arguments the unfolding fixes.
     .{ .stem = "pass_def_premise_against_unfolded_pattern", .outcome = .pass },
