@@ -87,8 +87,10 @@ pub const Compiler = struct {
 
         var arena = ArenaAllocator.init(self.allocator);
         defer arena.deinit();
+        var theorem_scratch = ArenaAllocator.init(self.allocator);
+        defer theorem_scratch.deinit();
 
-        var compiler_context = self.context();
+        var compiler_context = self.runContext(&theorem_scratch);
         try Pipeline.run(&compiler_context, arena.allocator(), null);
         try self.diagnostics.promoteWarningsToErrors();
     }
@@ -127,9 +129,11 @@ pub const Compiler = struct {
 
         var arena = ArenaAllocator.init(self.allocator);
         defer arena.deinit();
+        var theorem_scratch = ArenaAllocator.init(self.allocator);
+        defer theorem_scratch.deinit();
 
         var emit = PipelineOutput{};
-        var compiler_context = self.context();
+        var compiler_context = self.runContext(&theorem_scratch);
         try Pipeline.run(&compiler_context, arena.allocator(), &emit);
         try self.diagnostics.promoteWarningsToErrors();
 
@@ -222,6 +226,15 @@ pub const Compiler = struct {
 
     fn clearDiagnostics(self: *Compiler) void {
         self.diagnostics.clear();
+    }
+
+    /// The context for a compile-path run: each theorem's work goes to
+    /// `theorem_scratch`, unless a check memo, which keeps what a check
+    /// allocates, is attached.
+    fn runContext(self: *Compiler, theorem_scratch: *ArenaAllocator) CompilerContext {
+        var result = self.context();
+        if (result.check_memo == null) result.theorem_scratch = theorem_scratch;
+        return result;
     }
 
     fn context(self: *Compiler) CompilerContext {

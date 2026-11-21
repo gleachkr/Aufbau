@@ -1,10 +1,13 @@
 const std = @import("std");
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
+const ExprId = @import("../../expr.zig").ExprId;
 const MmbWriter = @import("../mmb_writer.zig");
 const TermRecord = MmbWriter.TermRecord;
 const TheoremRecord = MmbWriter.TheoremRecord;
 const Statement = MmbWriter.Statement;
+const StmtCmd = @import("../../../trusted/proof.zig").StmtCmd;
+const CheckedLine = @import("../../checked_ir.zig").CheckedLine;
 const Metadata = @import("../metadata.zig");
 const Sort = @import("../../../trusted/sorts.zig").Sort;
 const Expr = @import("../../../trusted/expressions.zig").Expr;
@@ -1114,8 +1117,6 @@ pub fn processAssertion(
     assertion: AssertionStmt,
     emit: ?*Output,
 ) !void {
-    const parser = &theory.parser;
-    const env = &theory.env;
     if (assertion.kind != .theorem) {
         return try processNonTheoremAssertion(
             self,
@@ -1127,11 +1128,8 @@ pub fn processAssertion(
     }
 
     if (proof_parser.*) |*proofs| {
-        var theorem = TheoremContext.init(allocator);
-        defer theorem.deinit();
-
-        try theorem.seedAssertion(assertion);
-        const theorem_concl = try theorem.internParsedExpr(assertion.concl);
+        // The lemmas before the theorem's block are checked here, each in
+        // the per-theorem arena, so the theorem's own work starts after.
         const block = try nextTheoremBlock(
             self,
             allocator,
@@ -1141,14 +1139,22 @@ pub fn processAssertion(
             CompilerDiag.mathSpanToSpan(assertion.name_span),
             emit,
         );
-        const checked = Check.checkTheoremBlock(
+        const scratch = theoremAllocator(self, allocator);
+        defer releaseTheoremScratch(self);
+        var theorem = TheoremContext.init(scratch);
+        defer theorem.deinit();
+
+        try theorem.seedAssertion(assertion);
+        const theorem_concl = try theorem.internParsedExpr(assertion.concl);
+        const checked = checkBlock(
             self,
-            allocator,
+            scratch,
             theory,
             assertion,
             block,
             &theorem,
             theorem_concl,
+            .direct,
         ) catch |err| {
             self.setIfMissing(
                 CompilerDiag.theoremDiagnostic(
@@ -1160,50 +1166,19 @@ pub fn processAssertion(
             );
             return err;
         };
-        if (emit) |out| {
-            const unify = try CompilerEmit.buildAssertionUnifyStream(
-                allocator,
-                &theorem,
-                theorem_concl,
-            );
-            const args = try CompilerEmit.buildArgArray(parser, assertion.args);
-            const hyp_names = try CompilerEmit.buildHypNames(
-                allocator,
-                assertion.hyps.len,
-            );
-            const body = CompilerEmit.buildTheoremProofBody(
-                allocator,
-                &theorem,
-                env,
-                checked,
-            ) catch |err| {
-                self.setIfMissing(
-                    CompilerDiag.theoremDiagnostic(
-                        assertion.name,
-                        block.name_span,
-                        .proof,
-                        CompilerDiag.narrowDiagnosticError(err),
-                    ),
-                );
-                return err;
-            };
-            warnLargeProofHeap(self, assertion.name, block.name_span, body);
-            try out.theorems.append(allocator, .{
-                .args = args,
-                .unify = unify,
-                .name = assertion.name,
-                .var_names = try CompilerEmit.buildTheoremVarNames(
-                    allocator,
-                    assertion.arg_names,
-                    theorem.theorem_dummies.items.len,
-                ),
-                .hyp_names = hyp_names,
-            });
-            try out.statements.append(allocator, .{
-                .cmd = .Thm,
-                .body = body.bytes,
-            });
-        }
+        if (emit) |out| try emitCheckedTheorem(
+            self,
+            allocator,
+            scratch,
+            theory,
+            out,
+            assertion,
+            &theorem,
+            theorem_concl,
+            checked,
+            block.name_span,
+            .Thm,
+        );
     }
 
     try registerAssertion(
@@ -1213,6 +1188,127 @@ pub fn processAssertion(
         assertion,
         .mm0,
     );
+}
+
+/// The allocator for one theorem's or lemma's own work: the compile path's
+/// per-theorem arena (`CompilerContext.theorem_scratch`), else the run's.
+fn theoremAllocator(
+    self: *const CompilerContext,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator {
+    const arena = self.theorem_scratch orelse return allocator;
+    return arena.allocator();
+}
+
+/// Forget a theorem's work once its records are out. The arena keeps its
+/// largest chunk for the next theorem, except in a safe build, which gives
+/// the memory back so that a pointer outliving its theorem faults.
+fn releaseTheoremScratch(self: *const CompilerContext) void {
+    const arena = self.theorem_scratch orelse return;
+    _ = arena.reset(if (std.debug.runtime_safety) .free_all else .retain_capacity);
+}
+
+const CheckMode = enum { direct, memoized };
+
+/// Check `block` as `assertion`'s proof. With a per-theorem arena the
+/// parser allocates there meanwhile: the proof's math and the theorem's
+/// dummy variables are the theorem's own, and a check parses no statement.
+fn checkBlock(
+    self: *CompilerContext,
+    scratch: std.mem.Allocator,
+    theory: *TheoryState,
+    assertion: AssertionStmt,
+    block: TheoremBlock,
+    theorem: *TheoremContext,
+    theorem_concl: ExprId,
+    mode: CheckMode,
+) ![]const CheckedLine {
+    const parser = &theory.parser;
+    const parser_allocator = if (self.theorem_scratch != null)
+        parser.swapAllocator(scratch)
+    else
+        null;
+    defer if (parser_allocator) |previous| {
+        _ = parser.swapAllocator(previous);
+    };
+    return switch (mode) {
+        .direct => Check.checkTheoremBlock(
+            self,
+            scratch,
+            theory,
+            assertion,
+            block,
+            theorem,
+            theorem_concl,
+        ),
+        .memoized => Check.checkTheoremBlockMemoized(
+            self,
+            scratch,
+            theory,
+            assertion,
+            block,
+            theorem,
+            theorem_concl,
+        ),
+    };
+}
+
+/// Append a checked theorem's MMB records to `out`. Its streams are built
+/// in `scratch` and copied to the run's `allocator`, which outlives the
+/// theorem.
+fn emitCheckedTheorem(
+    self: *CompilerContext,
+    allocator: std.mem.Allocator,
+    scratch: std.mem.Allocator,
+    theory: *TheoryState,
+    out: *Output,
+    assertion: AssertionStmt,
+    theorem: *TheoremContext,
+    theorem_concl: ExprId,
+    checked: []const CheckedLine,
+    span: Span,
+    cmd: StmtCmd,
+) !void {
+    const unify = try CompilerEmit.buildAssertionUnifyStream(
+        scratch,
+        theorem,
+        theorem_concl,
+    );
+    const body = CompilerEmit.buildTheoremProofBody(
+        scratch,
+        theorem,
+        &theory.env,
+        checked,
+    ) catch |err| {
+        self.setIfMissing(
+            CompilerDiag.theoremDiagnostic(
+                assertion.name,
+                span,
+                .proof,
+                CompilerDiag.narrowDiagnosticError(err),
+            ),
+        );
+        return err;
+    };
+    warnLargeProofHeap(self, assertion.name, span, body);
+    try out.theorems.append(allocator, .{
+        .args = try CompilerEmit.buildArgArray(&theory.parser, assertion.args),
+        .unify = try allocator.dupe(u8, unify),
+        .name = assertion.name,
+        .var_names = try CompilerEmit.buildTheoremVarNames(
+            allocator,
+            assertion.arg_names,
+            theorem.theorem_dummies.items.len,
+        ),
+        .hyp_names = try CompilerEmit.buildHypNames(
+            allocator,
+            assertion.hyps.len,
+        ),
+    });
+    try out.statements.append(allocator, .{
+        .cmd = cmd,
+        .body = try allocator.dupe(u8, body.bytes),
+    });
 }
 
 /// A proof that needs a larger heap than verifiers give by default still
@@ -1409,38 +1505,27 @@ fn checkAndRegisterLocalProofBlock(
     block: TheoremBlock,
     emit: ?*Output,
 ) !void {
-    const parser = &theory.parser;
-    const env = &theory.env;
-    const assertion = try parseLemmaAssertion(self, allocator, parser, block);
+    const assertion = try parseLemmaAssertion(self, allocator, &theory.parser, block);
 
-    var theorem = TheoremContext.init(allocator);
+    const scratch = theoremAllocator(self, allocator);
+    defer releaseTheoremScratch(self);
+    var theorem = TheoremContext.init(scratch);
     defer theorem.deinit();
     try theorem.seedAssertion(assertion);
     const theorem_concl = try theorem.internParsedExpr(assertion.concl);
 
     // Emission consumes the checked lines, which a memo hit does not
     // produce; only the analyze path (no emit) goes through the memo.
-    const check_result = if (emit == null)
-        Check.checkTheoremBlockMemoized(
-            self,
-            allocator,
-            theory,
-            assertion,
-            block,
-            &theorem,
-            theorem_concl,
-        )
-    else
-        Check.checkTheoremBlock(
-            self,
-            allocator,
-            theory,
-            assertion,
-            block,
-            &theorem,
-            theorem_concl,
-        );
-    const checked = check_result catch |err| {
+    const checked = checkBlock(
+        self,
+        scratch,
+        theory,
+        assertion,
+        block,
+        &theorem,
+        theorem_concl,
+        if (emit == null) .memoized else .direct,
+    ) catch |err| {
         self.setIfMissing(
             CompilerDiag.theoremDiagnostic(
                 assertion.name,
@@ -1451,51 +1536,19 @@ fn checkAndRegisterLocalProofBlock(
         );
         return err;
     };
-
-    if (emit) |out| {
-        const unify = try CompilerEmit.buildAssertionUnifyStream(
-            allocator,
-            &theorem,
-            theorem_concl,
-        );
-        const args = try CompilerEmit.buildArgArray(parser, assertion.args);
-        const hyp_names = try CompilerEmit.buildHypNames(
-            allocator,
-            assertion.hyps.len,
-        );
-        const body = CompilerEmit.buildTheoremProofBody(
-            allocator,
-            &theorem,
-            env,
-            checked,
-        ) catch |err| {
-            self.setIfMissing(
-                CompilerDiag.theoremDiagnostic(
-                    assertion.name,
-                    block.header_span,
-                    .proof,
-                    CompilerDiag.narrowDiagnosticError(err),
-                ),
-            );
-            return err;
-        };
-        warnLargeProofHeap(self, assertion.name, block.header_span, body);
-        try out.theorems.append(allocator, .{
-            .args = args,
-            .unify = unify,
-            .name = assertion.name,
-            .var_names = try CompilerEmit.buildTheoremVarNames(
-                allocator,
-                assertion.arg_names,
-                theorem.theorem_dummies.items.len,
-            ),
-            .hyp_names = hyp_names,
-        });
-        try out.statements.append(allocator, .{
-            .cmd = .LocalThm,
-            .body = body.bytes,
-        });
-    }
+    if (emit) |out| try emitCheckedTheorem(
+        self,
+        allocator,
+        scratch,
+        theory,
+        out,
+        assertion,
+        &theorem,
+        theorem_concl,
+        checked,
+        block.header_span,
+        .LocalThm,
+    );
 
     registerAssertion(
         self,

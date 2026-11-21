@@ -658,6 +658,19 @@ pub const MM0Parser = struct {
         return try self.core.parseArgText(math, vars, arg);
     }
 
+    /// Make the parser allocate with `allocator`, returning the allocator it
+    /// used, to be swapped back. What it parses meanwhile lives only as long
+    /// as `allocator`, so only proof math belongs in between: a statement's
+    /// parse registers names and notation the rest of the file relies on.
+    pub fn swapAllocator(
+        self: *MM0Parser,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator {
+        const previous = self.core.allocator;
+        self.core.allocator = allocator;
+        return previous;
+    }
+
     pub fn parseHoleyArgText(
         self: *MM0Parser,
         math: []const u8,

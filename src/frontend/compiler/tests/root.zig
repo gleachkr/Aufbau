@@ -13,4 +13,5 @@ comptime {
     _ = @import("./open_goal_tests.zig");
     _ = @import("./pipeline_tests.zig");
     _ = @import("./def_scaling_tests.zig");
+    _ = @import("./memory_tests.zig");
 }

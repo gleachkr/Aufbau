@@ -1327,7 +1327,12 @@ The important lifetimes are:
 
 - A `Compiler` borrows source text. Each check/analyze/compile call owns a
   temporary arena. MMB output uses the explicitly supplied output allocator;
-  attached sinks must copy data that survives the call.
+  attached sinks must copy data that survives the call. A check or compile
+  also gives each theorem and lemma an arena of its own
+  (`CompilerContext.theorem_scratch`), reset once its MMB records are copied
+  to the call's arena, so memory follows the largest proof, not their sum;
+  the parser allocates there while the block is checked. The analysis path,
+  and any call with a check memo attached, keeps checks in the call's arena.
 - `TheoremContext.clone()` uses a COW interner. A scratch clone borrows a
   stable base prefix; the base must outlive it and stay at a stable address.
   `flatten()` makes the clone independent before it replaces its parent or
