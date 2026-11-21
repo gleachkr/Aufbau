@@ -310,6 +310,11 @@ pub const NoteMessage = union(enum) {
     holey_unsolved_binder: struct {
         binder_name: []const u8,
     },
+    /// The failing line holds named unknowns the proof does not determine
+    /// yet, listed comma-separated.
+    names_not_determined: struct {
+        names: []const u8,
+    },
     /// An `.mm0` notation error hit a token the proof file declared as local
     /// notation on `term_name`.
     local_notation_token: struct {
@@ -1915,6 +1920,7 @@ pub fn renderNoteMessage(writer: anytype, message: NoteMessage) !void {
         .rewrite_premise_view => |info| try printT(writer, "note_rewrite_premise_view", .{ info.number, info.term_name }),
         .cited_premise_proves => |info| try printT(writer, "note_cited_premise_proves", .{info.text}),
         .holey_unsolved_binder => |info| try printT(writer, "note_holey_unsolved_binder", .{info.binder_name}),
+        .names_not_determined => |info| try printT(writer, "note_names_not_determined", .{info.names}),
         .local_notation_token => |info| try printT(writer, "note_local_notation_token", .{ info.token, info.term_name }),
         .local_notation_tables_shared => try writer.writeAll(t("note_local_notation_tables_shared")),
         .unsolved_binder_index => |info| try printT(writer, "note_unsolved_binder_index", .{info.number}),

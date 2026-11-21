@@ -176,6 +176,14 @@ search; it stops after 1,000,000 tries with `NamedUnknownPairingLimit`.
 A line that checks through a rewrite that changes its shape binds
 nothing.
 
+A line that fails while it still holds names the proof does not determine
+yet, with no value and no forced shape, or an open part of one, keeps its
+error and gains a note listing them: "the proof does not determine ?h yet;
+this line may check once it does". The note says "may": the compiler does
+not check the line again, so a line that is wrong for every value of its
+names gets the note too. Errors no value could change, such as a malformed
+reference or an unknown rule, get no note.
+
 A name may also stand in an explicit binding, so that a rule application
 says which unknown a binder is: `imp_intro (a := $ ?h $)` discharges the
 assumption `?h`. A binding whose names are all known by the time its line

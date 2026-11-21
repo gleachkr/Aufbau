@@ -273,6 +273,7 @@ pub const LineWalk = struct {
                     .span = line.ruleApplicationSpan(),
                 });
             }
+            try self.noteUndeterminedNames(line);
             try self.reportOpenGoals(line);
             const keep = self.compiler.keep_checking orelse return err;
             try self.admitFailedLine(keep, line, checked_mark);
@@ -280,6 +281,112 @@ pub const LineWalk = struct {
         };
         try self.reportOpenGoals(line);
         return next;
+    }
+
+    /// When `line` failed while it still holds names the proof does not
+    /// determine yet, say so on its diagnostic: the line may only be waiting
+    /// for their values. The error stands; nothing is checked again.
+    fn noteUndeterminedNames(self: *LineWalk, line: ProofLine) !void {
+        if (!self.hold_goals) return;
+        var diag = self.compiler.getDiagnostic() orelse return;
+        if (!dependsOnValues(diag)) return;
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer names.deinit(self.allocator);
+        if (Holes.parseAssertion(
+            &self.theory.parser,
+            self.theorem,
+            &self.theorem_vars,
+            &self.theory.sort_vars,
+            line.assertion.text,
+        )) |parsed| switch (parsed) {
+            .holey => |surface| try self.collectUndetermined(surface, &names),
+            .concrete => {},
+        } else |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {},
+        }
+        try self.collectUndeterminedInBindings(line.application, &names);
+        if (names.items.len == 0) return;
+        const text = try std.mem.join(self.allocator, ", ", names.items);
+        defer self.allocator.free(text);
+        CompilerDiag.addNote(&diag, .{ .names_not_determined = .{ .names = text } }, .proof, null);
+        self.compiler.setProof(diag);
+    }
+
+    /// Whether a name's value could change the outcome `diag` reports: a
+    /// match or a conversion can, a malformed reference or rule cannot.
+    fn dependsOnValues(diag: CompilerDiag.Diagnostic) bool {
+        if (diag.phase == .parse) return false;
+        return switch (diag.err) {
+            error.UnknownRule,
+            error.RuleNotYetAvailable,
+            error.UnknownLabel,
+            error.UnknownHypothesisRef,
+            error.AmbiguousHypothesisRef,
+            error.RefCountMismatch,
+            error.DuplicateLabel,
+            error.OpenGoal,
+            error.OpenGoalBindings,
+            error.CheckStackExhausted,
+            error.FallbackCycle,
+            => false,
+            else => true,
+        };
+    }
+
+    fn collectUndeterminedInBindings(
+        self: *LineWalk,
+        app: ProofScript.RuleApplication,
+        names: *std.ArrayListUnmanaged([]const u8),
+    ) !void {
+        for (app.refs) |ref| switch (ref) {
+            .application => |child| try self.collectUndeterminedInBindings(child, names),
+            else => {},
+        };
+        if (app.arg_bindings.len == 0) return;
+        const rule_id = self.theory.env.rule_names.get(app.rule_name) orelse return;
+        const rule = &self.theory.env.rules.items[rule_id];
+        for (app.arg_bindings) |binding| {
+            const surface = (try self.bindingSurface(rule, binding)) orelse continue;
+            try self.collectUndetermined(surface.expr, names);
+        }
+    }
+
+    /// Add to `names`, once each, the names in `surface` that are still
+    /// holes once what is known of them is written in: no value, and no
+    /// shape, or an open part of a shape.
+    fn collectUndetermined(
+        self: *LineWalk,
+        surface: *const Expr,
+        names: *std.ArrayListUnmanaged([]const u8),
+    ) !void {
+        const written = try self.unknowns.substitute(
+            self.allocator,
+            self.theorem,
+            &self.theory.parser,
+            surface,
+        );
+        try appendHoleNames(self.allocator, written, names);
+    }
+
+    fn appendHoleNames(
+        allocator: std.mem.Allocator,
+        expr: *const Expr,
+        names: *std.ArrayListUnmanaged([]const u8),
+    ) !void {
+        switch (expr.*) {
+            .variable => {},
+            .hole => |hole| {
+                const name = hole.name orelse return;
+                for (names.items) |seen| {
+                    if (std.mem.eql(u8, seen, name)) return;
+                }
+                try names.append(allocator, name);
+            },
+            .term => |term| for (term.args) |arg| {
+                try appendHoleNames(allocator, arg, names);
+            },
+        }
     }
 
     /// Report each open goal in `line` once, with what its check learned of

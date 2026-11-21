@@ -2133,3 +2133,49 @@ test "a wrong positional fill of two holes in one ACUI context says why" {
         std.mem.indexOf(u8, line, ", _ctx)").? + 2,
     );
 }
+
+const undetermined_names_mm0 =
+    \\delimiter $ ( ) $;
+    \\--| @hole _wff
+    \\--| @unknown ?
+    \\provable sort wff;
+    \\term imp (a b: wff): wff;
+    \\infixr imp: $->$ prec 25;
+    \\term p: wff;
+    \\term q: wff;
+    \\axiom ax1 (a b: wff): $ a -> b -> a $;
+    \\theorem t: $ p -> q -> p $;
+;
+
+test "a failing line notes the names the proof does not determine yet" {
+    const proof_src =
+        \\t
+        \\---
+        \\
+        \\l1: $ ?x -> ?y -> ?x $ by ax1 []
+        \\l2: $ p -> q -> p $ by ax1 []
+    ;
+    var compiler = Compiler.initWithProof(std.testing.allocator, undetermined_names_mm0, proof_src);
+    try std.testing.expect(std.meta.isError(compiler.check()));
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqualStrings("l1", diag.line_label.?);
+    try expectHasNote(diag, "the proof does not determine ?x, ?y yet; this line may check once it does");
+}
+
+test "a malformed reference gets no undetermined-names note" {
+    const proof_src =
+        \\t
+        \\---
+        \\
+        \\l1: $ ?x -> ?y -> ?x $ by ax1 [l0]
+        \\l2: $ p -> q -> p $ by ax1 []
+    ;
+    var compiler = Compiler.initWithProof(std.testing.allocator, undetermined_names_mm0, proof_src);
+    try std.testing.expect(std.meta.isError(compiler.check()));
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(error.RefCountMismatch, diag.err);
+    try std.testing.expectError(
+        error.MissingExpectedNote,
+        expectHasNote(diag, "the proof does not determine ?x, ?y yet; this line may check once it does"),
+    );
+}

@@ -39,6 +39,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   A name the proof forces only in part is checked with that part written
   in: `?f`, later split by an ∧-elimination giving `P u`, is checked as
   `P u ∧ _`, so a ∀-elimination with `@recover` can read its term off it.
+  A line that fails while it holds names the proof does not determine yet
+  says so in a note on its error ("the proof does not determine ?h yet;
+  this line may check once it does").
 
 ### Changed
 
