@@ -1078,6 +1078,16 @@ const proof_cases = [_]ProofCase{
     // laws remove is kept in a rest's value as the closed side writes it.
     .{ .stem = "pass_unknown_bag_left_unit", .outcome = .pass },
     .{ .stem = "pass_unknown_bag_unit_law", .outcome = .pass },
+    // Names in explicit bindings: a binding fills a name a later line
+    // uses (`t`), and a name fixed only through a binding's equation in
+    // the pre-pass (`u`).
+    .{ .stem = "pass_unknown_binding", .outcome = .pass },
+    // The IPM wire: each `imp_intro` names the assumption it discharges.
+    .{ .stem = "pass_unknown_binding_discharge", .outcome = .pass },
+    // A binding written with holes that the binder's value does not fit,
+    // and one that fills a name differently from its line's statement.
+    .{ .stem = "fail_unknown_binding_mismatch", .outcome = .{ .fail = error.HoleyBindingMismatch } },
+    .{ .stem = "fail_unknown_binding_conflict", .outcome = .{ .fail = error.NamedUnknownConflict } },
     // One name filled with two values on one line.
     .{ .stem = "fail_unknown_conflict", .outcome = .{ .fail = error.NamedUnknownConflict } },
     // Equations that clash solve nothing; the walk reports the mismatch.

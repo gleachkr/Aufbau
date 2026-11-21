@@ -658,6 +658,16 @@ pub const MM0Parser = struct {
         return try self.core.parseArgText(math, vars, arg);
     }
 
+    pub fn parseHoleyArgText(
+        self: *MM0Parser,
+        math: []const u8,
+        vars: *const std.StringHashMap(*const Expr),
+        arg: ArgInfo,
+    ) ParseError!*const Expr {
+        self.clearDiagnosticOverrides();
+        return try self.core.parseArgTextAllowHoles(math, vars, arg);
+    }
+
     pub fn parseMathText(
         self: *MM0Parser,
         math: []const u8,

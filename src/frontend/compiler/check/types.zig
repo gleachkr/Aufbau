@@ -42,6 +42,7 @@ const CheckedRef = CheckedIr.CheckedRef;
 const Inference = @import("../inference.zig");
 const Matching = @import("./matching.zig");
 const DiagNotes = @import("./diag_notes.zig");
+const Unknowns = @import("./unknowns.zig").Unknowns;
 const FreshenRetry = @import("./freshen_retry.zig");
 const CompilerVars = @import("../vars.zig");
 const SortVarRegistry = CompilerVars.SortVarRegistry;
@@ -220,6 +221,9 @@ pub const RuleApplyContext = struct {
     /// The goals the line walk's check learns for the line's open goals;
     /// null where no line is being reported (the search's contexts).
     open_goals: ?*OpenGoals.Records = null,
+    /// The walk's named unknowns, written into explicit bindings before the
+    /// check; null in the search's contexts.
+    unknowns: ?*Unknowns = null,
 };
 
 pub fn buildTheoremVarMap(

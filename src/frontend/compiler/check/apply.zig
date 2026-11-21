@@ -437,6 +437,7 @@ pub fn probeExpectedRefsForApplication(
         rule,
         application,
         line,
+        context.unknowns,
     );
     defer allocator.free(partial_bindings);
     const bindings = try allocator.dupe(?ExprId, partial_bindings);
@@ -527,6 +528,7 @@ fn applyRuleCandidateCore(
         rule,
         application,
         line,
+        context.unknowns,
     );
     defer allocator.free(partial_bindings);
     // Principal pins from `applyRuleApplication`'s ambiguity retry act as
@@ -561,6 +563,7 @@ fn applyRuleCandidateCore(
                 rule,
                 full_app,
                 line,
+                context.unknowns,
             ),
         };
     };

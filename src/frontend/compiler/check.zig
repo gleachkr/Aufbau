@@ -55,6 +55,8 @@ const OpenGoals = @import("./check/open_goals.zig");
 const NamedUnknowns = @import("./check/unknowns.zig");
 const UnknownsSolve = @import("./check/unknowns_solve.zig");
 const Apply = @import("./check/apply.zig");
+const Idents = @import("../idents.zig");
+const RuleDecl = @import("../env.zig").RuleDecl;
 
 /// `checkTheoremBlock` behind the context's check memo, when one is
 /// attached (`CompilerContext.check_memo`): a hit replays the recorded
@@ -525,6 +527,7 @@ pub const LineWalk = struct {
             .diag_scratch = &self.diag_scratch,
             .rule_unify_cache = &self.rule_unify_cache,
             .open_goals = &self.open_goals,
+            .unknowns = &self.unknowns,
         };
         if (ProofScript.isOpenGoalRuleName(line.application.rule_name)) {
             return try self.admitOpenGoalLine(&apply_context, line, parsed_assertion);
@@ -559,6 +562,7 @@ pub const LineWalk = struct {
                 self.checked.items[line_idx].expr,
             );
         }
+        try self.checkHoleyBindings(line, line.application, line_idx);
 
         try self.admit(line, line_idx);
         return .next;
@@ -630,7 +634,49 @@ pub const LineWalk = struct {
                 .concrete => {},
                 .holey => |surface| try self.hoverNames(sink, &names, line.assertion.span.start + 1, surface),
             }
+            try self.hoverBindings(sink, &names, line.application);
         }
+    }
+
+    /// The hovers of the names in `app`'s explicit bindings and in its
+    /// inline sub-proofs'.
+    fn hoverBindings(
+        self: *LineWalk,
+        sink: *HoleInferenceSink,
+        names: *const ViewTrace.DiagNames,
+        app: ProofScript.RuleApplication,
+    ) !void {
+        for (app.refs) |ref| switch (ref) {
+            .application => |child| try self.hoverBindings(sink, names, child),
+            else => {},
+        };
+        if (app.arg_bindings.len == 0) return;
+        const rule_id = self.theory.env.rule_names.get(app.rule_name) orelse return;
+        const rule = &self.theory.env.rules.items[rule_id];
+        for (app.arg_bindings) |binding| {
+            const surface = (try self.bindingSurface(rule, binding)) orelse continue;
+            try self.hoverNames(sink, names, binding.formula.span.start + 1, surface.expr);
+        }
+    }
+
+    /// `binding`'s value as written, holes allowed, with the index of its
+    /// binder in `rule`; null when either is malformed (the check reports
+    /// that).
+    fn bindingSurface(
+        self: *LineWalk,
+        rule: *const RuleDecl,
+        binding: ProofScript.ArgBinding,
+    ) !?struct { arg_index: usize, expr: *const Expr } {
+        const arg_index = Idents.findRuleArgIndex(rule, binding.name) orelse return null;
+        const expr = self.theory.parser.parseHoleyArgText(
+            binding.formula.text,
+            &self.theorem_vars,
+            rule.args[arg_index],
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return null,
+        };
+        return .{ .arg_index = arg_index, .expr = expr };
     }
 
     fn hoverNames(
@@ -708,6 +754,82 @@ pub const LineWalk = struct {
             .span = line.assertion.span,
         }, .theorem_application));
         return error.NamedUnknownConflict;
+    }
+
+    /// Check each explicit binding of `app` and its inline sub-proofs that
+    /// is written with holes (`(a := $ ?x → q $)`) against the value its
+    /// binder took, now that the line checked: `app` checked as the line at
+    /// `line_idx`. The names such a binding fills are bound.
+    fn checkHoleyBindings(
+        self: *LineWalk,
+        line: ProofLine,
+        app: ProofScript.RuleApplication,
+        line_idx: usize,
+    ) !void {
+        var idx = line_idx;
+        const rule_line = while (true) switch (self.checked.items[idx].data) {
+            .rule => |rule_line| break rule_line,
+            .transport => |transport| switch (transport.source) {
+                .line => |source| idx = source,
+                .hyp => return,
+            },
+            .sorry => return,
+        };
+        const rule = &self.theory.env.rules.items[rule_line.rule_id];
+        for (app.arg_bindings) |binding| {
+            const surface = (try self.bindingSurface(rule, binding)) orelse continue;
+            if (!Holes.contains(surface.expr)) continue;
+            const fit = try self.unknowns.recordBinding(
+                self.allocator,
+                &self.theory.parser,
+                self.theorem,
+                &self.theory.env,
+                &self.theory.registry,
+                surface.expr,
+                rule_line.bindings[surface.arg_index],
+            );
+            switch (fit) {
+                .fits => continue,
+                .mismatch => {
+                    self.reportBinding(line, app, binding, error.HoleyBindingMismatch, binding.name);
+                    return error.HoleyBindingMismatch;
+                },
+                .conflict => |unknown| {
+                    self.reportBinding(line, app, binding, error.NamedUnknownConflict, unknown);
+                    return error.NamedUnknownConflict;
+                },
+            }
+        }
+        for (app.refs, 0..) |ref, ref_idx| {
+            if (ref_idx >= rule_line.refs.len) break;
+            const child = switch (ref) {
+                .application => |child| child,
+                else => continue,
+            };
+            switch (rule_line.refs[ref_idx]) {
+                .line => |child_idx| try self.checkHoleyBindings(line, child, child_idx),
+                .hyp => {},
+            }
+        }
+    }
+
+    fn reportBinding(
+        self: *LineWalk,
+        line: ProofLine,
+        app: ProofScript.RuleApplication,
+        binding: ProofScript.ArgBinding,
+        err: CompilerDiag.DiagnosticError,
+        name: []const u8,
+    ) void {
+        self.compiler.setProof(CompilerDiag.withPhase(.{
+            .kind = .generic,
+            .err = err,
+            .theorem_name = self.assertion.name,
+            .line_label = line.label,
+            .rule_name = app.rule_name,
+            .name = name,
+            .span = binding.formula.span,
+        }, .theorem_application));
     }
 
     /// A line justified by `?`: its goal is the statement it writes, holes

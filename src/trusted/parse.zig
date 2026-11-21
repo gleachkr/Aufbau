@@ -1672,7 +1672,27 @@ pub const MM0Parser = struct {
         vars: *const std.StringHashMap(*const Expr),
         arg: ArgInfo,
     ) ParseError!*const Expr {
-        const expr = try self.parseMathText(math, vars);
+        return try self.parseArgMath(math, vars, arg, false);
+    }
+
+    /// `parseArgText`, admitting proof holes (an explicit binding's value).
+    pub fn parseArgTextAllowHoles(
+        self: *MM0Parser,
+        math: []const u8,
+        vars: *const std.StringHashMap(*const Expr),
+        arg: ArgInfo,
+    ) ParseError!*const Expr {
+        return try self.parseArgMath(math, vars, arg, true);
+    }
+
+    fn parseArgMath(
+        self: *MM0Parser,
+        math: []const u8,
+        vars: *const std.StringHashMap(*const Expr),
+        arg: ArgInfo,
+        allow_holes: bool,
+    ) ParseError!*const Expr {
+        const expr = try self.parseMathString(math, vars, allow_holes);
         const sort = try self.lookupSortId(arg.sort_name);
         const coerced = try self.coerceExpr(expr, sort);
         // Match verifier semantics: bound params require bound exprs,

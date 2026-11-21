@@ -302,8 +302,8 @@ provable sort wff;
 
 Occurs on a sort declaration, at most one per sort. A math token that
 starts with `PREFIX` and is longer than it is a named unknown of that sort
-(`?a`): every occurrence in one proof stands for the same expression,
-which any line may fix. No other math token may start with `PREFIX`. See
+(`?a`): every occurrence in one proof, in a statement or an explicit
+binding, stands for the same expression, which any line may fix. No other math token may start with `PREFIX`. See
 `docs/holes.md` in the repository.
 
 ### `@fallback`

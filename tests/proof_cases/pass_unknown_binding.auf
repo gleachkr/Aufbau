@@ -1,0 +1,11 @@
+t
+---
+
+l2: $ ?x -> q $ by same [#1]
+l1: $ q $ by mp (a := $ ?x $) [l2, #2]
+
+u
+---
+
+m1: $ ?x -> ?x $ by triv
+m2: $ p -> p $ by triv (a := $ ?x $)

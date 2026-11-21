@@ -141,7 +141,8 @@ Nothing on `l1` fixes `?h`; `imp_intro` on `l2` does, so `l1` checks as
 A name belongs to one theorem's proof. Before the lines are checked, a
 pre-pass solves the names from all the lines at once: each rule
 application's conclusion equals its statement, each premise equals what
-its reference states, and the last line equals the theorem's conclusion.
+its reference states, each explicit binding equals its binder, and the
+last line equals the theorem's conclusion.
 The pre-pass unifies these first-order and commits only what every
 successful check must agree with:
 
@@ -164,6 +165,21 @@ differently. Within one line the occurrences of a name are still filled
 independently, so a line whose own inference guesses (an ambiguous ACUI
 split) can fill them differently. A line that checks through a rewrite
 that changes its shape binds nothing.
+
+A name may also stand in an explicit binding, so that a rule application
+says which unknown a binder is: `imp_intro (a := $ ?h $)` discharges the
+assumption `?h`. A binding whose names are all known by the time its line
+is checked is an ordinary binding. One that still has holes leaves its
+binder to inference, and once the line checks, the binder's value must
+fit what the binding writes (`HoleyBindingMismatch` otherwise); the names
+it fills are bound as a statement's are.
+
+```proof
+l1: $ ?x → ?x $ by triv
+l2: $ p → p $ by triv (a := $ ?x $)
+```
+
+Only `l2`'s binding ties `?x` to `p`; the pre-pass writes it into `l1`.
 
 An open goal line (`by ?`) is reported once the whole block is checked,
 so its goal shows what any line fixed of its names: a solved name as its
@@ -188,7 +204,10 @@ line fixed.
 - ordinary expression positions, including subexpressions under an
   object-language binder (e.g. `sb a x _wff`);
 - whole-context positions on sorts that have ACUI metadata
-  (e.g. `_ctx ⊢ A`).
+  (e.g. `_ctx ⊢ A`);
+- explicit binding formulas like `(name := $ _wff → q $)`: the binder is
+  inferred, then checked against the written shape (see named unknowns
+  above).
 
 ### Rejected
 
@@ -196,7 +215,7 @@ line fixed.
 - in bound-variable positions of a binder (e.g. `sb a _wff x` where
   the second argument is a bound variable);
 - in refs (only the assertion may contain holes);
-- in explicit binding formulas like `(name := $ _wff $)`.
+- in a binding for a bound binder (a hole is not a bound variable).
 
 A line whose holes can be filled in more than one non-structural way is
 rejected as ambiguous. Structural ACUI contexts have a ranked preference
@@ -296,6 +315,8 @@ When no candidate succeeds, the compiler raises one of:
 - `HoleConclusionMismatch` — visible structure agreed, but the
   candidate's instantiated conclusion does not actually fit the
   holey assertion;
+- `HoleyBindingMismatch` — the line checked, but a binder's value does
+  not fit the explicit binding written for it with holes;
 - a hole-specific failure such as `HoleSortMismatch`, recovered with
   enough span information to point at the offending hole token.
 
@@ -568,8 +589,7 @@ This is the v1 surface. The following are deliberately out of scope:
 
 - holes in `.mm0` source;
 - a generic untyped `_`;
-- holes in bound-variable positions or in explicit binding formulas
-  (named unknowns included, for now);
+- holes in bound-variable positions;
 - proof search during elaboration beyond existing inference, view,
   normalization, and fallback machinery (`auto?` searches, but only
   when asked, and its suggestion then elaborates like any other line);

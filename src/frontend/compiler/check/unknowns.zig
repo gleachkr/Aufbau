@@ -286,30 +286,63 @@ pub const Unknowns = struct {
         if (!hasNamed(surface)) return null;
         var canonicalizer = Canonicalizer.init(allocator, theorem, registry, env, {});
         defer canonicalizer.deinit();
-        const fill = (try Holes.fillThroughDefs(parser, theorem, env, surface, checked)) orelse
-            (if (registry.hasStructuralCombiners())
-                try Holes.materializeSurfaceModuloAcui(
-                    parser,
-                    theorem,
-                    env,
-                    registry,
-                    &canonicalizer,
-                    surface,
-                    checked,
-                )
-            else
-                null) orelse return null;
+        const fill = (try fillOf(parser, theorem, env, registry, &canonicalizer, surface, checked)) orelse
+            return null;
+        return try self.bindFills(allocator, theorem, &canonicalizer, surface, fill);
+    }
 
+    pub const BindingFit = union(enum) {
+        fits,
+        /// The binder's value does not have the written shape.
+        mismatch,
+        /// The value fills this name differently from an earlier fill.
+        conflict: []const u8,
+    };
+
+    /// An explicit binding written with holes, `surface`, against `value`,
+    /// the binder's value once its line checked: whether it fits, and if so
+    /// the names it fills bound, as `record` binds a statement's.
+    pub fn recordBinding(
+        self: *Unknowns,
+        allocator: std.mem.Allocator,
+        parser: *MM0Parser,
+        theorem: *TheoremContext,
+        env: *const GlobalEnv,
+        registry: *RewriteRegistry,
+        surface: *const Expr,
+        value: ExprId,
+    ) !BindingFit {
+        var canonicalizer = Canonicalizer.init(allocator, theorem, registry, env, {});
+        defer canonicalizer.deinit();
+        const fill = (try fillOf(parser, theorem, env, registry, &canonicalizer, surface, value)) orelse
+            return .mismatch;
+        if (!hasNamed(surface)) return .fits;
+        const name = (try self.bindFills(allocator, theorem, &canonicalizer, surface, fill)) orelse
+            return .fits;
+        return .{ .conflict = name };
+    }
+
+    /// Bind the names `surface` holds from `fill`, which has its shape.
+    /// Null when every fill agrees with every earlier one; otherwise the
+    /// first name filled differently, and nothing is bound.
+    fn bindFills(
+        self: *Unknowns,
+        allocator: std.mem.Allocator,
+        theorem: *TheoremContext,
+        canonicalizer: *Canonicalizer,
+        surface: *const Expr,
+        fill: ExprId,
+    ) !?[]const u8 {
         var fills: std.StringArrayHashMapUnmanaged(ExprId) = .empty;
         defer fills.deinit(allocator);
-        const clash = readFills(allocator, theorem, &canonicalizer, surface, fill, &fills) catch |err| switch (err) {
+        const clash = readFills(allocator, theorem, canonicalizer, surface, fill, &fills) catch |err| switch (err) {
             error.NamedUnknownUnread => return null,
             else => return err,
         };
         if (clash) |name| return name;
         for (fills.keys(), fills.values()) |name, value| {
             const bound = self.bound.get(name) orelse continue;
-            if (!try sameValue(&canonicalizer, bound, value)) return name;
+            if (!try sameValue(canonicalizer, bound, value)) return name;
         }
         for (fills.keys(), fills.values()) |name, value| {
             const entry = try self.bound.getOrPut(allocator, name);
@@ -318,6 +351,30 @@ pub const Unknowns = struct {
         return null;
     }
 };
+
+/// `surface` filled from `checked`, read through definitions and, in a
+/// theory with ACUI combiners, modulo them; null when it does not fit.
+fn fillOf(
+    parser: *MM0Parser,
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    registry: *RewriteRegistry,
+    canonicalizer: *Canonicalizer,
+    surface: *const Expr,
+    checked: ExprId,
+) !?ExprId {
+    if (try Holes.fillThroughDefs(parser, theorem, env, surface, checked)) |fill| return fill;
+    if (!registry.hasStructuralCombiners()) return null;
+    return try Holes.materializeSurfaceModuloAcui(
+        parser,
+        theorem,
+        env,
+        registry,
+        canonicalizer,
+        surface,
+        checked,
+    );
+}
 
 /// Walk `surface` and its `fill` (which has the surface's shape) together,
 /// recording each name's value. Returns the first name filled twice

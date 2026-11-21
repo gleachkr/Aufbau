@@ -1,0 +1,5 @@
+--| @unknown ?
+provable sort wff;
+term imp (a b: wff): wff; infixr imp: $->$ prec 25;
+axiom mp (a b: wff): $ a -> b $ > $ a $ > $ b $;
+theorem t (p q: wff): $ p -> q $ > $ p $ > $ q $;

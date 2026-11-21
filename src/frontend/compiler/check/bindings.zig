@@ -43,6 +43,7 @@ const FreshenRetry = @import("./freshen_retry.zig");
 const CompilerVars = @import("../vars.zig");
 const SortVarRegistry = CompilerVars.SortVarRegistry;
 const Holes = @import("../holes.zig");
+const Unknowns = @import("./unknowns.zig").Unknowns;
 const Idents = @import("../../idents.zig");
 const OpenTerms = @import("../inference/open_terms.zig");
 const InlineHints = @import("./inline_hints.zig");
@@ -1098,6 +1099,7 @@ pub fn parseBindings(
     rule: *const RuleDecl,
     application: RuleApplication,
     line: ApplicationLine,
+    unknowns: ?*Unknowns,
 ) ![]?ExprId {
     for (rule.arg_names) |arg_name| {
         if (arg_name == null) {
@@ -1115,6 +1117,9 @@ pub fn parseBindings(
 
     const bindings = try allocator.alloc(?ExprId, rule.args.len);
     @memset(bindings, null);
+    const assigned = try allocator.alloc(bool, rule.args.len);
+    defer allocator.free(assigned);
+    @memset(assigned, false);
 
     for (application.arg_bindings) |binding| {
         const arg_index = findRuleArgIndex(rule, binding.name) orelse {
@@ -1129,7 +1134,7 @@ pub fn parseBindings(
             }, .theorem_application));
             return error.UnknownBinderName;
         };
-        if (bindings[arg_index] != null) {
+        if (assigned[arg_index]) {
             self.setProof(CompilerDiag.withPhase(.{
                 .kind = .duplicate_binder_assignment,
                 .err = error.DuplicateBinderAssignment,
@@ -1150,7 +1155,7 @@ pub fn parseBindings(
                 sort_vars,
                 binding.formula.text,
             );
-            break :blk parser.parseArgText(
+            break :blk parser.parseHoleyArgText(
                 binding.formula.text,
                 theorem_vars,
                 rule.args[arg_index],
@@ -1176,7 +1181,13 @@ pub fn parseBindings(
             self.setProof(diag);
             return err;
         };
-        bindings[arg_index] = try theorem.internParsedExpr(expr);
+        assigned[arg_index] = true;
+        // A value with holes, once the names earlier lines fixed are
+        // written in, is left to inference; the walk then checks the
+        // binder's value against it (`LineWalk.checkHoleyBindings`).
+        const value = if (unknowns) |known| try known.substitute(allocator, theorem, parser, expr) else expr;
+        if (Holes.contains(value)) continue;
+        bindings[arg_index] = try theorem.internParsedExpr(value);
     }
 
     return bindings;

@@ -128,6 +128,7 @@ const Solver = struct {
                 },
             };
             try self.statements.put(self.inputs.allocator, line.label, statement);
+            if (applicationMayName(&theory.parser, line.application)) any_named = true;
         }
         if (!any_named) return;
 
@@ -174,7 +175,7 @@ const Solver = struct {
             const idx = for (rule.arg_names, 0..) |name, i| {
                 if (name != null and std.mem.eql(u8, name.?, binding.name)) break i;
             } else continue;
-            const value = theory.parser.parseArgText(
+            const value = theory.parser.parseHoleyArgText(
                 binding.formula.text,
                 self.inputs.theorem_vars,
                 rule.args[idx],
@@ -182,7 +183,7 @@ const Solver = struct {
                 error.OutOfMemory => return err,
                 else => continue,
             };
-            try self.equate(binders[idx], try theorem.internParsedExpr(value));
+            try self.equate(binders[idx], (try self.internSurface(value)) orelse continue);
         }
 
         try self.equate(try theorem.instantiateTemplate(rule.concl, binders), goal);
@@ -774,13 +775,33 @@ fn dedupe(list: *std.ArrayListUnmanaged(ExprId)) void {
 /// an `@unknown` prefix. A cheap text test, so blocks without names (and
 /// theories without `@unknown`) pay nothing.
 pub fn mayNameUnknowns(parser: *const MM0Parser, lines: []const ProofLine) bool {
-    const prefixes = &parser.core.unknown_prefixes;
-    if (prefixes.count() == 0) return false;
+    if (parser.core.unknown_prefixes.count() == 0) return false;
     for (lines) |line| {
-        var it = prefixes.keyIterator();
-        while (it.next()) |prefix| {
-            if (std.mem.indexOf(u8, line.assertion.text, prefix.*) != null) return true;
+        if (textMayName(parser, line.assertion.text) or applicationMayName(parser, line.application)) {
+            return true;
         }
+    }
+    return false;
+}
+
+/// Whether an explicit binding of `app` or of its inline sub-proofs may
+/// name an unknown.
+fn applicationMayName(parser: *const MM0Parser, app: RuleApplication) bool {
+    for (app.arg_bindings) |binding| {
+        if (textMayName(parser, binding.formula.text)) return true;
+    }
+    for (app.refs) |ref| switch (ref) {
+        .application => |child| if (applicationMayName(parser, child)) return true,
+        else => {},
+    };
+    return false;
+}
+
+/// Whether `text` holds an `@unknown` prefix (a cheap test before parsing).
+fn textMayName(parser: *const MM0Parser, text: []const u8) bool {
+    var it = parser.core.unknown_prefixes.keyIterator();
+    while (it.next()) |prefix| {
+        if (std.mem.indexOf(u8, text, prefix.*) != null) return true;
     }
     return false;
 }

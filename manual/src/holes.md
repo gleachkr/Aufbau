@@ -57,9 +57,11 @@ l1: $ _ctx ⊢ _wff $ by ax []
 The diagnostic reports the undetermined variable, exactly as it would for a line
 whose bindings could not be inferred for any other reason.
 
-Holes are allowed only in the assertion of a proof line. They are rejected
-in `.mm0` files, in reference lists, in explicit bindings, and in the
-bound-variable position of a binder.
+Holes are allowed in the assertion of a proof line and in explicit
+bindings. A binding with a hole leaves its variable to be inferred, and the
+inferred value must have the shape the binding writes. Holes are rejected in
+`.mm0` files, in reference lists, and in the bound-variable position of a
+binder.
 
 ## Chains of equations
 
