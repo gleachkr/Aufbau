@@ -77,6 +77,9 @@ const proof_cases = [_]ProofCase{
     // The same through a `@view` rule's `@recover`, where matching once
     // walked the growing terms as trees.
     .{ .stem = "fail_rewrite_step_limit_recover", .outcome = .{ .fail = error.RewriteStepLimit } },
+    // `seq`'s @relation declares `_` for its transport, so no `seq` fact
+    // can be converted.
+    .{ .stem = "fail_missing_transport", .outcome = .{ .fail = error.MissingTransport } },
     .{ .stem = "pass_rule_symbolic_witness", .outcome = .pass },
     .{ .stem = "pass_symbolic_witness_repeated_premises", .outcome = .pass },
     .{ .stem = "pass_def_erased_arg_clash", .outcome = .pass },

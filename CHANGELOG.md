@@ -50,6 +50,9 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- A line that needs a fact converted along a relation declared with `_`
+  for its transport failed with "unexpected internal error". It is now
+  `MissingTransport`, naming the sort whose `@relation` lacks the rule.
 - `abc compile` frees each theorem's and lemma's memory once its MMB
   records are written, so memory follows the largest proof rather than the
   sum of all of them. Lean0's whole TG library (about 5,300 lemmas), killed

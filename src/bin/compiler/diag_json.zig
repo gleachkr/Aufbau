@@ -94,6 +94,7 @@ pub fn writeDetail(
         .local_term_reference => |info| try writeFields(jw, .{ .term = info.term_name }),
         .rewrite_cycle => |info| try writeFields(jw, .{ .rule = info.rule_name }),
         .rewrite_step_limit => |info| try writeFields(jw, .{ .rule = info.rule_name }),
+        .missing_transport => |info| try writeFields(jw, .{ .sort = info.sort_name }),
     }
     try jw.endObject();
 }

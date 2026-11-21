@@ -50,7 +50,8 @@ files without Aufbau's annotations still show the text.
 
 The fields name the sort, relation term, and its reflexivity, transitivity,
 symmetry, and transport rules, in that order. `_` marks a missing transport
-member. The declarative annotation may sit on any assertion; by convention it
+member: a sort whose terms are not facts, such as `nat`, needs none, but on a
+provable sort no fact can then be converted (`MissingTransport`). The declarative annotation may sit on any assertion; by convention it
 sits on the reflexivity axiom. Each member must have exactly the shape the
 compiler cites it at, binders in this order: `(a): rel a a`,
 `(a b c): rel a b > rel b c > rel a c`, `(a b): rel a b > rel b a`, and

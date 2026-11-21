@@ -707,6 +707,11 @@ pub fn emitTransport(
 ) anyerror!usize {
     if (!Support.emitsProofs(self)) return Support.proof_free_line;
     const transport_id = relation.transport_id orelse {
+        if (self.diag_scratch) |scratch| {
+            scratch.record(error.MissingTransport, .{
+                .missing_transport = .{ .sort_name = relation.sort_name },
+            });
+        }
         return error.MissingTransport;
     };
     const bindings = try self.allocator.alloc(ExprId, 2);

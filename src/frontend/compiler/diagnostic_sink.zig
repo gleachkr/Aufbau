@@ -493,6 +493,9 @@ pub const DiagnosticSink = struct {
             .rewrite_step_limit => |info| .{ .rewrite_step_limit = .{
                 .rule_name = self.stableRequiredString(info.rule_name),
             } },
+            .missing_transport => |info| .{ .missing_transport = .{
+                .sort_name = self.stableRequiredString(info.sort_name),
+            } },
             .local_term_reference => |info| .{ .local_term_reference = .{
                 .term_name = self.stableRequiredString(info.term_name),
             } },

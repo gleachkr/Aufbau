@@ -212,6 +212,7 @@ pub const Strings = struct {
     err_MissingCongruenceRule: []const u8,
     err_RewriteCycle: []const u8,
     err_RewriteStepLimit: []const u8,
+    err_MissingTransport: []const u8,
     err_ExpectedIdentifier: []const u8,
     err_ExpectedNumber: []const u8,
     err_UnknownMathToken: []const u8,
@@ -420,6 +421,7 @@ pub const Strings = struct {
     detail_local_term: []const u8,
     detail_rewrite_cycle: []const u8,
     detail_rewrite_step_limit: []const u8,
+    detail_transport_sort: []const u8,
 
     // Inference-path names.
     path_strict_replay: []const u8,
@@ -662,6 +664,7 @@ pub const en: Strings = .{
     .err_MissingCongruenceRule = "missing congruence rule needed for normalization",
     .err_RewriteCycle = "the @rewrite rules rewrite an expression back to itself",
     .err_RewriteStepLimit = "the @rewrite rules reach no normal form within 1000 steps",
+    .err_MissingTransport = "this conversion of a fact needs the transport rule of its sort's @relation, which declares `_`",
     .err_ExpectedIdentifier = "expected identifier",
     .err_ExpectedNumber = "expected number",
     .err_UnknownMathToken = "unknown token in math string",
@@ -870,6 +873,7 @@ pub const en: Strings = .{
     .detail_local_term = "local definition: {s}",
     .detail_rewrite_cycle = "cycle closed by: {s}",
     .detail_rewrite_step_limit = "step 1001 by: {s}",
+    .detail_transport_sort = "sort: {s}",
 
     // Inference-path names.
     .path_strict_replay = "exact match",
@@ -1111,6 +1115,7 @@ pub const de: Strings = .{
     .err_MissingCongruenceRule = "für die Normalisierung fehlt eine benötigte Kongruenzregel",
     .err_RewriteCycle = "die @rewrite-Regeln schreiben einen Ausdruck in sich selbst zurück",
     .err_RewriteStepLimit = "die @rewrite-Regeln erreichen in 1000 Schritten keine Normalform",
+    .err_MissingTransport = "diese Umformung einer Aussage braucht die Transportregel der @relation ihrer Sorte, die dort `_` ist",
     .err_ExpectedIdentifier = "Bezeichner erwartet",
     .err_ExpectedNumber = "Zahl erwartet",
     .err_UnknownMathToken = "unbekanntes Token im Mathe-String",
@@ -1319,6 +1324,7 @@ pub const de: Strings = .{
     .detail_local_term = "lokale Definition: {s}",
     .detail_rewrite_cycle = "Zyklus geschlossen durch: {s}",
     .detail_rewrite_step_limit = "Schritt 1001 durch: {s}",
+    .detail_transport_sort = "Sorte: {s}",
 
     // Inference-path names.
     .path_strict_replay = "exakte Übereinstimmung",

@@ -269,6 +269,10 @@ term nat_eq (a b: nat): wff;
 needed. Nat-level equivalences are always consumed by a congruence step that
 lifts them into the `wff` level, where `mpbi` can close the proof.
 
+A provable sort declared with `_` gets no conversions of its facts: a line
+whose statement differs from what its rule derives only by the sort's laws
+fails with `MissingTransport`, naming the sort.
+
 ---
 
 ## `@rewrite`

@@ -50,6 +50,11 @@ pub const CapturedDetail = union(enum) {
     rewrite_step_limit: struct {
         rule_id: u32,
     },
+    /// The sort whose `@relation` declares `_` for the transport a
+    /// conversion of a fact needed.
+    missing_transport: struct {
+        sort_name: []const u8,
+    },
     /// A congruence step whose `@congr` instance breaks the rule's
     /// dependencies: the rule, the clash, and the two clashing arguments.
     congruence_dep_violation: struct {

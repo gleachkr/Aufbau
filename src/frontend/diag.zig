@@ -205,6 +205,10 @@ pub const DiagnosticDetail = union(enum) {
     rewrite_step_limit: struct {
         rule_name: []const u8,
     },
+    /// The sort whose `@relation` has no transport rule.
+    missing_transport: struct {
+        sort_name: []const u8,
+    },
     /// A close-by known name for an unknown rule or line-label reference.
     /// The slice must outlive the diagnostic (rule/label names stored in
     /// the environment or proof script satisfy this).
@@ -633,6 +637,7 @@ pub const DiagnosticError = error{
     RewriteRuleHasHypotheses,
     RewriteCycle,
     RewriteStepLimit,
+    MissingTransport,
     RuleNotYetAvailable,
     SorryLine,
     SorryLineArguments,
@@ -1583,6 +1588,7 @@ fn compilerErrorSummary(err: DiagnosticError) []const u8 {
         error.MissingCongruenceRule => t("err_MissingCongruenceRule"),
         error.RewriteCycle => t("err_RewriteCycle"),
         error.RewriteStepLimit => t("err_RewriteStepLimit"),
+        error.MissingTransport => t("err_MissingTransport"),
         error.ExpectedIdentifier,
         error.ExpectedIdent,
         => t("err_ExpectedIdentifier"),
@@ -2216,6 +2222,14 @@ fn writeDetailContextLines(
                 .{info.rule_name},
             );
         },
+        .missing_transport => |info| {
+            try writeContextLine(
+                writer,
+                line_separator,
+                "detail_transport_sort",
+                .{info.sort_name},
+            );
+        },
     }
 }
 
@@ -2297,6 +2311,9 @@ pub fn buildCapturedDiagnosticDetail(
         } } },
         .rewrite_step_limit => |info| .{ .detail = .{ .rewrite_step_limit = .{
             .rule_name = ruleName(env, info.rule_id),
+        } } },
+        .missing_transport => |info| .{ .detail = .{ .missing_transport = .{
+            .sort_name = info.sort_name,
         } } },
         .congruence_dep_violation => |info| .{
             .detail = .{ .dep_violation = info.detail },
