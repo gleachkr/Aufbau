@@ -369,6 +369,13 @@ l1: $ rel _obj $ by pick_hidden (q := $ rel u $) [#1]
 and the hidden body of `hidden_rel`. The hole `_obj` is then filled
 from the resulting concrete conclusion `rel u`.
 
+A `@recover` source may itself be a part of the line that holds holes.
+The target is then read off the visible parts only: with `all_elim`'s
+view `$ nd g (A. x p) $ > $ nd g q $` and the premise `A. x (P x /\ Q x)`,
+the line `$ nd g (P u /\ _wff) $` recovers `t = u` from `P u`, and the
+hole is filled with `Q u`. A target that only a hole could fix stays
+unsolved.
+
 ---
 
 ## Interaction with automatic normalization

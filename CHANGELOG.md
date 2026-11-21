@@ -59,6 +59,11 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- A line with a hole beside a visible part, such as `F a ∧ _wff` checked
+  by a `@view`/`@recover` ∀-elimination, failed: the view's conclusion
+  did not match it, and `@recover` could not read its target through the
+  hole. The target is now read off the visible parts (`a` from `F a`), so
+  such a line checks and the hole is filled.
 - A line that needs a fact converted along a relation declared with `_`
   for its transport failed with "unexpected internal error". It is now
   `MissingTransport`, naming the sort whose `@relation` lacks the rule.

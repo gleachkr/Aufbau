@@ -1,0 +1,23 @@
+-- A @recover target read off the visible part of a line with holes: `u`
+-- from `P u` beside the hole, wherever the hole stands, and with the
+-- context a hole too, and when the view's conclusion splits the context.
+
+view_recover_partial
+--------------------
+
+l1: $ nd (hyp a) (P u /\ _wff) $ by all_elim [#1]
+
+view_recover_partial_right
+--------------------------
+
+l1: $ nd (hyp a) (_wff /\ Q u) $ by all_elim [#1]
+
+view_recover_partial_ctx
+------------------------
+
+l1: $ nd _ctx (P u /\ _wff) $ by all_elim [#1]
+
+view_recover_partial_split
+--------------------------
+
+l1: $ nd (hyp a) (P u /\ _wff) $ by all_elim_w [#1]

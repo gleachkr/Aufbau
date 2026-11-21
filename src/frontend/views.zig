@@ -292,7 +292,7 @@ fn applyViewBindingsWithConclusion(
     var session = try def_ops.beginRuleMatch(view.arg_infos, seeds);
     defer session.deinit();
 
-    // The holey part of the line each bare view binder faced, for
+    // The holey part of the line each view binder faced, for @recover and
     // @abstract to read back.
     var holey_bindings: ?[]?ExprId = null;
     defer if (holey_bindings) |bindings| allocator.free(bindings);
@@ -327,6 +327,9 @@ fn applyViewBindingsWithConclusion(
             holey_bindings,
             ref_exprs,
         );
+    }
+    if (holey_bindings) |bindings| {
+        recordHoleyParts(theorem, view.concl, conclusion.?.holey, bindings);
     }
     if (debug_views) {
         const initial_bindings = try session.materializeOptionalBindings();
@@ -397,6 +400,7 @@ fn applyViewBindingsWithConclusion(
         try applyHoleyDerivedBindings(
             theorem,
             env,
+            registry,
             view,
             bindings,
             view_snapshot.view_bindings,
@@ -645,7 +649,7 @@ fn matchViewAgainstConclusion(
     defer if (initial_state) |*state| {
         state.deinit(session.shared.allocator);
     };
-    if (conclusion != null and ref_exprs.len != 0 and holey_bindings == null) {
+    if (conclusion != null and ref_exprs.len != 0) {
         initial_state = try session.saveSeedState();
     }
 
@@ -799,11 +803,14 @@ fn matchConclusionAfterHyps(
     )) {
         return true;
     }
-    if (conclusion == .concrete and try assignConclusionAcuiResiduals(
+    const line_expr = switch (conclusion) {
+        .concrete, .holey => |expr| expr,
+    };
+    if (try assignConclusionAcuiResiduals(
         env,
         session,
         view,
-        conclusion.concrete,
+        line_expr,
     )) {
         if (trace) {
             ViewTrace.printMessage(
@@ -1034,6 +1041,8 @@ fn assignAcuiResidualBag(
 ) anyerror!void {
     const allocator = session.shared.allocator;
     const theorem = session.shared.theorem;
+    // A holey line's bag tells no residual.
+    if (theorem.containsLineHole(actual)) return;
 
     var leaves: std.ArrayListUnmanaged(TemplateExpr) = .empty;
     defer leaves.deinit(allocator);
@@ -1134,7 +1143,7 @@ fn matchViewAgainstConclusionDebug(
     defer if (initial_state) |*state| {
         state.deinit(session.shared.allocator);
     };
-    if (conclusion != null and ref_exprs.len != 0 and holey_bindings == null) {
+    if (conclusion != null and ref_exprs.len != 0) {
         initial_state = try session.saveSeedState();
     }
 
@@ -1309,6 +1318,7 @@ fn matchHoleyViewConclusion(
 fn applyHoleyDerivedBindings(
     theorem: *TheoremContext,
     env: *const GlobalEnv,
+    registry: *RewriteRegistry,
     view: *const ViewDecl,
     holey_bindings: []const ?ExprId,
     view_bindings: []?ExprId,
@@ -1316,7 +1326,10 @@ fn applyHoleyDerivedBindings(
     for (view.derived_bindings) |binding| {
         const abstract = switch (binding) {
             .abstract => |value| value,
-            .recover => continue,
+            .recover => |recover| {
+                try recoverFromHoleySource(theorem, env, registry, recover, holey_bindings, view_bindings);
+                continue;
+            },
         };
         if (view_bindings[abstract.target_view_idx] != null) continue;
         const right_holey =
@@ -1346,6 +1359,70 @@ fn applyHoleyDerivedBindings(
         };
         if (!walk.found_plug) continue;
         _ = try walk.commit(view_bindings, candidate);
+    }
+}
+
+/// The holey part of the line each binder of `template` faces, where the
+/// two have the same shape down to it: what @recover and @abstract read a
+/// target off when the view match left the binder unbound.
+fn recordHoleyParts(
+    theorem: *const TheoremContext,
+    template: TemplateExpr,
+    actual: ExprId,
+    holey_bindings: []?ExprId,
+) void {
+    if (!theorem.containsLineHole(actual)) return;
+    switch (template) {
+        .binder => |idx| {
+            if (holey_bindings[idx] == null) holey_bindings[idx] = actual;
+        },
+        .app => |app| {
+            const actual_app = switch (theorem.interner.node(actual).*) {
+                .app => |value| value,
+                else => return,
+            };
+            if (actual_app.term_id != app.term_id or actual_app.args.len != app.args.len) return;
+            for (app.args, actual_app.args) |arg, actual_arg| {
+                recordHoleyParts(theorem, arg, actual_arg, holey_bindings);
+            }
+        },
+    }
+}
+
+/// @recover from a source the line gives with holes: the target is read
+/// off its visible parts only (`DerivedBindings.concreteRecoverCandidate`,
+/// where a hole tells nothing). Bound only when that reading is hole-free;
+/// otherwise the derived passes see the target unbound, as before.
+fn recoverFromHoleySource(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    registry: *RewriteRegistry,
+    recover: RecoverDecl,
+    holey_bindings: []const ?ExprId,
+    view_bindings: []?ExprId,
+) !void {
+    if (view_bindings[recover.target_view_idx] != null) return;
+    const source = holey_bindings[recover.source_view_idx] orelse return;
+    const pattern = view_bindings[recover.pattern_view_idx] orelse return;
+    const hole = view_bindings[recover.hole_view_idx] orelse return;
+    const candidate = DerivedBindings.concreteRecoverCandidate(
+        theorem,
+        env,
+        registry,
+        source,
+        pattern,
+        hole,
+        recover.target_sort_name,
+        false,
+    ) catch |err| {
+        if (DerivedBindings.isDerivedBindingFailure(err)) return;
+        return err;
+    };
+    switch (candidate) {
+        .found => |value| if (!theorem.containsLineHole(value)) {
+            view_bindings[recover.target_view_idx] = value;
+        },
+        .none, .vacuous => {},
     }
 }
 

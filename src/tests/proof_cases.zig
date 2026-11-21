@@ -365,6 +365,8 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_hole_recover_ctx", .outcome = .pass },
     .{ .stem = "pass_hole_view_recover_explicit", .outcome = .pass },
     .{ .stem = "pass_hole_view_recover_matrix", .outcome = .pass },
+    // A @recover target read off the visible part of a holey line.
+    .{ .stem = "pass_hole_view_recover_partial", .outcome = .pass },
     .{ .stem = "pass_hole_acui_min_ctx", .outcome = .pass },
     .{ .stem = "pass_hole_acui_disambiguate", .outcome = .pass },
     .{ .stem = "pass_hole_acui_ambiguous", .outcome = .pass },

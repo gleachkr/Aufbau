@@ -977,6 +977,14 @@ fn recoverBindingCandidate(
     skipped_equal_hole: *bool,
     aligner: ?*Aligner,
 ) anyerror!bool {
+    // A hole in a holey line's source tells nothing about the target, and
+    // no reading may contain one.
+    if (theorem.containsLineHole(source_expr)) {
+        switch (theorem.interner.node(source_expr).*) {
+            .placeholder => return false,
+            else => if (pattern_expr == hole_expr) return false,
+        }
+    }
     if (pattern_expr == hole_expr) {
         if (!recordCandidate(candidate, source_expr)) return error.RecoverConflict;
         return true;
