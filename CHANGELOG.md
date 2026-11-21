@@ -3,6 +3,68 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Open goals: a line written `by ?`, or a `?` in place of a premise, takes
+  its goal as given, so the rest of the proof checks against it. `?` may
+  cite the facts it will use (`? [l1, #2]`). The editor shows each open
+  goal as a warning naming its goal, with hole tokens for the parts the line
+  does not fix. A proof with an open goal does not compile; the CLI lists
+  every open goal and how many remain. Unlike `sorry!`, no MMB is written.
+- A code action on `?` lists every rule whose conclusion matches the goal,
+  ranked by how much the cited facts close. Applying one cites the
+  hypotheses and earlier lines that state a premise exactly, leaves each
+  other premise as a new `?`, and puts the cursor on the first of them. A
+  concrete top-level goal also offers "Admit with sorry!".
+- Rule completion writes the rule with one `?` per premise
+  (`mp [?, ?]`), with a tab stop on each where the client takes snippets.
+- Named unknowns: `--| @unknown ?` on a sort makes a longer token with that
+  prefix (`?a`) a hole that keeps its identity across the lines of one
+  proof. A name is solved from what the proof forces: the lines' statements
+  and premises, explicit bindings, and the theorem's conclusion. A value it
+  is not forced to have is never guessed; a name is otherwise bound by the
+  first line that fills it, and a line that fills it differently is an
+  error (`NamedUnknownConflict`). Names may appear in statements and in
+  explicit bindings (`imp_intro (a := $ ?h $)`); a binding's binder must
+  have the written shape (`HoleyBindingMismatch`). The editor hovers each
+  name with its value, or with its shape so far ("Partly inferred
+  expression"); an open goal's report shows what later lines fix of its
+  names; and the apply-rule action names a rule variable the goal leaves
+  open, so the premises that mention it share it.
+
+### Changed
+
+- Comparing expressions through definitions is deterministic: the later
+  definition is unfolded and the two sides are matched, with no search
+  over unfoldings. Lean0's block-heavy `model-fold` part, which took 507 s
+  and 34.6 GB, checks in under 5 s.
+- LSP completions report rules as Constant and terms and definitions as
+  Constructor, not Method and Function, so editors that add call brackets
+  by kind (blink.cmp) no longer write `imp()` or `mp [?](?)`.
+
+### Fixed
+
+- `abc compile` frees each theorem's and lemma's memory once its MMB
+  records are written, so memory follows the largest proof rather than the
+  sum of all of them. Lean0's whole TG library (about 5,300 lemmas), killed
+  at 55 GB before, compiles in 3.9 GiB.
+- `auto?` and `exact?` free each step's records when the step returns: one
+  Cardano goal fell from 1.1 GiB to 30 MiB.
+- The search budget charges the work of matching large contexts, so a
+  default miss on Cardano ends in under 3 s instead of 5.
+- Code actions that print a statement wrote `(p ∧ q)` without spaces in
+  a theory that does not declare `(` and `)` as delimiters, which read back
+  as the token `(p` and failed to parse. The parentheses are now spaced
+  unless the theory declares them as delimiters.
+
+### Removed
+
+- `apply?`: open goals replace it. Its action listed rules as
+  `rule [ref1, ref2]`, which was not a valid line; the action on `?` writes
+  one.
+
 ## [0.0.19] - 2026-11-09
 
 ### Added
