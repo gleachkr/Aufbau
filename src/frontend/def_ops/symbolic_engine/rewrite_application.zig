@@ -381,11 +381,19 @@ fn validateRewriteRuleBindings(
                 binding,
                 state,
             ),
-            .deps = try rewriteBoundValueDeps(
+            // A value can still hold a rule binder the session has not
+            // bound (the witness `a` of `[x/a] p` while `p` is matched).
+            // Its dependencies are unknown, so the rewrite does not apply
+            // here; the normalized comparison, where the binder stands as
+            // a placeholder, can still read it off.
+            .deps = rewriteBoundValueDeps(
                 self,
                 binding,
                 state,
-            ),
+            ) catch |err| switch (err) {
+                error.MissingBinderAssignment => return false,
+                else => return err,
+            },
         };
     }
     if (BindingValidation.firstViolation(rule_decl.args, infos) != null) {
