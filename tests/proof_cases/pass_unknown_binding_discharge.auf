@@ -1,7 +1,7 @@
 ipm
 ---
 
-l1: $ _ , ?h1 ⊢ ?h1 $ by ax
-l2: $ _ , ?h1 , ?h2 ⊢ ?h1 $ by wk [l1]
-l3: $ _ , ?h1 ⊢ _wff → ?h1 $ by imp_intro (a := $ ?h2 $) [l2]
+l1: $ ?h1 ⊢ ?h1 $ by ax
+l2: $ ?h1 , ?h2 ⊢ ?h1 $ by wk [l1]
+l3: $ ?h1 ⊢ _wff → ?h1 $ by imp_intro (a := $ ?h2 $) [l2]
 l4: $ _ ⊢ p → q → p $ by imp_intro (a := $ ?h1 $) [l3]

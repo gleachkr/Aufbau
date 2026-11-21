@@ -125,7 +125,9 @@ pub fn internHoley(
 }
 
 /// Intern a holey surface with each hole replaced by its sort's structural
-/// unit. Null when a hole's sort has no structural combiner.
+/// unit. Null when a hole's sort has no structural combiner, or when a hole
+/// is a named unknown: the unit is a guess, and a name keeps whatever it is
+/// first filled with, so only a forced value may fill it.
 pub fn lowerStructuralHolesToUnits(
     theorem: *TheoremContext,
     env: *const GlobalEnv,
@@ -136,7 +138,8 @@ pub fn lowerStructuralHolesToUnits(
         env: *const GlobalEnv,
         registry: *RewriteRegistry,
 
-        fn mint(self: @This(), t: *TheoremContext, sort_name: []const u8, _: ?[]const u8) anyerror!?ExprId {
+        fn mint(self: @This(), t: *TheoremContext, sort_name: []const u8, name: ?[]const u8) anyerror!?ExprId {
+            if (name != null) return null;
             const acui = try self.registry.resolveStructuralCombinerForSort(
                 self.env,
                 sort_name,

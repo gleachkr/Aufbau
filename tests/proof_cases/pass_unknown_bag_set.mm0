@@ -44,6 +44,27 @@ axiom iff_sym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
 
 --| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
 axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h k: ctx): $ ctx_eq g h $ > $ ctx_eq h k $ > $ ctx_eq g k $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h k: ctx): $ ctx_eq ((g , h) , k) (g , (h , k)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+
+--| @relation seq seq_eq seq_refl seq_trans seq_sym seq_mp
+axiom seq_refl (s: seq): $ s ⟚ s $;
+axiom seq_trans (s t u: seq): $ s ⟚ t $ > $ t ⟚ u $ > $ s ⟚ u $;
+axiom seq_sym (s t: seq): $ s ⟚ t $ > $ t ⟚ s $;
+axiom seq_mp (s t: seq): $ s ⟚ t $ > $ s $ > $ t $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+--| @congr
+axiom hyp_congr (a b: wff): $ a ↔ b $ > $ ctx_eq (hyp a) (hyp b) $;
+--| @congr
+axiom nd_congr (g h: ctx) (a b: wff):
+  $ ctx_eq g h $ > $ a ↔ b $ > $ (g ⊢ a) ⟚ (h ⊢ b) $;
+
 axiom ax (g: ctx) (a: wff): $ g , a ⊢ a $;
 axiom imp_intro (g: ctx) (a b: wff): $ g , a ⊢ b $ > $ g ⊢ a → b $;
 axiom wk (g: ctx) (a b: wff): $ g ⊢ b $ > $ g , a ⊢ b $;
