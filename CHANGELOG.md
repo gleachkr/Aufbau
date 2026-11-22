@@ -43,7 +43,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   says so in a note on its error ("the proof does not determine ?h yet;
   this line may check once it does"). A line citing a `@fallback` chain
   fixes names too: by the one rule of the chain that can check, or by the
-  values all the rules that can check agree on. The wasm compile result
+  values all the rules that can check agree on. A rule with `@view`,
+  `@recover`, `@abstract` or `@fresh` fixes names by its own statement:
+  a line `$ Γ ⊢ ?c $` cited as an ∃-elimination's minor premise takes the
+  goal's conclusion. The wasm compile result
   lists each theorem's names in `unknowns`
   (`[{theorem, name, value, partial}]`), as an open goal's report would
   print them, whether or not the compile succeeds.

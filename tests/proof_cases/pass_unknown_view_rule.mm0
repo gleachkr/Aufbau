@@ -1,0 +1,105 @@
+delimiter $ ( ) $;
+--| @hole _wff
+--| @unknown ?
+provable sort wff;
+--| @hole _ctx
+--| @unknown ?G
+sort ctx;
+--| @hole _set
+--| @vars y
+sort set;
+
+term iff (a b: wff): wff;
+infixr iff: $<->$ prec 20;
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+--| @acui ctx_assoc ctx_comm emp _
+term join (g h: ctx): ctx;
+term hyp (a: wff): ctx;
+term nd (g: ctx) (a: wff): wff;
+term all {x: set} (p: wff x): wff;
+prefix all: $A.$ prec 41;
+term pred (t: set): wff;
+prefix pred: $P$ prec 50;
+term sb (t: set) {x: set} (p: wff x): wff;
+term and (a b: wff): wff;
+infixr and: $/\$ prec 30;
+term qred (t: set): wff;
+prefix qred: $Q$ prec 50;
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (a: wff): $ a <-> a $;
+axiom iff_trans (a b c: wff):
+  $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx):
+  $ ctx_eq (join (join g h) i) (join g (join h i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (join g h) (join h g) $;
+axiom ctx_unit (g: ctx): $ ctx_eq (join emp g) g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ >
+  $ ctx_eq (join g1 h1) (join g2 h2) $;
+
+--| @congr
+axiom nd_congr (g h: ctx) (a b: wff):
+  $ ctx_eq g h $ > $ a <-> b $ > $ nd g a <-> nd h b $;
+
+--| @congr
+axiom and_congr (a b c d: wff):
+  $ a <-> b $ > $ c <-> d $ > $ (a /\ c) <-> (b /\ d) $;
+--| @rewrite
+axiom sb_pred (t: set) {x: set}: $ sb t x (P x) <-> P t $;
+--| @rewrite
+axiom sb_qred (t: set) {x: set}: $ sb t x (Q x) <-> Q t $;
+--| @rewrite
+axiom sb_and (t: set) {x: set} (p q: wff x):
+  $ sb t x (p /\ q) <-> (sb t x p /\ sb t x q) $;
+term ex {x: set} (p: wff x): wff;
+prefix ex: $E.$ prec 41;
+term or (a b: wff): wff;
+infixr or: $\/$ prec 25;
+
+--| @congr
+axiom or_congr (a b c d: wff):
+  $ a <-> b $ > $ c <-> d $ > $ (a \/ c) <-> (b \/ d) $;
+--| @rewrite
+axiom sb_or (t: set) {x: set} (p q: wff x):
+  $ sb t x (p \/ q) <-> (sb t x p \/ sb t x q) $;
+
+--| @congr
+axiom hyp_congr (a b: wff): $ a <-> b $ > $ ctx_eq (hyp a) (hyp b) $;
+
+axiom ax (a: wff): $ nd (hyp a) a $;
+axiom or_l (g: ctx) (a b: wff): $ nd g a $ > $ nd g (a \/ b) $;
+axiom reit (g h: ctx) (a: wff): $ nd g a $ > $ nd (join g h) a $;
+
+--| @view (g h: ctx) {x: set} (t: set) (p: wff x) (q: wff): $ nd g (A. x p) $ > $ nd (join g h) q $
+--| @recover t q p x
+axiom all_elim_w (g h: ctx) {x: set} (t: set) (p: wff x):
+  $ nd g (A. x p) $ > $ nd (join g h) (sb t x p) $;
+--| @view (g: ctx) {x: set} (t: set) (p: wff x) (q: wff): $ nd g q $ > $ nd g (E. x p) $
+--| @recover t q p x
+axiom ex_intro (g: ctx) {x: set} (t: set) (p: wff x):
+  $ nd g (sb t x p) $ > $ nd g (E. x p) $;
+--| @view {x y: set} (g h: ctx x) (p: wff x) (q: wff) (c: wff x): $ nd g (E. x p) $ > $ nd (join h (hyp q)) c $ > $ nd (join g h) c $
+--| @recover y q p x
+axiom ex_elim {x y: set} (g h: ctx x) (p: wff x) (c: wff x):
+  $ nd g (E. x p) $ > $ nd (join h (hyp (sb y x p))) c $ > $ nd (join g h) c $;
+
+-- The open line is built forward and its conclusion fixed only by the
+-- @view rule that uses it: ex_elim's literal `c` is the goal's.
+theorem unknown_view_consumer (u: set) {x: set}:
+  $ nd (hyp (E. x (P x))) (E. x (P x)) $ >
+  $ nd (hyp (E. x (P x))) ((E. x (P x)) \/ Q u) $;
+-- A context name fixed through a @view rule's literal context.
+theorem unknown_view_context (a: wff) (u: set) {x: set}:
+  $ nd (hyp a) (A. x (P x /\ Q x)) $ > $ nd (hyp a) (P u /\ Q u) $;

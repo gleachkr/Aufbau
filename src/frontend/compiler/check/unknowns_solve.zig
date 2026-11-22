@@ -13,9 +13,11 @@
 //! solutions, never a wrong one. A clash anywhere solves nothing; the walk
 //! then reports it where it meets it.
 //!
-//! Rules whose match is not their literal conclusion (`@view`, `@recover`,
-//! `@abstract`, `@fresh`, `@freshen`) contribute nothing; the walk fills
-//! names there. A line citing a `@fallback` chain checks by one of the
+//! A `@view`, `@recover`, `@abstract` or `@fresh` rule is checked through
+//! its view, but the proof applies the rule itself, so its literal
+//! statement gives the equations. A `@freshen` rule renames bound variables
+//! before it matches and contributes nothing; the walk fills names there.
+//! A line citing a `@fallback` chain checks by one of the
 //! chain's rules: each rule is tried on a trail, and when only one can
 //! check, its equations are committed; otherwise only the values every
 //! rule that can check agrees on are.
@@ -263,13 +265,15 @@ const Solver = struct {
         }
     }
 
-    /// Whether `rule_id`'s literal conclusion and premises are what the
-    /// checker matches.
+    /// Whether `rule_id`'s literal conclusion and premises hold of every
+    /// line that applies it. A `@view`, `@recover`, `@abstract` or `@fresh`
+    /// rule is checked through its view, but the proof still applies the
+    /// rule itself, so its literal statement is forced; a substitution in
+    /// it is a rewrite head and waits like any other. A `@freshen` rule
+    /// renames bound variables before it matches, so its literal statement
+    /// would clash with a line that is only alpha-equivalent to it.
     fn literalRule(self: *const Solver, rule_id: u32) bool {
-        const theory = self.inputs.theory;
-        return !theory.views.contains(rule_id) and
-            !theory.fresh_bindings.contains(rule_id) and
-            !theory.freshen_bindings.contains(rule_id);
+        return !self.inputs.theory.freshen_bindings.contains(rule_id);
     }
 
     // ---------------------------------------------------------------
