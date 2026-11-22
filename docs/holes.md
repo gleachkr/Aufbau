@@ -154,8 +154,15 @@ successful check must agree with:
   substitution pushed under a binder) does not fire on it. When `ex_intro`
   proves `∃x (F x ∨ G x)` from a line that ∨-introduction left as
   `F a ∨ ?q`, its premise `[x := ?t] (F x ∨ G x)` normalizes to
-  `F ?t ∨ G ?t`, which fixes `?t` and `?q`. An equation under a definition
-  is dropped;
+  `F ?t ∨ G ?t`, which fixes `?t` and `?q`;
+- an equation under a definition unfolds the later definition, with a
+  fresh unknown for each of its hidden variables, and equates the body
+  with the other side. A line `$ ?a ∉ 0 $` cited where a rule expects
+  `¬ p`, with `p` fixed to `c ∈ 0` by another premise, fixes `?a` as `c`.
+  A definition that ignores an argument fixes nothing there. A definition
+  standing for a whole `@acui` bag unfolds before the bag is read; one
+  that is a member of a bag waits, as a member under a `@rewrite` head
+  does;
 - two applications of an `@acui` combiner are solved as bags under the
   combiner's laws, and only where the answer is forced (a member that can
   equal one member of a side with no rest, a single rest taking what is
@@ -165,7 +172,7 @@ successful check must agree with:
 - a rule with `@view`, `@recover`, `@abstract` or `@fresh` is checked
   through its view, but the proof applies the rule itself, so the rule's
   own conclusion and premises are equated (a substitution in them is a
-  `@rewrite` head, dropped as above). With `ex_elim` read this way, a line
+  `@rewrite` head, solved as above). With `ex_elim` read this way, a line
   `$ Γ ⊢ ?c $` cited as its minor premise takes the goal's conclusion. A
   line whose rule has `@freshen` contributes nothing: the rule renames
   bound variables before it matches;

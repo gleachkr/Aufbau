@@ -1,0 +1,14 @@
+-- A definition that ignores an argument fixes nothing there: `snd ?a d`
+-- equals `snd c d` whatever `?a` is, so the pre-pass must leave `?a` open
+-- rather than equate the two applications argument by argument.
+delimiter $ ( ) $;
+provable sort wff;
+--| @unknown ?
+sort set;
+term bot: wff;
+notation bot: wff = ($F.$:max);
+term P (a: set): wff;
+def snd (a b: set): set = $ b $;
+axiom p_snd (a b: set): $ P (snd a b) $;
+axiom use (a b: set): $ P (snd a b) $ > $ F. $;
+theorem unknown_def_ignored_arg (c d: set): $ F. $;

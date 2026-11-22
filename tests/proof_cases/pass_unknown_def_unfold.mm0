@@ -1,0 +1,44 @@
+-- Named unknowns fixed across lines through a definition: the pre-pass
+-- unfolds a definition against the other side of an equation, so a name
+-- under it takes the value another line forces. Both directions, with a
+-- definition without hidden variables (`nmem`) and one with (`sub`).
+delimiter $ ( ) $;
+provable sort wff;
+--| @unknown ?
+--| @vars y
+sort set;
+term imp (a b: wff): wff;
+infixr imp: $->$ prec 25;
+term not (a: wff): wff;
+prefix not: $~$ prec 40;
+term bot: wff;
+notation bot: wff = ($F.$:max);
+term all {x: set} (p: wff x): wff;
+prefix all: $A.$ prec 41;
+term mem (a b: set): wff;
+infixl mem: $e.$ prec 50;
+term emp: set;
+notation emp: set = ($0$:max);
+term P (a: set): wff;
+
+def nmem (a b: set): wff = $ ~ (a e. b) $;
+infixl nmem: $e/$ prec 50;
+def sub (A B: set) {.x: set}: wff = $ A. x (x e. A -> x e. B) $;
+infixl sub: $C_$ prec 50;
+
+axiom neg_elim (p: wff): $ ~ p $ > $ p $ > $ F. $;
+axiom nm (a: set): $ a e/ 0 $;
+axiom nm_elim (a b: set): $ a e/ b $ > $ a e. b $ > $ F. $;
+axiom sub_any (A B: set): $ A C_ B $;
+axiom sub_use {x: set} (A B: set):
+  $ A. x (x e. A -> x e. B) $ > $ P A $ > $ F. $;
+axiom sub_use_folded (A B: set): $ A C_ B $ > $ P A $ > $ F. $;
+
+-- The line states the definition, the consuming rule its unfolding.
+theorem unknown_def_line_folded (c: set): $ c e. 0 $ > $ F. $;
+-- The line states the unfolding, the consuming rule the definition.
+theorem unknown_def_line_unfolded (c: set): $ c e. 0 $ > $ F. $;
+-- As the first, through a hidden bound variable.
+theorem unknown_def_hidden_folded (d: set): $ P d $ > $ F. $;
+-- As the second, through a hidden bound variable.
+theorem unknown_def_hidden_unfolded (d: set): $ P d $ > $ F. $;

@@ -10,10 +10,10 @@
 //! first-order unification and commits only what is forced. An equation
 //! under a `@rewrite` head is solved by the normal forms of its sides once
 //! both have a head that decides them; until then it waits, as does an
-//! `@acui` bag the bag step cannot decide yet. An equation under a
-//! definition is dropped. Waiting or dropping only leaves more solutions,
-//! never a wrong one. A clash anywhere solves nothing; the walk then reports it
-//! where it meets it.
+//! `@acui` bag the bag step cannot decide yet. Waiting only leaves more
+//! solutions, never a wrong one. An equation under a definition unfolds
+//! the later definition and equates its body with the other side. A clash
+//! anywhere solves nothing; the walk then reports it where it meets it.
 //!
 //! A `@view`, `@recover`, `@abstract` or `@fresh` rule is checked through
 //! its view, but the proof applies the rule itself, so its literal
@@ -449,6 +449,11 @@ const Solver = struct {
                 try self.bind(rhs, lhs);
                 continue;
             }
+            // Before the bag step: a definition may stand for a bag.
+            if (self.definitionHead(lhs) != null or self.definitionHead(rhs) != null) {
+                try self.definitionPair(lhs, rhs);
+                continue;
+            }
             if (self.combinerOf(lhs) orelse self.combinerOf(rhs)) |combiner| {
                 try self.bagStep(combiner, lhs, rhs);
                 continue;
@@ -488,24 +493,67 @@ const Solver = struct {
         }
     }
 
-    /// `lhs = rhs`, where a side is headed by a definition or a `@rewrite`
-    /// head. A definition may unfold to anything, so a side headed by one
-    /// forces nothing and the equation is dropped. Otherwise each side's
-    /// normal form equals it under any binding of the pass's variables,
-    /// since no rewrite that needs a binding to avoid a variable fires
-    /// through one (`mint`). When both normal forms are decided by their
-    /// heads they are equated; otherwise the equation waits for more
+    /// `lhs = rhs`, where a side is headed by a `@rewrite` head. Each
+    /// side's normal form equals it under any binding of the pass's
+    /// variables, since no rewrite that needs a binding to avoid a variable
+    /// fires through one (`mint`). A normal form headed by a definition
+    /// unfolds (`definitionPair`). When both normal forms are decided by
+    /// their heads they are equated; otherwise the equation waits for more
     /// bindings.
     fn rewritePair(self: *Solver, lhs: ExprId, rhs: ExprId) !void {
-        if (self.definitionHeaded(lhs) or self.definitionHeaded(rhs)) return;
         const lhs_normal = try self.normalForm(lhs);
         const rhs_normal = try self.normalForm(rhs);
         if (lhs_normal == rhs_normal) return;
-        if (self.definitionHeaded(lhs_normal) or self.definitionHeaded(rhs_normal)) return;
+        if (self.definitionHead(lhs_normal) != null or self.definitionHead(rhs_normal) != null) {
+            return self.definitionPair(lhs_normal, rhs_normal);
+        }
         if (self.decided(lhs_normal) and self.decided(rhs_normal)) {
             return self.equate(lhs_normal, rhs_normal);
         }
         try self.postponed.append(self.inputs.allocator, .{ lhs, rhs });
+    }
+
+    /// `lhs = rhs` with a side headed by a definition: the later
+    /// definition unfolds (a definition mentions only earlier ones, so
+    /// this ends), and its body is equated with the other side. A
+    /// definition application equals only what its body equals, so this
+    /// forces nothing a solution lacks. The body's hidden variables must
+    /// stay out of the arguments, which the pass does not check: a value
+    /// that breaks that leaves no solution at all, and the walk reports it.
+    fn definitionPair(self: *Solver, lhs: ExprId, rhs: ExprId) !void {
+        const lhs_def = self.definitionHead(lhs);
+        const rhs_def = self.definitionHead(rhs);
+        const unfold_lhs = lhs_def != null and (rhs_def == null or lhs_def.? >= rhs_def.?);
+        if (unfold_lhs) {
+            try self.equate(try self.unfoldDefinition(lhs), rhs);
+        } else {
+            try self.equate(lhs, try self.unfoldDefinition(rhs));
+        }
+    }
+
+    /// The definition heading `expr`, if any.
+    fn definitionHead(self: *const Solver, expr: ExprId) ?u32 {
+        return switch (self.inputs.theorem.interner.node(self.resolve(expr)).*) {
+            .app => |app| if (self.inputs.theory.env.openableDef(app.term_id) != null) app.term_id else null,
+            else => null,
+        };
+    }
+
+    /// The body of a definition application, with a fresh variable for
+    /// each of the definition's hidden variables, which binds to the
+    /// variable the other side puts there.
+    fn unfoldDefinition(self: *Solver, expr: ExprId) !ExprId {
+        const theorem = self.inputs.theorem;
+        const allocator = self.inputs.allocator;
+        const app = theorem.interner.node(self.resolve(expr)).app;
+        const term = self.inputs.theory.env.openableDef(app.term_id).?;
+        const binders = try allocator.alloc(ExprId, app.args.len + term.dummy_args.len);
+        defer allocator.free(binders);
+        @memcpy(binders[0..app.args.len], app.args);
+        for (term.dummy_args, binders[app.args.len..]) |dummy, *binder| {
+            binder.* = try self.mint(dummy.sort_name);
+        }
+        return theorem.instantiateTemplate(term.body.?, binders);
     }
 
     /// The normal form of `expr` with the bindings made so far written in;
@@ -532,13 +580,6 @@ const Solver = struct {
         return switch (self.inputs.theorem.interner.node(self.resolve(expr)).*) {
             .app => |app| !self.undecided(app.term_id),
             else => true,
-        };
-    }
-
-    fn definitionHeaded(self: *const Solver, expr: ExprId) bool {
-        return switch (self.inputs.theorem.interner.node(self.resolve(expr)).*) {
-            .app => |app| self.inputs.theory.env.openableDef(app.term_id) != null,
-            else => false,
         };
     }
 

@@ -1,0 +1,23 @@
+unknown_def_line_folded
+---
+
+l1: $ ?a e/ 0 $ by nm []
+l2: $ F. $ by neg_elim [l1, #1]
+
+unknown_def_line_unfolded
+---
+
+l1: $ ~ (?a e. 0) $ by nm []
+l2: $ F. $ by nm_elim [l1, #1]
+
+unknown_def_hidden_folded
+---
+
+l1: $ ?a C_ 0 $ by sub_any []
+l2: $ F. $ by sub_use (x := $ y $) [l1, #1]
+
+unknown_def_hidden_unfolded
+---
+
+l1: $ A. y (y e. ?a -> y e. 0) $ by sub_any []
+l2: $ F. $ by sub_use_folded [l1, #1]

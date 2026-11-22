@@ -76,5 +76,7 @@ theorem self (G: ctx) (p: wff): $ G ⊢ p → p $;
 axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
 axiom axe (g: ctx) (a: wff): $ g , emp , a ⊢ a $;
 theorem unit_kept (G: ctx) (p: wff): $ G , emp , p ⊢ p $;
+-- A definition standing for a context unfolds before the bag step reads
+-- it: `?Γa , q = twoc p q` is `?Γa , q = p , q`, which forces `?Γa := p`.
 def twoc (a b: wff): ctx = $ a , b $;
 theorem viadef (p q: wff): $ twoc p q ⊢ q $;

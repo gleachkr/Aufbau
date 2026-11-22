@@ -50,7 +50,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   normal forms: a line `F a ∨ ?q` cited by an ∃- or ∀-introduction for
   `∃x (F x ∨ G x)` fixes `?q` and the witness. A rewrite that needs a value
   to avoid a variable (a vacuous substitution, or one pushed under a
-  binder) never fires on an unknown. The wasm compile result
+  binder) never fires on an unknown. An equation under a definition
+  unfolds it: a line `$ ?a ∉ 0 $` cited where a rule expects `¬ (c ∈ 0)`
+  fixes `?a`. The wasm compile result
   lists each theorem's names in `unknowns`
   (`[{theorem, name, value, partial}]`), as an open goal's report would
   print them, whether or not the compile succeeds.

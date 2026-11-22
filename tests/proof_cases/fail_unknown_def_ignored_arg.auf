@@ -1,0 +1,5 @@
+unknown_def_ignored_arg
+---
+
+l1: $ P (snd ?a d) $ by p_snd []
+l2: $ F. $ by use (a := $ c $, b := $ d $) [l1]

@@ -1115,6 +1115,8 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_unknown_view_rule", .outcome = .pass },
     .{ .stem = "pass_unknown_rewrite", .outcome = .pass },
     .{ .stem = "fail_unknown_rewrite_vacuous", .outcome = .{ .fail = error.UnifyMismatch } },
+    .{ .stem = "pass_unknown_def_unfold", .outcome = .pass },
+    .{ .stem = "fail_unknown_def_ignored_arg", .outcome = .{ .fail = error.MissingBinderAssignment } },
     .{ .stem = "fail_unknown_partial_shape_conflict", .outcome = .{ .fail = error.MissingBinderAssignment } },
     .{ .stem = "fail_unknown_pairing_limit", .outcome = .{ .fail = error.NamedUnknownPairingLimit } },
     // Equations that clash solve nothing; the walk reports the mismatch.
@@ -1135,7 +1137,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "fail_unknown_prefix_token_after", .outcome = .{ .fail = error.HoleTokenNameCollision } },
     // A definition leaf may stand for several members: the bag waits, and
     // the walk reports the binder it cannot fix (no `?Γa := emp`).
-    .{ .stem = "fail_unknown_bag_def_leaf", .outcome = .{ .fail = error.MissingBinderAssignment } },
+    .{ .stem = "pass_unknown_bag_def", .outcome = .pass },
     // A token that is itself a prefix names nothing.
     .{ .stem = "fail_unknown_bare_prefix", .outcome = .{ .fail = error.UnknownMathToken } },
 };
