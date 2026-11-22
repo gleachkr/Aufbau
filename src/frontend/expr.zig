@@ -1105,9 +1105,20 @@ pub const TheoremContext = struct {
         self: *TheoremContext,
         sort_name: []const u8,
     ) !ExprId {
+        return self.addRestrictedLineHolePlaceholder(sort_name, std.math.maxInt(u55));
+    }
+
+    /// `addUnrestrictedLineHolePlaceholder` for a leaf that may mention
+    /// only the variables whose bits `deps` keeps: a dependency check counts
+    /// it free of the others.
+    pub fn addRestrictedLineHolePlaceholder(
+        self: *TheoremContext,
+        sort_name: []const u8,
+        deps: u55,
+    ) !ExprId {
         return self.mintMetaPlaceholder(.{
             .sort_name = sort_name,
-            .deps = std.math.maxInt(u55),
+            .deps = deps,
             .class = .meta,
             .line_hole = true,
         });

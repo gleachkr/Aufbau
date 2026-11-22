@@ -1114,6 +1114,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_unknown_partial_shape", .outcome = .pass },
     .{ .stem = "pass_unknown_view_rule", .outcome = .pass },
     .{ .stem = "pass_unknown_rewrite", .outcome = .pass },
+    .{ .stem = "pass_unknown_rewrite_binder", .outcome = .pass },
     .{ .stem = "fail_unknown_rewrite_vacuous", .outcome = .{ .fail = error.UnifyMismatch } },
     .{ .stem = "pass_unknown_def_unfold", .outcome = .pass },
     .{ .stem = "fail_unknown_def_ignored_arg", .outcome = .{ .fail = error.MissingBinderAssignment } },

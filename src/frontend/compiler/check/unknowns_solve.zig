@@ -11,7 +11,9 @@
 //! under a `@rewrite` head is solved by the normal forms of its sides once
 //! both have a head that decides them; until then it waits, as does an
 //! `@acui` bag the bag step cannot decide yet. Waiting only leaves more
-//! solutions, never a wrong one. An equation under a definition unfolds
+//! solutions, never a wrong one. One that still waits at the end, against
+//! a term whose head decides it, holds only if the rewrite head rewrites
+//! at the top, so its rewrite rules are tried as a chain's rules are. An equation under a definition unfolds
 //! the later definition and equates its body with the other side. A clash
 //! anywhere solves nothing; the walk then reports it where it meets it,
 //! and the pass names the first line by which the lines clash and, when
@@ -35,6 +37,7 @@ const GlobalEnv = @import("../../env.zig").GlobalEnv;
 const RuleDecl = @import("../../env.zig").RuleDecl;
 const MM0Parser = @import("../../parse_recovery.zig").MM0Parser;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
+const RewriteRule = @import("../../rewrite_registry.zig").RewriteRule;
 const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 const SurfaceExpr = @import("../../surface_expr.zig");
 const ProofScript = @import("../../proof_script.zig");
@@ -135,6 +138,8 @@ const Solver = struct {
     /// The two terms of the clash, when it was between two terms that
     /// cannot be equal.
     clash_terms: ?[2]ExprId = null,
+    /// Equations a rewrite step was committed for, so it is not again.
+    steps_done: std.ArrayListUnmanaged([2]ExprId) = .empty,
 
     const Choice = struct {
         app: RuleApplication,
@@ -154,6 +159,7 @@ const Solver = struct {
         self.trail.deinit(allocator);
         for (self.choices.items) |choice| allocator.free(choice.rules);
         self.choices.deinit(allocator);
+        self.steps_done.deinit(allocator);
         if (self.canonicalizer) |*canonicalizer| canonicalizer.deinit();
     }
 
@@ -351,6 +357,9 @@ const Solver = struct {
             while (i < self.choices.items.len) : (i += 1) {
                 if (!self.choices.items[i].decided) try self.decide(i);
             }
+            if (self.progress != before) continue;
+            // Rewrite steps wait until the chains decide nothing more.
+            try self.decideSteps();
             if (self.progress == before) return;
         }
     }
@@ -358,44 +367,75 @@ const Solver = struct {
     fn decide(self: *Solver, index: usize) !void {
         const allocator = self.inputs.allocator;
         const choice = self.choices.items[index];
-        // The names known before the trials; a trial may add more, and
-        // those stay open.
+        const attempts = try allocator.alloc(Attempt, choice.rules.len);
+        defer allocator.free(attempts);
+        for (choice.rules, attempts) |rule_id, *attempt| {
+            attempt.* = .{ .chain = .{ .choice = choice, .rule_id = rule_id } };
+        }
+        switch (try self.weigh(attempts)) {
+            .one => |i| {
+                self.choices.items[index].decided = true;
+                try self.apply(attempts[i]);
+                try self.settle();
+            },
+            .agreed => |agreed| try self.commitAgreed(agreed),
+        }
+    }
+
+    /// What trying each of `attempts` forces: the index of the only one
+    /// that can check, or else the values every one that can check gives
+    /// the names known now (a trial may add names, and those stay open);
+    /// a clash when none can.
+    const Verdict = union(enum) { one: usize, agreed: []?ExprId };
+
+    fn weigh(self: *Solver, attempts: []const Attempt) !Verdict {
+        const allocator = self.inputs.allocator;
         const name_count = self.names.count();
         var agreed: ?[]?ExprId = null;
-        defer if (agreed) |values| allocator.free(values);
-        var survivor: ?u32 = null;
+        errdefer if (agreed) |values| allocator.free(values);
+        var survivor: usize = 0;
         var survivors: usize = 0;
-        for (choice.rules) |rule_id| {
-            const values = (try self.trial(choice, rule_id, name_count)) orelse continue;
+        for (attempts, 0..) |attempt, i| {
+            const values = (try self.trial(attempt, name_count)) orelse continue;
             survivors += 1;
-            survivor = rule_id;
+            survivor = i;
             if (agreed) |previous| {
                 defer allocator.free(values);
-                for (previous, values) |*value, other| {
-                    if (value.* != other) value.* = null;
+                for (previous, values) |*value, theirs| {
+                    if (value.* != theirs) value.* = null;
                 }
             } else agreed = values;
         }
         if (survivors == 0) return error.Clash;
         if (survivors == 1) {
-            self.choices.items[index].decided = true;
-            try self.ruleApplication(choice.app, survivor.?, choice.goal);
-            return self.settle();
+            allocator.free(agreed.?);
+            return .{ .one = survivor };
         }
-        for (agreed.?, self.names.values()[0..name_count]) |value, variable| {
+        return .{ .agreed = agreed.? };
+    }
+
+    /// Give each name the value every surviving attempt agreed on, and
+    /// free `agreed`.
+    fn commitAgreed(self: *Solver, agreed: []?ExprId) !void {
+        defer self.inputs.allocator.free(agreed);
+        for (agreed, self.names.values()[0..agreed.len]) |value, variable| {
             if (value) |agreed_value| try self.equate(variable, agreed_value);
         }
         try self.settle();
     }
 
-    /// Try the rule `rule_id` for `choice` and undo it: the values of the
-    /// first `name_count` names when it can check, null when it clashes.
-    /// Caller frees.
-    fn trial(self: *Solver, choice: Choice, rule_id: u32, name_count: usize) !?[]?ExprId {
+    /// Try `attempt` and undo it: the values of the first `name_count`
+    /// names when it can check, null when it clashes. Caller frees.
+    fn trial(self: *Solver, attempt: Attempt, name_count: usize) !?[]?ExprId {
         const allocator = self.inputs.allocator;
         std.debug.assert(self.work.items.len == 0);
-        const rule: *const RuleDecl = &self.inputs.theory.env.rules.items[rule_id];
-        if (choice.app.refs.len != rule.hyps.len) return null;
+        switch (attempt) {
+            .chain => |chain| {
+                const rule: *const RuleDecl = &self.inputs.theory.env.rules.items[chain.rule_id];
+                if (chain.choice.app.refs.len != rule.hyps.len) return null;
+            },
+            .step => {},
+        }
         const trail_mark = self.trail.items.len;
         const progress_mark = self.progress;
         const postponed = try allocator.dupe([2]ExprId, self.postponed.items);
@@ -414,7 +454,7 @@ const Solver = struct {
         }
         self.in_trial = true;
         const checks = blk: {
-            self.ruleApplication(choice.app, rule_id, choice.goal) catch |err| switch (err) {
+            self.apply(attempt) catch |err| switch (err) {
                 error.Clash => break :blk false,
                 else => return err,
             };
@@ -431,6 +471,192 @@ const Solver = struct {
             value.* = try self.resolveFully(variable);
         }
         return values;
+    }
+
+    /// One way a line or an equation may check, tried on a trail.
+    const Attempt = union(enum) {
+        /// The rule `rule_id` of a `@fallback` chain.
+        chain: struct { choice: Choice, rule_id: u32 },
+        /// `stuck = other` by the rewrite `rule` at the top of `stuck`.
+        step: struct { stuck: ExprId, other: ExprId, rule: *const RewriteRule },
+    };
+
+    fn apply(self: *Solver, attempt: Attempt) !void {
+        switch (attempt) {
+            .chain => |chain| try self.ruleApplication(chain.choice.app, chain.rule_id, chain.choice.goal),
+            .step => |step| try self.rewriteStep(step.stuck, step.other, step.rule),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Rewrite steps: an equation still waiting when nothing else decides
+    // anything, between a term under a `@rewrite` head and a term whose
+    // head decides it, holds only if the first rewrites at the top: its
+    // normal form must lose its head. Every rewrite rule of that head is
+    // tried like a rule of a chain. A rule's bound binders must take
+    // distinct bound variables, and its other binders must avoid the bound
+    // variables they may not depend on; a pass variable there is narrowed
+    // to one that avoids them (`restrict`), which lets the rewrite fire.
+
+    fn decideSteps(self: *Solver) !void {
+        const allocator = self.inputs.allocator;
+        const pending = try allocator.dupe([2]ExprId, self.postponed.items);
+        defer allocator.free(pending);
+        for (pending) |pair| {
+            const lhs = try self.normalForm(pair[0]);
+            const rhs = try self.normalForm(pair[1]);
+            if (self.stuckHead(lhs) != null and self.rigid(rhs, lhs)) {
+                try self.decideStep(lhs, rhs);
+            } else if (self.stuckHead(rhs) != null and self.rigid(lhs, rhs)) {
+                try self.decideStep(rhs, lhs);
+            }
+        }
+    }
+
+    /// The `@rewrite` head of `expr`, when only its rewrites can change
+    /// it: not a definition, which unfolds, nor an `@acui` combiner, whose
+    /// laws rearrange it.
+    fn stuckHead(self: *const Solver, expr: ExprId) ?u32 {
+        return switch (self.inputs.theorem.interner.node(self.resolve(expr)).*) {
+            .app => |app| if (self.rewriteOnly(app.term_id)) app.term_id else null,
+            else => null,
+        };
+    }
+
+    fn rewriteOnly(self: *const Solver, term_id: u32) bool {
+        const theory = self.inputs.theory;
+        return theory.env.openableDef(term_id) == null and
+            AcuiBag.Combiner.of(&theory.registry, &theory.env, term_id) == null and
+            theory.registry.getRewriteRules(term_id).len != 0;
+    }
+
+    /// Whether `expr` can equal only terms with its head, and that head
+    /// is not `stuck`'s.
+    fn rigid(self: *const Solver, expr: ExprId, stuck: ExprId) bool {
+        const resolved = self.resolve(expr);
+        if (self.isVariable(resolved)) return false;
+        return switch (self.inputs.theorem.interner.node(resolved).*) {
+            .app => |app| !self.flexibleHead(app.term_id) and app.term_id != self.stuckHead(stuck).?,
+            .variable => true,
+            .placeholder => false,
+        };
+    }
+
+    fn decideStep(self: *Solver, stuck: ExprId, other: ExprId) !void {
+        const allocator = self.inputs.allocator;
+        for (self.steps_done.items) |done| {
+            if (done[0] == stuck and done[1] == other) return;
+        }
+        const rules = self.inputs.theory.registry.getRewriteRules(self.stuckHead(stuck).?);
+        const attempts = try allocator.alloc(Attempt, rules.len);
+        defer allocator.free(attempts);
+        for (rules, attempts) |*rule, *attempt| {
+            attempt.* = .{ .step = .{ .stuck = stuck, .other = other, .rule = rule } };
+        }
+        const verdict = self.weigh(attempts) catch |err| switch (err) {
+            error.Clash => return self.clash(stuck, other),
+            // A rule the pass cannot read could be the one that fires, so
+            // the equation forces nothing.
+            error.Unreadable => return,
+            else => return err,
+        };
+        switch (verdict) {
+            .one => |i| {
+                // A right side under a rewrite head again would wait as a
+                // new equation, and could be stepped without end.
+                switch (rules[i].rhs) {
+                    .app => |app| if (self.rewriteOnly(app.term_id)) return,
+                    .binder => {},
+                }
+                try self.steps_done.append(allocator, .{ stuck, other });
+                try self.apply(attempts[i]);
+                try self.settle();
+            },
+            .agreed => |agreed| try self.commitAgreed(agreed),
+        }
+    }
+
+    /// The equations of `stuck = other` when `rule` rewrites `stuck` at the
+    /// top: its left side is `stuck` argument by argument (each modulo
+    /// conversion, as the normalizer rewrites inside first), and its right
+    /// side is `other`. Then the rule's binders must satisfy its
+    /// dependencies.
+    fn rewriteStep(self: *Solver, stuck: ExprId, other: ExprId, rule: *const RewriteRule) !void {
+        const allocator = self.inputs.allocator;
+        const theorem = self.inputs.theorem;
+        const decl: *const RuleDecl = &self.inputs.theory.env.rules.items[rule.rule_id];
+        if (decl.args.len != rule.num_binders) return error.Unreadable;
+        const binders = try allocator.alloc(ExprId, decl.args.len);
+        defer allocator.free(binders);
+        for (decl.args, binders) |arg, *binder| binder.* = try self.mint(arg.sort_name);
+        const lhs = try theorem.instantiateTemplate(rule.lhs, binders);
+        const lhs_app = switch (theorem.interner.node(lhs).*) {
+            .app => |app| app,
+            else => return error.Unreadable,
+        };
+        const stuck_app = theorem.interner.node(self.resolve(stuck)).app;
+        if (lhs_app.term_id != stuck_app.term_id or lhs_app.args.len != stuck_app.args.len) {
+            return error.Clash;
+        }
+        for (lhs_app.args, stuck_app.args) |l, r| try self.equate(l, r);
+        try self.equate(try theorem.instantiateTemplate(rule.rhs, binders), other);
+        try self.settle();
+        // The bound binders' variables, which the other binders' values
+        // must avoid where the rule says so.
+        const bits = try allocator.alloc(u55, decl.args.len);
+        defer allocator.free(bits);
+        for (decl.args, binders, bits, 0..) |arg, binder, *bit, i| {
+            bit.* = 0;
+            if (!arg.bound) continue;
+            const value = self.resolve(binder);
+            switch (theorem.interner.node(value).*) {
+                .variable => {},
+                // Which variable it is decides what may fire.
+                else => return error.Unreadable,
+            }
+            const leaf = (try theorem.currentLeafInfo(value)) orelse return error.Unreadable;
+            if (!leaf.bound) return error.Clash;
+            for (decl.args[0..i], binders[0..i]) |earlier, earlier_binder| {
+                if (earlier.bound and self.resolve(earlier_binder) == value) return error.Clash;
+            }
+            bit.* = leaf.deps;
+        }
+        for (decl.args, binders) |arg, binder| {
+            if (arg.bound) continue;
+            var avoid: u55 = 0;
+            for (decl.args, bits) |bound, bit| {
+                if (bound.bound and arg.deps & bound.deps == 0) avoid |= bit;
+            }
+            if (avoid != 0) try self.restrict(binder, ~avoid);
+        }
+    }
+
+    /// Narrow `expr` to mention only the variables `allowed` keeps: a pass
+    /// variable that may mention others is bound to a fresh one that may
+    /// not, and a theorem variable outside `allowed` is a clash. A term
+    /// under a definition or `@rewrite` head may still lose a variable as
+    /// more is bound, so it is left as it is.
+    fn restrict(self: *Solver, expr: ExprId, allowed: u55) !void {
+        const theorem = self.inputs.theorem;
+        const resolved = self.resolve(expr);
+        if (self.isVariable(resolved)) {
+            const deps = try theorem.exprDeps(resolved, .{});
+            if (deps & ~allowed == 0) return;
+            const sort_name = try SurfaceExpr.exprIdSortName(theorem, &self.inputs.theory.env, resolved);
+            const narrowed = try theorem.addRestrictedLineHolePlaceholder(sort_name, deps & allowed);
+            try self.variables.put(self.inputs.allocator, narrowed, null);
+            if (self.in_trial) try self.trail.append(self.inputs.allocator, resolved);
+            self.variables.getPtr(resolved).?.* = narrowed;
+            self.progress += 1;
+            return;
+        }
+        switch (theorem.interner.node(resolved).*) {
+            .app => |app| if (!self.undecided(app.term_id)) for (app.args) |arg| {
+                try self.restrict(arg, allowed);
+            },
+            .variable => if (try theorem.exprDeps(resolved, .{}) & ~allowed != 0) return error.Clash,
+            .placeholder => {},
+        }
     }
 
     fn internSurface(self: *Solver, expr: *const Expr) !?ExprId {
@@ -986,6 +1212,13 @@ const Solver = struct {
         const want = try SurfaceExpr.exprIdSortName(theorem, env, variable);
         const have = try SurfaceExpr.exprIdSortName(theorem, env, value);
         if (!std.mem.eql(u8, want, have)) return error.Clash;
+        const allowed = try theorem.exprDeps(variable, .{});
+        // Bind the wider of two pass variables to the narrower.
+        if (self.isVariable(value)) {
+            const other = try theorem.exprDeps(value, .{});
+            if (other != allowed and allowed & ~other == 0) return self.bind(value, variable);
+        }
+        if (allowed != std.math.maxInt(u55)) try self.restrict(value, allowed);
         if (self.in_trial) try self.trail.append(self.inputs.allocator, variable);
         self.variables.getPtr(variable).?.* = value;
         self.progress += 1;

@@ -1,0 +1,109 @@
+-- Named unknowns through a substitution pushed under a binder. The
+-- rewrites that do so need the substituted term to avoid the bound
+-- variable, which an unknown term may not; but the other side of the
+-- equation is headed by the quantifier, so the substitution must rewrite
+-- at the top, and `sb_all` (or `sb_ex`) is the only rule that can. The
+-- pass tries each rewrite of `sb` there and commits the one that checks,
+-- with the term narrowed to one that avoids the bound variable.
+delimiter $ ( ) $;
+--| @hole _wff
+--| @unknown ?
+provable sort wff;
+--| @hole _ctx
+--| @unknown ?G
+sort ctx;
+--| @hole _obj
+--| @vars y
+sort obj;
+
+term iff (a b: wff): wff;
+infixr iff: $<->$ prec 20;
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+--| @acui ctx_assoc ctx_comm emp _
+term join (g h: ctx): ctx;
+term hyp (a: wff): ctx;
+term nd (g: ctx) (a: wff): wff;
+term or (a b: wff): wff;
+infixr or: $\/$ prec 25;
+term all {x: obj} (p: wff x): wff;
+prefix all: $A.$ prec 41;
+term ex {x: obj} (p: wff x): wff;
+prefix ex: $E.$ prec 41;
+-- The substituted term may mention the variable, as in fol-base.
+term sb {x: obj} (t: obj x) (p: wff x): wff;
+term P (a: obj): wff;
+prefix P: $P$ prec 50;
+term Q (a: obj): wff;
+prefix Q: $Q$ prec 50;
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (a: wff): $ a <-> a $;
+axiom iff_trans (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx): $ ctx_eq (join (join g h) i) (join g (join h i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (join g h) (join h g) $;
+axiom ctx_unit (g: ctx): $ ctx_eq (join emp g) g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (join g1 h1) (join g2 h2) $;
+--| @congr
+axiom hyp_congr (a b: wff): $ a <-> b $ > $ ctx_eq (hyp a) (hyp b) $;
+--| @congr
+axiom nd_congr (g h: ctx) (a b: wff): $ ctx_eq g h $ > $ a <-> b $ > $ nd g a <-> nd h b $;
+--| @congr
+axiom or_congr (a b c d: wff): $ a <-> b $ > $ c <-> d $ > $ (a \/ c) <-> (b \/ d) $;
+--| @congr
+axiom all_congr {x: obj} (p q: wff x): $ p <-> q $ > $ A. x p <-> A. x q $;
+--| @congr
+axiom ex_congr {x: obj} (p q: wff x): $ p <-> q $ > $ E. x p <-> E. x q $;
+
+--| @rewrite
+axiom sb_P {x: obj} (t: obj x): $ sb x t (P x) <-> P t $;
+--| @rewrite
+axiom sb_Q {x: obj} (t: obj x): $ sb x t (Q x) <-> Q t $;
+--| @rewrite
+axiom sb_or {x: obj} (t: obj x) (p q: wff x):
+  $ sb x t (p \/ q) <-> (sb x t p \/ sb x t q) $;
+--| @rewrite
+axiom sb_all {x y: obj} (t: obj x) (p: wff x y):
+  $ sb x t (A. y p) <-> A. y (sb x t p) $;
+--| @rewrite
+axiom sb_ex {x y: obj} (t: obj x) (p: wff x y):
+  $ sb x t (E. y p) <-> E. y (sb x t p) $;
+-- Substitution into a formula without the variable: `p` may not mention
+-- `x`, so it never fires on an unknown.
+--| @rewrite
+axiom sb_irrel {x: obj} (t: obj x) (p: wff): $ sb x t p <-> p $;
+
+axiom ax (a: wff): $ nd (hyp a) a $;
+axiom or_l (g: ctx) (a b: wff): $ nd g a $ > $ nd g (a \/ b) $;
+axiom reit (g h: ctx) (a: wff): $ nd g a $ > $ nd (join g h) a $;
+--| @view {x: obj} (g: ctx x) (t: obj) (p: wff x) (q: wff): $ nd g q $ > $ nd g (E. x p) $
+--| @recover t q p x
+axiom ex_intro {x: obj} (g: ctx x) (t: obj) (p: wff x):
+  $ nd g (sb x t p) $ > $ nd g (E. x p) $;
+--| @view {x: obj} (g: ctx x) (t: obj) (p: wff x) (q: wff): $ nd g (A. x p) $ > $ nd g q $
+--| @recover t q p x
+axiom all_elim {x: obj} (g: ctx x) (t: obj) (p: wff x):
+  $ nd g (A. x p) $ > $ nd g (sb x t p) $;
+--| @view {x y: obj} (g: ctx x) (p: wff x) (q: wff): $ nd g q $ > $ nd g (A. x p) $
+--| @recover y q p x
+axiom all_intro {x y: obj} (g: ctx x) (p: wff x):
+  $ nd g (sb x y p) $ > $ nd g (A. x p) $;
+
+-- Swap two universal quantifiers: l3's premise is `sb x ?t (A. y ..)`,
+-- which equals `A. ?z ?q` only by `sb_all`.
+theorem unknown_rewrite_binder_all {x y a b: obj}:
+  $ nd (hyp (A. x A. y (P x \/ Q y))) (A. y A. x (P x \/ Q y)) $;
+-- Two existential introductions: l3's premise `sb x ?t (E. y ..)` must
+-- equal l2's conclusion `E. ?z ?q`, which only `sb_ex` gives.
+theorem unknown_rewrite_binder_ex (u v: obj) {x y: obj}:
+  $ nd (hyp (P u \/ Q v)) (E. x E. y (P x \/ Q y)) $;

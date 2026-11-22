@@ -1,0 +1,15 @@
+unknown_rewrite_binder_all
+--------------------------
+
+l1: $ nd (hyp (A. x A. y (P x \/ Q y))) (A. x A. y (P x \/ Q y)) $ by ax []
+l2: $ nd (hyp (A. x A. y (P x \/ Q y))) ?f $ by all_elim [l1]
+l3: $ nd (hyp (A. x A. y (P x \/ Q y))) ?g $ by all_elim [l2]
+l4: $ nd (hyp (A. x A. y (P x \/ Q y))) ?h $ by all_intro (y := $ a $) [l3]
+l5: $ nd (hyp (A. x A. y (P x \/ Q y))) (A. y A. x (P x \/ Q y)) $ by all_intro (y := $ b $) [l4]
+
+unknown_rewrite_binder_ex
+-------------------------
+
+l1: $ nd (hyp (P u \/ Q v)) (P u \/ Q v) $ by ax []
+l2: $ nd (hyp (P u \/ Q v)) ?g $ by ex_intro [l1]
+l3: $ nd (hyp (P u \/ Q v)) (E. x E. y (P x \/ Q y)) $ by ex_intro [l2]

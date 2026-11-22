@@ -154,7 +154,16 @@ successful check must agree with:
   substitution pushed under a binder) does not fire on it. When `ex_intro`
   proves `∃x (F x ∨ G x)` from a line that ∨-introduction left as
   `F a ∨ ?q`, its premise `[x := ?t] (F x ∨ G x)` normalizes to
-  `F ?t ∨ G ?t`, which fixes `?t` and `?q`;
+  `F ?t ∨ G ?t`, which fixes `?t` and `?q`. An equation still waiting
+  when nothing else is left to solve, between a term under a `@rewrite`
+  head and a term whose head decides it, holds only if the first rewrites
+  at the top, so each rewrite rule of that head is tried as a `@fallback`
+  rule is (below). The rule's other binders must avoid the bound variables
+  it does not let them depend on, and an unknown there is narrowed to one
+  that does. Swapping `∀x ∀y P(x, y)` with two ∀-eliminations, the first
+  line's `[x := ?t] (∀y P(x, y))` must equal the `∀` the second cites, which
+  only the rule pushing the substitution under `∀y` gives, with `?t`
+  avoiding `y`;
 - an equation under a definition unfolds the later definition, with a
   fresh unknown for each of its hidden variables, and equates the body
   with the other side. A line `$ ?a ∉ 0 $` cited where a rule expects

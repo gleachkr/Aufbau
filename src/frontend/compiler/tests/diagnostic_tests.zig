@@ -2195,6 +2195,57 @@ test "a clash between no two terms names only the line" {
     try expectHasNote(diag, "the proof does not solve ?x: the lines up to l1 give the named unknowns values that disagree");
 }
 
+test "a substitution no rewrite can take to the other side's head is a clash" {
+    // l1 is `sb x ?t (A. y P x)`, which only `sb_all` could take to l2's
+    // `A.`, with `?t` avoiding `y`; but then l2's `sb y ?s (P ?t)` is
+    // `P ?t`, not `Q u`. No rule can, so no value of `?a` checks, and the
+    // note names the equation no rule could take.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\--| @hole _wff
+        \\--| @unknown ?
+        \\provable sort wff;
+        \\sort obj;
+        \\term iff (a b: wff): wff;
+        \\infixr iff: $<->$ prec 20;
+        \\term all {x: obj} (p: wff x): wff;
+        \\prefix all: $A.$ prec 41;
+        \\term sb {x: obj} (t: obj x) (p: wff x): wff;
+        \\term P (a: obj): wff;
+        \\prefix P: $P$ prec 50;
+        \\term Q (a: obj): wff;
+        \\prefix Q: $Q$ prec 50;
+        \\--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+        \\axiom iff_refl (a: wff): $ a <-> a $;
+        \\axiom iff_trans (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+        \\axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+        \\axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+        \\--| @congr
+        \\axiom all_congr {x: obj} (p q: wff x): $ p <-> q $ > $ A. x p <-> A. x q $;
+        \\--| @rewrite
+        \\axiom sb_P {x: obj} (t: obj x): $ sb x t (P x) <-> P t $;
+        \\--| @rewrite
+        \\axiom sb_all {x y: obj} (t: obj x) (p: wff x y):
+        \\  $ sb x t (A. y p) <-> A. y (sb x t p) $;
+        \\--| @rewrite
+        \\axiom sb_irrel {x: obj} (t: obj x) (p: wff): $ sb x t p <-> p $;
+        \\axiom all_elim {x: obj} (t: obj) (p: wff x): $ A. x p $ > $ sb x t p $;
+        \\theorem t (u: obj) {x y: obj}: $ A. x A. y (P x) $ > $ Q u $;
+    ;
+    const proof_src =
+        \\t
+        \\---
+        \\
+        \\l1: $ ?a $ by all_elim [#1]
+        \\l2: $ Q u $ by all_elim [l1]
+    ;
+    var compiler = Compiler.initWithProof(std.testing.allocator, mm0_src, proof_src);
+    try std.testing.expect(std.meta.isError(compiler.check()));
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqualStrings("l1", diag.line_label.?);
+    try expectHasNote(diag, "the proof does not solve ?a: the lines up to l2 give the named unknowns values that disagree (sb x _ (A. y P x) cannot equal A. _ _wff)");
+}
+
 test "a malformed reference gets no undetermined-names note" {
     const proof_src =
         \\t

@@ -49,8 +49,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   - An equation under a `@rewrite` head is solved by normal forms: a line
     `F a ∨ ?q` cited by an ∃- or ∀-introduction for `∃x (F x ∨ G x)` fixes
     `?q` and the witness. A rewrite that needs a value to avoid a variable
-    (a vacuous substitution, or one pushed under a binder) never fires on
-    an unknown.
+    (a vacuous substitution, or one pushed under a binder) does not fire on
+    an unknown, unless it is the only rewrite that can take the term to
+    the head the other side has: swapping `∀x ∀y P(x, y)` with two
+    ∀-eliminations fixes the first one's term as avoiding `y`.
   - An equation under a definition unfolds it: a line `$ ?a ∉ 0 $` cited
     where a rule expects `¬ (c ∈ 0)` fixes `?a`.
   - A line that fails while it holds names the proof does not determine yet
