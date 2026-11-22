@@ -46,7 +46,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   values all the rules that can check agree on. A rule with `@view`,
   `@recover`, `@abstract` or `@fresh` fixes names by its own statement:
   a line `$ Γ ⊢ ?c $` cited as an ∃-elimination's minor premise takes the
-  goal's conclusion. The wasm compile result
+  goal's conclusion. An equation under a `@rewrite` head is solved by
+  normal forms: a line `F a ∨ ?q` cited by an ∃- or ∀-introduction for
+  `∃x (F x ∨ G x)` fixes `?q` and the witness. A rewrite that needs a value
+  to avoid a variable (a vacuous substitution, or one pushed under a
+  binder) never fires on an unknown. The wasm compile result
   lists each theorem's names in `unknowns`
   (`[{theorem, name, value, partial}]`), as an open goal's report would
   print them, whether or not the compile succeeds.

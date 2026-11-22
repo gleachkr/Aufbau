@@ -7,11 +7,13 @@
 //! reference states, and each explicit binding is its value. The unknowns
 //! are the names, a fresh variable per anonymous hole, and a fresh variable
 //! per rule binder of each application. The pass solves the equations by
-//! first-order unification and commits only what is forced: an equation it
-//! cannot decide syntactically (an `@acui` combiner, a `@rewrite` head, a
-//! definition) is dropped, and dropping an equation only leaves more
-//! solutions, never a wrong one. A clash anywhere solves nothing; the walk
-//! then reports it where it meets it.
+//! first-order unification and commits only what is forced. An equation
+//! under a `@rewrite` head is solved by the normal forms of its sides once
+//! both have a head that decides them; until then it waits, as does an
+//! `@acui` bag the bag step cannot decide yet. An equation under a
+//! definition is dropped. Waiting or dropping only leaves more solutions,
+//! never a wrong one. A clash anywhere solves nothing; the walk then reports it
+//! where it meets it.
 //!
 //! A `@view`, `@recover`, `@abstract` or `@fresh` rule is checked through
 //! its view, but the proof applies the rule itself, so its literal
@@ -41,6 +43,7 @@ const Holes = @import("../holes.zig");
 const NameExprMap = @import("./types.zig").NameExprMap;
 const Unknowns = @import("./unknowns.zig");
 const AcuiBag = @import("../../acui_bag.zig");
+const Canonicalizer = @import("../../normalizer.zig").Canonicalizer;
 
 pub const Inputs = struct {
     allocator: std.mem.Allocator,
@@ -103,6 +106,9 @@ const Solver = struct {
     /// Inside a trial of one rule of a chain, where a nested chain
     /// contributes nothing.
     in_trial: bool = false,
+    /// Normal forms of the equations under a `@rewrite` head; made on
+    /// first use.
+    canonicalizer: ?Canonicalizer = null,
 
     const Choice = struct {
         app: RuleApplication,
@@ -122,6 +128,7 @@ const Solver = struct {
         self.trail.deinit(allocator);
         for (self.choices.items) |choice| allocator.free(choice.rules);
         self.choices.deinit(allocator);
+        if (self.canonicalizer) |*canonicalizer| canonicalizer.deinit();
     }
 
     fn run(self: *Solver) !void {
@@ -400,8 +407,14 @@ const Solver = struct {
         }
     }
 
+    /// A variable of the pass. It may come to stand for anything, so it
+    /// claims to mention every variable: normalizing through it fires no
+    /// rewrite whose binding must avoid one (`{x / t} ?p` keeps its
+    /// substitution, as `?p` may mention `x`). The walk only prints the
+    /// variables a shape keeps; a line gets the shape as surface syntax,
+    /// its open parts as ordinary holes (`Unknowns.substitute`).
     fn mint(self: *Solver, sort_name: []const u8) !ExprId {
-        const variable = try self.inputs.theorem.addLineHolePlaceholder(sort_name);
+        const variable = try self.inputs.theorem.addUnrestrictedLineHolePlaceholder(sort_name);
         try self.variables.put(self.inputs.allocator, variable, null);
         return variable;
     }
@@ -445,7 +458,10 @@ const Solver = struct {
             const lhs_app = switch (lhs_node) {
                 .app => |app| app,
                 .variable => switch (rhs_node) {
-                    .app => |app| if (self.undecided(app.term_id)) continue else return error.Clash,
+                    .app => |app| if (self.undecided(app.term_id)) {
+                        try self.rewritePair(lhs, rhs);
+                        continue;
+                    } else return error.Clash,
                     // Distinct theorem variables.
                     .variable => return error.Clash,
                     .placeholder => continue,
@@ -454,17 +470,76 @@ const Solver = struct {
             };
             const rhs_app = switch (rhs_node) {
                 .app => |app| app,
-                .variable => if (self.undecided(lhs_app.term_id)) continue else return error.Clash,
+                .variable => if (self.undecided(lhs_app.term_id)) {
+                    try self.rewritePair(lhs, rhs);
+                    continue;
+                } else return error.Clash,
                 .placeholder => continue,
             };
+            if (self.undecided(lhs_app.term_id) or self.undecided(rhs_app.term_id)) {
+                try self.rewritePair(lhs, rhs);
+                continue;
+            }
             if (lhs_app.term_id == rhs_app.term_id and lhs_app.args.len == rhs_app.args.len) {
-                if (self.undecided(lhs_app.term_id)) continue;
                 for (lhs_app.args, rhs_app.args) |l, r| try self.equate(l, r);
                 continue;
             }
-            if (self.undecided(lhs_app.term_id) or self.undecided(rhs_app.term_id)) continue;
             return error.Clash;
         }
+    }
+
+    /// `lhs = rhs`, where a side is headed by a definition or a `@rewrite`
+    /// head. A definition may unfold to anything, so a side headed by one
+    /// forces nothing and the equation is dropped. Otherwise each side's
+    /// normal form equals it under any binding of the pass's variables,
+    /// since no rewrite that needs a binding to avoid a variable fires
+    /// through one (`mint`). When both normal forms are decided by their
+    /// heads they are equated; otherwise the equation waits for more
+    /// bindings.
+    fn rewritePair(self: *Solver, lhs: ExprId, rhs: ExprId) !void {
+        if (self.definitionHeaded(lhs) or self.definitionHeaded(rhs)) return;
+        const lhs_normal = try self.normalForm(lhs);
+        const rhs_normal = try self.normalForm(rhs);
+        if (lhs_normal == rhs_normal) return;
+        if (self.definitionHeaded(lhs_normal) or self.definitionHeaded(rhs_normal)) return;
+        if (self.decided(lhs_normal) and self.decided(rhs_normal)) {
+            return self.equate(lhs_normal, rhs_normal);
+        }
+        try self.postponed.append(self.inputs.allocator, .{ lhs, rhs });
+    }
+
+    /// The normal form of `expr` with the bindings made so far written in;
+    /// `expr` itself when it cannot be normalized.
+    fn normalForm(self: *Solver, expr: ExprId) !ExprId {
+        const resolved = try self.resolveFully(expr);
+        const theory = self.inputs.theory;
+        if (self.canonicalizer == null) self.canonicalizer = Canonicalizer.init(
+            self.inputs.allocator,
+            self.inputs.theorem,
+            &theory.registry,
+            &theory.env,
+            {},
+        );
+        return self.canonicalizer.?.canonicalizeWithFreshBudget(resolved) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => resolved,
+        };
+    }
+
+    /// Whether `expr` can be compared by its head: anything but an
+    /// application of a definition or a `@rewrite` head.
+    fn decided(self: *const Solver, expr: ExprId) bool {
+        return switch (self.inputs.theorem.interner.node(self.resolve(expr)).*) {
+            .app => |app| !self.undecided(app.term_id),
+            else => true,
+        };
+    }
+
+    fn definitionHeaded(self: *const Solver, expr: ExprId) bool {
+        return switch (self.inputs.theorem.interner.node(self.resolve(expr)).*) {
+            .app => |app| self.inputs.theory.env.openableDef(app.term_id) != null,
+            else => false,
+        };
     }
 
     /// Heads whose applications may equal a different head: a definition

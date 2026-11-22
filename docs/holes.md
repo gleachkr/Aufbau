@@ -146,7 +146,16 @@ last line equals the theorem's conclusion.
 The pre-pass unifies these first-order and commits only what every
 successful check must agree with:
 
-- an equation under a definition or a `@rewrite` head is dropped;
+- an equation under a `@rewrite` head is solved by the normal forms of its
+  sides, once both are headed by a term that is neither a definition nor a
+  `@rewrite` head; until then it waits for other equations to fix more.
+  The pass's unknowns count as possibly mentioning every variable, so a
+  rewrite that needs one to avoid a variable (a vacuous substitution, or a
+  substitution pushed under a binder) does not fire on it. When `ex_intro`
+  proves `∃x (F x ∨ G x)` from a line that ∨-introduction left as
+  `F a ∨ ?q`, its premise `[x := ?t] (F x ∨ G x)` normalizes to
+  `F ?t ∨ G ?t`, which fixes `?t` and `?q`. An equation under a definition
+  is dropped;
 - two applications of an `@acui` combiner are solved as bags under the
   combiner's laws, and only where the answer is forced (a member that can
   equal one member of a side with no rest, a single rest taking what is

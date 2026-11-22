@@ -1,0 +1,14 @@
+unknown_rewrite_ex
+------------------
+
+l1: $ nd (hyp (P u)) (P u) $ by ax []
+l2: $ nd (hyp (P u)) ?p $ by or_l [l1]
+l3: $ nd (hyp (P u)) (E. x (P x \/ Q x)) $ by ex_intro [l2]
+
+unknown_rewrite_all
+-------------------
+
+l1: $ nd (hyp (A. x (P x))) (A. x (P x)) $ by ax []
+l2: $ nd (hyp (A. x (P x))) (P y) $ by all_elim [l1]
+l3: $ nd (hyp (A. x (P x))) ?p $ by or_l [l2]
+l4: $ nd (hyp (A. x (P x))) (A. x (P x \/ Q x)) $ by all_intro [l3]

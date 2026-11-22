@@ -1113,7 +1113,9 @@ const proof_cases = [_]ProofCase{
     // whole name (the conflict comes from its full value, not the shape).
     .{ .stem = "pass_unknown_partial_shape", .outcome = .pass },
     .{ .stem = "pass_unknown_view_rule", .outcome = .pass },
-    .{ .stem = "fail_unknown_partial_shape_conflict", .outcome = .{ .fail = error.RecoverConflict } },
+    .{ .stem = "pass_unknown_rewrite", .outcome = .pass },
+    .{ .stem = "fail_unknown_rewrite_vacuous", .outcome = .{ .fail = error.UnifyMismatch } },
+    .{ .stem = "fail_unknown_partial_shape_conflict", .outcome = .{ .fail = error.MissingBinderAssignment } },
     .{ .stem = "fail_unknown_pairing_limit", .outcome = .{ .fail = error.NamedUnknownPairingLimit } },
     // Equations that clash solve nothing; the walk reports the mismatch.
     .{ .stem = "fail_unknown_later_clash", .outcome = .{ .fail = error.ConclusionMismatch } },

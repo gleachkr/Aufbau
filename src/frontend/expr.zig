@@ -1095,6 +1095,24 @@ pub const TheoremContext = struct {
         });
     }
 
+    /// `addLineHolePlaceholder` for a leaf that may stand for an expression
+    /// mentioning any variable: every dependency bit is set, so no
+    /// dependency check counts it free of one, and a rewrite that needs a
+    /// binding to avoid a variable never fires on it. It takes no
+    /// dependency slot, and its mask is not one slot's bit, so it must not
+    /// reach the slot bookkeeping (`releaseUnheldDepSlots`).
+    pub fn addUnrestrictedLineHolePlaceholder(
+        self: *TheoremContext,
+        sort_name: []const u8,
+    ) !ExprId {
+        return self.mintMetaPlaceholder(.{
+            .sort_name = sort_name,
+            .deps = std.math.maxInt(u55),
+            .class = .meta,
+            .line_hole = true,
+        });
+    }
+
     /// Allocate an eliminator-reconciliation seed meta — an
     /// `addMetaPlaceholderResolved` leaf additionally flagged
     /// `reconciliation_meta` (see `PlaceholderInfo`). Scoped target of the

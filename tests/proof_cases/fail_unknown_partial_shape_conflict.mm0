@@ -76,8 +76,8 @@ axiom all_elim_w (g h: ctx) {x: set} (t: set) (p: wff x):
 axiom and_l (g: ctx) (a b: wff): $ nd g (a /\ b) $ > $ nd g a $;
 axiom and_r (g: ctx) (a b: wff): $ nd g (a /\ b) $ > $ nd g b $;
 
--- l1 binds `?f` to all of `P u /\ Q u`, though only `P u /\ _` was
--- written into it, so l3 (a view rule the pre-pass does not read) is
--- checked as `P u /\ Q u` and fails for `v`.
+-- l2 forces `?f = P u /\ _`, and l3's own statement, normalized, gives
+-- `P v /\ Q v`: the lines disagree, so the pre-pass solves nothing and
+-- l1 is checked with `?f` open, which leaves `t` undetermined.
 theorem unknown_partial_shape_conflict (a: wff) (u v: set) {x: set}:
   $ nd (hyp a) (A. x (P x /\ Q x)) $ > $ nd (hyp a) (P u) $;

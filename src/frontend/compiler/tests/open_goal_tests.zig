@@ -291,3 +291,49 @@ test "the value sink holds a forced shape with its open names" {
     try std.testing.expectEqual(@as(usize, 1), sink.items.items.len);
     try expectUnknownValue(sink.items.items[0], "?c", "?d -> _wff", true);
 }
+
+const capture_mm0_src =
+    \\delimiter $ ( ) $;
+    \\--| @hole _wff
+    \\--| @unknown ?
+    \\provable sort wff;
+    \\--| @hole _obj
+    \\--| @unknown ?o
+    \\sort obj;
+    \\term iff (a b: wff): wff; infixr iff: $<->$ prec 20;
+    \\term all {x: obj} (p: wff x): wff; prefix all: $A.$ prec 41;
+    \\term ex {x: obj} (p: wff x): wff; prefix ex: $E.$ prec 41;
+    \\term sb {x: obj} (t: obj x) (p: wff x): wff;
+    \\term R (a b: obj): wff;
+    \\--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+    \\axiom iff_refl (a: wff): $ a <-> a $;
+    \\axiom iff_trans (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+    \\axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+    \\axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+    \\--| @congr
+    \\axiom all_congr {y: obj} (p q: wff y): $ p <-> q $ > $ (A. y p) <-> (A. y q) $;
+    \\--| @rewrite
+    \\axiom sb_all {x y: obj} (t: obj x) (p: wff x y): $ sb x t (A. y p) <-> A. y (sb x t p) $;
+    \\--| @rewrite
+    \\axiom sb_R {x y: obj} (t: obj x): $ sb x t (R x y) <-> R t y $;
+    \\axiom ex_intro {x: obj} (t: obj) (p: wff x): $ sb x t p $ > $ E. x p $;
+    \\theorem t {x y: obj}: $ A. y (R y y) $ > $ E. x (A. y (R x y)) $;
+;
+
+test "the pre-pass does not push an unknown witness under a binder it may capture" {
+    // `sb x ?o1 (A. y (R x y))` against `A. y (R y y)`: pushing the
+    // substitution under `A. y` needs `?o1` to avoid `y`, which an unknown
+    // may not, so the name stays open (it would otherwise be `y`).
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ E. x (A. y (R x y)) $ by ex_intro (t := $ ?o1 $) [#1]
+    ;
+    var sink = helpers.mm0.UnknownValueSink.init(std.testing.allocator);
+    defer sink.deinit();
+    var compiler = Compiler.initWithProof(std.testing.allocator, capture_mm0_src, proof_src);
+    compiler.unknown_value_sink = &sink;
+    try compiler.analyze();
+    try std.testing.expect(compiler.primaryDiagnostics().len > 0);
+    try std.testing.expectEqual(@as(usize, 0), sink.items.items.len);
+}

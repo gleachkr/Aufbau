@@ -1,0 +1,90 @@
+delimiter $ ( ) $;
+--| @hole _wff
+--| @unknown ?
+provable sort wff;
+--| @hole _ctx
+--| @unknown ?G
+sort ctx;
+--| @hole _obj
+--| @vars y
+sort obj;
+
+term iff (a b: wff): wff;
+infixr iff: $<->$ prec 20;
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+--| @acui ctx_assoc ctx_comm emp _
+term join (g h: ctx): ctx;
+term hyp (a: wff): ctx;
+term nd (g: ctx) (a: wff): wff;
+term or (a b: wff): wff;
+infixr or: $\/$ prec 25;
+term all {x: obj} (p: wff x): wff;
+prefix all: $A.$ prec 41;
+term ex {x: obj} (p: wff x): wff;
+prefix ex: $E.$ prec 41;
+-- The substituted term may mention the variable, as in fol-base.
+term sb {x: obj} (t: obj x) (p: wff x): wff;
+term P (a: obj): wff;
+prefix P: $P$ prec 50;
+term Q (a: obj): wff;
+prefix Q: $Q$ prec 50;
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (a: wff): $ a <-> a $;
+axiom iff_trans (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx): $ ctx_eq (join (join g h) i) (join g (join h i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (join g h) (join h g) $;
+axiom ctx_unit (g: ctx): $ ctx_eq (join emp g) g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (join g1 h1) (join g2 h2) $;
+--| @congr
+axiom hyp_congr (a b: wff): $ a <-> b $ > $ ctx_eq (hyp a) (hyp b) $;
+--| @congr
+axiom nd_congr (g h: ctx) (a b: wff): $ ctx_eq g h $ > $ a <-> b $ > $ nd g a <-> nd h b $;
+--| @congr
+axiom or_congr (a b c d: wff): $ a <-> b $ > $ c <-> d $ > $ (a \/ c) <-> (b \/ d) $;
+
+--| @rewrite
+axiom sb_P {x: obj} (t: obj x): $ sb x t (P x) <-> P t $;
+--| @rewrite
+axiom sb_Q {x: obj} (t: obj x): $ sb x t (Q x) <-> Q t $;
+--| @rewrite
+axiom sb_or {x: obj} (t: obj x) (p q: wff x):
+  $ sb x t (p \/ q) <-> (sb x t p \/ sb x t q) $;
+-- Substitution into a formula without the variable: `p` may not mention
+-- `x`, so it never fires on an unknown.
+--| @rewrite
+axiom sb_irrel {x: obj} (t: obj x) (p: wff): $ sb x t p <-> p $;
+
+axiom ax (a: wff): $ nd (hyp a) a $;
+axiom or_l (g: ctx) (a b: wff): $ nd g a $ > $ nd g (a \/ b) $;
+axiom reit (g h: ctx) (a: wff): $ nd g a $ > $ nd (join g h) a $;
+--| @view {x: obj} (g: ctx x) (t: obj) (p: wff x) (q: wff): $ nd g q $ > $ nd g (E. x p) $
+--| @recover t q p x
+axiom ex_intro {x: obj} (g: ctx x) (t: obj) (p: wff x):
+  $ nd g (sb x t p) $ > $ nd g (E. x p) $;
+--| @view {x: obj} (g: ctx x) (t: obj) (p: wff x) (q: wff): $ nd g (A. x p) $ > $ nd g q $
+--| @recover t q p x
+axiom all_elim {x: obj} (g: ctx x) (t: obj) (p: wff x):
+  $ nd g (A. x p) $ > $ nd g (sb x t p) $;
+--| @view {x y: obj} (g: ctx x) (p: wff x) (q: wff): $ nd g q $ > $ nd g (A. x p) $
+--| @recover y q p x
+axiom all_intro {x y: obj} (g: ctx x) (p: wff x):
+  $ nd g (sb x y p) $ > $ nd g (A. x p) $;
+
+-- A line built forward with an open disjunct, used by ∃I: the witness and
+-- the disjunct are fixed only by normalizing `sb x ?t (P x \/ Q x)`.
+theorem unknown_rewrite_ex (u: obj) {x: obj}: $ nd (hyp (P u)) (E. x (P x \/ Q x)) $;
+-- The same under ∀I, whose eigenvariable is fixed the same way.
+theorem unknown_rewrite_all {x: obj}:
+  $ nd (hyp (A. x (P x))) (A. x (P x \/ Q x)) $;
