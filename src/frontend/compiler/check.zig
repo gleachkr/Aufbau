@@ -310,7 +310,7 @@ pub const LineWalk = struct {
         }
         try self.collectUndeterminedInBindings(line.application, &names);
         if (names.items.len == 0) return;
-        const text = try std.mem.join(self.allocator, ", ", names.items);
+        const text = try std.mem.join(self.allocator, CompilerDiag.note_name_separator, names.items);
         defer self.allocator.free(text);
         const clash = self.unknowns.clash orelse {
             CompilerDiag.addNote(&diag, .{ .names_not_determined = .{ .names = text } }, .proof, null);

@@ -19,6 +19,7 @@ pub const CompilerDiagnosticSpan = @import("./frontend/proof_script.zig").Span;
 pub const CompilerDiagnosticPhase = CompilerDiag.DiagnosticPhase;
 pub const CompilerDiagnosticNote = CompilerDiag.DiagnosticNote;
 pub const CompilerNoteMessage = CompilerDiag.NoteMessage;
+pub const compiler_note_name_separator = CompilerDiag.note_name_separator;
 pub const CompilerRelatedLabel = CompilerDiag.RelatedLabel;
 pub const CompilerLang = CompilerDiag.Lang;
 pub const setCompilerLang = CompilerDiag.setLang;

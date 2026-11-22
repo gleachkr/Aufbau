@@ -229,6 +229,12 @@ lines up to l3 give the named unknowns values that disagree (v cannot
 equal u)". The pre-pass finds that line by solving ever longer runs of
 lines from the first.
 
+In the wasm compile result every note carries its `kind` and its fields
+beside the rendered `message`, so a host need not read the English:
+`{kind: "names_not_determined", names: ["?h"]}`, and
+`{kind: "names_clash_terms", names, line, lhs, rhs}` (`names_clash` without
+the terms). Field names are camelCase.
+
 A name may also stand in an explicit binding, so that a rule application
 says which unknown a binder is: `imp_intro (a := $ ?h $)` discharges the
 assumption `?h`. A binding whose names are all known by the time its line

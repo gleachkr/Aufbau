@@ -141,6 +141,18 @@ const namedOpen = compiler.compile(
 );
 assert.equal(namedOpen.ok, false);
 assert.deepEqual(namedOpen.unknowns, cValue);
+// A note carries its kind and its data beside the rendered message: the
+// only line must prove p, which ?e -> ?e cannot be.
+const clashing = compiler.compile(namedTheory, "t\n---\nl1: $ ?e -> ?e $ by id []\n");
+const clashNote = clashing.diagnostics
+  .flatMap((d) => d.notes)
+  .find((n) => n.kind === "names_clash_terms");
+assert.ok(clashNote, JSON.stringify(clashing.diagnostics));
+assert.deepEqual(
+  { names: clashNote.names, line: clashNote.line, lhs: clashNote.lhs, rhs: clashNote.rhs },
+  { names: ["?e"], line: "l1", lhs: "?e -> ?e", rhs: "p" },
+);
+assert.match(clashNote.message, /\?e -> \?e cannot equal p/);
 
 const lsp = await loadLspServer();
 const output = lsp.process({

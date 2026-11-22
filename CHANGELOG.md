@@ -66,6 +66,9 @@ This file records notable user-facing changes to Aufbau. The project follows
     print them, whether or not the compile succeeds. A name the lines
     equate with an earlier open name is listed with that name as its
     shape.
+- Each note in the wasm compile result carries its `kind` and its fields
+  (camelCase) beside the rendered message; a `names` field is a list
+  (`{kind: "names_not_determined", names: ["?h"]}`).
 
 ### Changed
 

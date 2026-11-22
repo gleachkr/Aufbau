@@ -436,6 +436,11 @@ pub const NoteMessage = union(enum) {
     },
 };
 
+/// What joins the names of any note field called `names`; the wasm JSON
+/// splits such a field back into a list. A name is one math token, so it
+/// never holds the separator.
+pub const note_name_separator = ", ";
+
 /// Label of a related-location entry, catalogued for the same reason as
 /// `NoteMessage`.
 pub const RelatedLabel = enum {

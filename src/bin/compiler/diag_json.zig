@@ -99,6 +99,93 @@ pub fn writeDetail(
     try jw.endObject();
 }
 
+/// The keys every JSON note has besides its data; no note field may take one.
+const note_keys = [_][]const u8{ "message", "source", "file", "spanStart", "spanEnd", "kind" };
+
+/// `message`'s data into the note object `jw` has open: `kind`, its tag,
+/// then each payload field under its camelCase name. A `names` field is the
+/// list of names, not the joined text.
+pub fn writeNoteData(jw: *std.json.Stringify, message: mm0.CompilerNoteMessage) !void {
+    try writeFields(jw, .{ .kind = @tagName(message) });
+    switch (message) {
+        inline else => |payload| {
+            const Payload = @TypeOf(payload);
+            if (Payload == void) return;
+            inline for (comptime std.meta.fieldNames(Payload)) |name| {
+                try jw.objectField(comptime noteKey(name));
+                if (comptime std.mem.eql(u8, name, "names")) {
+                    try jw.beginArray();
+                    var it = std.mem.splitSequence(u8, @field(payload, name), mm0.compiler_note_name_separator);
+                    while (it.next()) |each| try jw.write(each);
+                    try jw.endArray();
+                } else {
+                    try jw.write(@field(payload, name));
+                }
+            }
+        },
+    }
+}
+
+/// `name` in camelCase, which must not be one of `note_keys`.
+fn noteKey(comptime name: []const u8) []const u8 {
+    comptime {
+        @setEvalBranchQuota(10_000);
+        var out: []const u8 = "";
+        var upper = false;
+        for (name) |ch| {
+            if (ch == '_') {
+                upper = true;
+            } else {
+                out = out ++ &[1]u8{if (upper) std.ascii.toUpper(ch) else ch};
+                upper = false;
+            }
+        }
+        for (note_keys) |taken| {
+            if (std.mem.eql(u8, out, taken)) @compileError("a note field takes the JSON key " ++ out);
+        }
+        return out;
+    }
+}
+
+/// `message`'s data as a JSON object, parsed back.
+fn parseNote(message: mm0.CompilerNoteMessage) !std.json.Parsed(std.json.Value) {
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    var jw: std.json.Stringify = .{ .writer = &out.writer };
+    try jw.beginObject();
+    try writeNoteData(&jw, message);
+    try jw.endObject();
+    return std.json.parseFromSlice(std.json.Value, std.testing.allocator, out.written(), .{});
+}
+
+// Instantiates `writeNoteData` for every variant, so a note field that would
+// take a reserved key fails the native build.
+test "a note's data is its kind and its fields, names as a list" {
+    var parsed = try parseNote(.{ .names_clash_terms = .{
+        .names = "?a, ?b",
+        .line = "l2",
+        .lhs = "p",
+        .rhs = "q",
+    } });
+    defer parsed.deinit();
+    const note = parsed.value.object;
+    try std.testing.expectEqualStrings("names_clash_terms", note.get("kind").?.string);
+    const names = note.get("names").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), names.len);
+    try std.testing.expectEqualStrings("?a", names[0].string);
+    try std.testing.expectEqualStrings("?b", names[1].string);
+    try std.testing.expectEqualStrings("l2", note.get("line").?.string);
+    try std.testing.expectEqualStrings("q", note.get("rhs").?.string);
+
+    var bare = try parseNote(.search_placeholder_meaning);
+    defer bare.deinit();
+    try std.testing.expectEqual(@as(usize, 1), bare.value.object.count());
+
+    var camel = try parseNote(.{ .local_notation_token = .{ .term_name = "f", .token = "+" } });
+    defer camel.deinit();
+    try std.testing.expectEqualStrings("f", camel.value.object.get("termName").?.string);
+}
+
 /// `diag`'s detail, parsed back from the JSON `writeDetail` makes.
 fn parseDetail(diag: mm0.CompilerDiagnostic) !std.json.Parsed(std.json.Value) {
     var out: std.Io.Writer.Allocating = .init(std.testing.allocator);

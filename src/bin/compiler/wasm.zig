@@ -514,6 +514,7 @@ fn writeDiagnostic(
         try jw.beginObject();
         try writeFields(jw, .{ .message = text.written(), .source = note.source });
         try writeSpanFields(jw, compiler, note.source, note.span);
+        try diag_json.writeNoteData(jw, note.message);
         try jw.endObject();
     }
     try jw.endArray();
