@@ -47,6 +47,7 @@ const TheoryState = @import("../theory_state.zig").TheoryState;
 const Holes = @import("../holes.zig");
 const NameExprMap = @import("./types.zig").NameExprMap;
 const Unknowns = @import("./unknowns.zig");
+const CompilerVars = @import("../vars.zig");
 const AcuiBag = @import("../../acui_bag.zig");
 const Canonicalizer = @import("../../normalizer.zig").Canonicalizer;
 
@@ -293,11 +294,22 @@ const Solver = struct {
             const idx = for (rule.arg_names, 0..) |name, i| {
                 if (name != null and std.mem.eql(u8, name.?, binding.name)) break i;
             } else continue;
-            const value = theory.parser.parseHoleyArgText(
-                binding.formula.text,
-                self.inputs.theorem_vars,
-                rule.args[idx],
-            ) catch |err| switch (err) {
+            // As the walk does: an `@vars` token the text names becomes
+            // its theorem-local dummy.
+            const value = blk: {
+                try CompilerVars.ensureMathTextVars(
+                    &theory.parser,
+                    self.inputs.theorem,
+                    self.inputs.theorem_vars,
+                    &theory.sort_vars,
+                    binding.formula.text,
+                );
+                break :blk theory.parser.parseHoleyArgText(
+                    binding.formula.text,
+                    self.inputs.theorem_vars,
+                    rule.args[idx],
+                );
+            } catch |err| switch (err) {
                 error.OutOfMemory => return err,
                 else => continue,
             };

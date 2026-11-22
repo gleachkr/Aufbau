@@ -13,7 +13,7 @@ provable sort wff;
 --| @unknown ?G
 sort ctx;
 --| @hole _obj
---| @vars y
+--| @vars a b
 sort obj;
 
 term iff (a b: wff): wff;
@@ -100,8 +100,9 @@ axiom all_intro {x y: obj} (g: ctx x) (p: wff x):
   $ nd g (sb x y p) $ > $ nd g (A. x p) $;
 
 -- Swap two universal quantifiers: l3's premise is `sb x ?t (A. y ..)`,
--- which equals `A. ?z ?q` only by `sb_all`.
-theorem unknown_rewrite_binder_all {x y a b: obj}:
+-- which equals `A. ?z ?q` only by `sb_all`. The eigenvariables are `@vars`
+-- dummies named only in explicit bindings, which the pass must read.
+theorem unknown_rewrite_binder_all {x y: obj}:
   $ nd (hyp (A. x A. y (P x \/ Q y))) (A. y A. x (P x \/ Q y)) $;
 -- Two existential introductions: l3's premise `sb x ?t (E. y ..)` must
 -- equal l2's conclusion `E. ?z ?q`, which only `sb_ex` gives.
