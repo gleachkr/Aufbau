@@ -32,33 +32,36 @@ This file records notable user-facing changes to Aufbau. The project follows
   name with its value, or with its shape so far ("Partly inferred
   expression"); an open goal's report shows what later lines fix of its
   names; and the apply-rule action names a rule variable the goal leaves
-  open, so the premises that mention it share it. The occurrences of a name in one line
-  take one value: in an ACUI context the members holding names are paired
-  with the context's (`G , ?a , ?b , ?a` against `G , p , p , q`), by a
-  search that stops after 1,000,000 tries (`NamedUnknownPairingLimit`).
-  A name the proof forces only in part is checked with that part written
-  in: `?f`, later split by an ∧-elimination giving `P u`, is checked as
-  `P u ∧ _`, so a ∀-elimination with `@recover` can read its term off it.
-  A line that fails while it holds names the proof does not determine yet
-  says so in a note on its error ("the proof does not determine ?h yet;
-  this line may check once it does"). When the lines give the names values
-  that disagree, the note names the first line by which they do and the
-  two terms that could not be equal ("the lines up to l3 give the named
-  unknowns values that disagree (v cannot equal u)"). A line citing a `@fallback` chain
-  fixes names too: by the one rule of the chain that can check, or by the
-  values all the rules that can check agree on. A rule with `@view`,
-  `@recover`, `@abstract` or `@fresh` fixes names by its own statement:
-  a line `$ Γ ⊢ ?c $` cited as an ∃-elimination's minor premise takes the
-  goal's conclusion. An equation under a `@rewrite` head is solved by
-  normal forms: a line `F a ∨ ?q` cited by an ∃- or ∀-introduction for
-  `∃x (F x ∨ G x)` fixes `?q` and the witness. A rewrite that needs a value
-  to avoid a variable (a vacuous substitution, or one pushed under a
-  binder) never fires on an unknown. An equation under a definition
-  unfolds it: a line `$ ?a ∉ 0 $` cited where a rule expects `¬ (c ∈ 0)`
-  fixes `?a`. The wasm compile result
-  lists each theorem's names in `unknowns`
-  (`[{theorem, name, value, partial}]`), as an open goal's report would
-  print them, whether or not the compile succeeds.
+  open, so the premises that mention it share it.
+  - The occurrences of a name in one line take one value. In an ACUI
+    context the members holding names are paired with the context's
+    (`G , ?a , ?b , ?a` against `G , p , p , q`), by a search that stops
+    after 1,000,000 tries (`NamedUnknownPairingLimit`).
+  - A name the proof forces only in part is checked with that part written
+    in: `?f`, later split by an ∧-elimination giving `P u`, is checked as
+    `P u ∧ _`, so a ∀-elimination with `@recover` can read its term off it.
+  - A line citing a `@fallback` chain fixes names by the one rule of the
+    chain that can check, or by the values all the rules that can check
+    agree on.
+  - A rule with `@view`, `@recover`, `@abstract` or `@fresh` fixes names by
+    its own statement: a line `$ Γ ⊢ ?c $` cited as an ∃-elimination's
+    minor premise takes the goal's conclusion.
+  - An equation under a `@rewrite` head is solved by normal forms: a line
+    `F a ∨ ?q` cited by an ∃- or ∀-introduction for `∃x (F x ∨ G x)` fixes
+    `?q` and the witness. A rewrite that needs a value to avoid a variable
+    (a vacuous substitution, or one pushed under a binder) never fires on
+    an unknown.
+  - An equation under a definition unfolds it: a line `$ ?a ∉ 0 $` cited
+    where a rule expects `¬ (c ∈ 0)` fixes `?a`.
+  - A line that fails while it holds names the proof does not determine yet
+    says so in a note on its error ("the proof does not determine ?h yet;
+    this line may check once it does"). When the lines give the names
+    values that disagree, the note names the first line by which they do
+    and the two terms that could not be equal ("the lines up to l3 give the
+    named unknowns values that disagree (v cannot equal u)").
+  - The wasm compile result lists each theorem's names in `unknowns`
+    (`[{theorem, name, value, partial}]`), as an open goal's report would
+    print them, whether or not the compile succeeds.
 
 ### Changed
 
@@ -73,7 +76,6 @@ This file records notable user-facing changes to Aufbau. The project follows
   statement declares is an error at the annotation
   (`UndeclaredAnnotationLaw`). Before, the name was accepted, and the
   conversions it should have allowed failed later with no hint why.
-
 - A hole inside a member of an ACUI context (`wk _ctx`, `_wff → q`) is
   filled whatever order the rule's conclusion puts the members in: each
   such member is paired with a member it fits. Before, it was filled by
