@@ -292,6 +292,26 @@ test "the value sink holds a forced shape with its open names" {
     try expectUnknownValue(sink.items.items[0], "?c", "?d -> _wff", true);
 }
 
+test "the value sink gives a name equated to an earlier open name that name" {
+    // `mp` equates `?a` and `?b`, and nothing fixes either: `?b`'s shape
+    // is `?a`, so a host can tell the two are one unknown.
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ ?a -> q $ by ?
+        \\l2: $ ?b $ by ?
+        \\l3: $ q $ by mp [l2, l1]
+    ;
+    var sink = helpers.mm0.UnknownValueSink.init(std.testing.allocator);
+    defer sink.deinit();
+    var compiler = Compiler.initWithProof(std.testing.allocator, named_mm0_src, proof_src);
+    compiler.allow_search_placeholders = true;
+    compiler.unknown_value_sink = &sink;
+    try compiler.analyze();
+    try std.testing.expectEqual(@as(usize, 1), sink.items.items.len);
+    try expectUnknownValue(sink.items.items[0], "?b", "?a", true);
+}
+
 const capture_mm0_src =
     \\delimiter $ ( ) $;
     \\--| @hole _wff

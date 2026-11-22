@@ -641,7 +641,9 @@ result instead. Its `unknowns` field lists, for each theorem the compile or
 its failure analysis checked, every name the proof fixes at least in part:
 `{theorem, name, value, partial}`, sorted by name, with `value` printed as
 an open goal's report prints it and `partial` set when it is only the
-forced shape. A name the proof does not fix at all is left out. It comes
+forced shape. A name the proof equates with an earlier open name has that
+name as its shape (`{name: "?b", value: "?a", partial: true}`); a name the
+proof does not fix at all is left out. It comes
 from `UnknownValueSink`, which keeps the check memo off.
 
 ---

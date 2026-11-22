@@ -63,7 +63,9 @@ This file records notable user-facing changes to Aufbau. The project follows
     named unknowns values that disagree (v cannot equal u)").
   - The wasm compile result lists each theorem's names in `unknowns`
     (`[{theorem, name, value, partial}]`), as an open goal's report would
-    print them, whether or not the compile succeeds.
+    print them, whether or not the compile succeeds. A name the lines
+    equate with an earlier open name is listed with that name as its
+    shape.
 
 ### Changed
 

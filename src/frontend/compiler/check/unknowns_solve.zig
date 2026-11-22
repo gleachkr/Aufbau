@@ -77,11 +77,17 @@ pub fn solve(inputs: Inputs, out: *Unknowns.Unknowns) !void {
         const name = entry.key_ptr.*;
         const value = try solver.resolveFully(entry.value_ptr.*);
         if (solver.isVariable(value)) {
-            // Open: it stands for this name inside other names' shapes.
+            // Open: it stands for the first name it is the value of, inside
+            // other names' shapes; a later name equated to it has that
+            // name as its shape.
             switch (inputs.theorem.interner.node(value).*) {
                 .placeholder => |pid| {
                     const open = try out.open.getOrPut(inputs.allocator, pid);
-                    if (!open.found_existing) open.value_ptr.* = name;
+                    if (!open.found_existing) {
+                        open.value_ptr.* = name;
+                    } else {
+                        try out.partial.put(inputs.allocator, name, value);
+                    }
                 },
                 else => {},
             }
