@@ -78,6 +78,7 @@ axiom and_r (g: ctx) (a b: wff): $ nd g (a /\ b) $ > $ nd g b $;
 
 -- l2 forces `?f = P u /\ _`, and l3's own statement, normalized, gives
 -- `P v /\ Q v`: the lines disagree, so the pre-pass solves nothing and
--- l1 is checked with `?f` open, which leaves `t` undetermined.
+-- l1 is checked with `?f` open, which leaves `t` undetermined. Its note
+-- names l3 and `v cannot equal u`.
 theorem unknown_partial_shape_conflict (a: wff) (u v: set) {x: set}:
   $ nd (hyp a) (A. x (P x /\ Q x)) $ > $ nd (hyp a) (P u) $;

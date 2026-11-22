@@ -286,7 +286,9 @@ pub const LineWalk = struct {
 
     /// When `line` failed while it still holds names the proof does not
     /// determine yet, say so on its diagnostic: the line may only be waiting
-    /// for their values. The error stands; nothing is checked again.
+    /// for their values, or, when the pre-pass found the lines clash, the
+    /// proof gives them values that disagree. The error stands; nothing is
+    /// checked again.
     fn noteUndeterminedNames(self: *LineWalk, line: ProofLine) !void {
         if (!self.hold_goals) return;
         var diag = self.compiler.getDiagnostic() orelse return;
@@ -310,8 +312,41 @@ pub const LineWalk = struct {
         if (names.items.len == 0) return;
         const text = try std.mem.join(self.allocator, ", ", names.items);
         defer self.allocator.free(text);
-        CompilerDiag.addNote(&diag, .{ .names_not_determined = .{ .names = text } }, .proof, null);
+        const clash = self.unknowns.clash orelse {
+            CompilerDiag.addNote(&diag, .{ .names_not_determined = .{ .names = text } }, .proof, null);
+            return self.compiler.setProof(diag);
+        };
+        // The lines gave the names values that disagree, so no line can
+        // wait for them.
+        const terms: [2]?[]const u8 = if (clash.terms) |pair| .{
+            try self.formatClashTerm(pair[0]),
+            try self.formatClashTerm(pair[1]),
+        } else .{ null, null };
+        if (terms[0] != null and terms[1] != null) {
+            CompilerDiag.addNote(&diag, .{ .names_clash_terms = .{
+                .names = text,
+                .line = clash.line,
+                .lhs = terms[0].?,
+                .rhs = terms[1].?,
+            } }, .proof, null);
+        } else {
+            CompilerDiag.addNote(&diag, .{ .names_clash = .{ .names = text, .line = clash.line } }, .proof, null);
+        }
         self.compiler.setProof(diag);
+    }
+
+    /// A term of the pre-pass's clash in source notation, its open parts
+    /// holes; null when it does not render. The walk's arena owns it.
+    fn formatClashTerm(self: *LineWalk, term: ExprId) !?[]const u8 {
+        return OpenGoals.formatGoalNamed(
+            self.allocator,
+            self.theorem,
+            &self.theory.env,
+            &self.theory.parser,
+            &self.theorem_vars,
+            term,
+            &self.unknowns.open,
+        );
     }
 
     /// Whether a name's value could change the outcome `diag` reports: a

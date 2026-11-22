@@ -35,6 +35,18 @@ pub const Unknowns = struct {
     /// Theorem variables by id, to write a value back as surface syntax.
     var_surfaces: std.AutoHashMapUnmanaged(u64, *const Expr) = .empty,
     var_surfaces_seen: usize = 0,
+    /// Set when the pre-pass found that the lines give the names values
+    /// that disagree; it then solved none of them.
+    clash: ?Clash = null,
+
+    pub const Clash = struct {
+        /// The line on which the pre-pass found the clash, solving the
+        /// lines in order.
+        line: []const u8,
+        /// The two terms that cannot be equal, when the clash is between
+        /// two terms; their open parts are placeholders.
+        terms: ?[2]ExprId,
+    };
 
     pub fn deinit(self: *Unknowns, allocator: std.mem.Allocator) void {
         self.bound.deinit(allocator);

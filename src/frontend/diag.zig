@@ -315,6 +315,20 @@ pub const NoteMessage = union(enum) {
     names_not_determined: struct {
         names: []const u8,
     },
+    /// The failing line holds named unknowns the pre-pass did not solve
+    /// because the lines up to `line` give them values that disagree.
+    names_clash: struct {
+        names: []const u8,
+        line: []const u8,
+    },
+    /// As `names_clash`, where `lhs` and `rhs` are the terms that could not
+    /// be equal.
+    names_clash_terms: struct {
+        names: []const u8,
+        line: []const u8,
+        lhs: []const u8,
+        rhs: []const u8,
+    },
     /// An `.mm0` notation error hit a token the proof file declared as local
     /// notation on `term_name`.
     local_notation_token: struct {
@@ -1921,6 +1935,8 @@ pub fn renderNoteMessage(writer: anytype, message: NoteMessage) !void {
         .cited_premise_proves => |info| try printT(writer, "note_cited_premise_proves", .{info.text}),
         .holey_unsolved_binder => |info| try printT(writer, "note_holey_unsolved_binder", .{info.binder_name}),
         .names_not_determined => |info| try printT(writer, "note_names_not_determined", .{info.names}),
+        .names_clash => |info| try printT(writer, "note_names_clash", .{ info.names, info.line }),
+        .names_clash_terms => |info| try printT(writer, "note_names_clash_terms", .{ info.names, info.line, info.lhs, info.rhs }),
         .local_notation_token => |info| try printT(writer, "note_local_notation_token", .{ info.token, info.term_name }),
         .local_notation_tables_shared => try writer.writeAll(t("note_local_notation_tables_shared")),
         .unsolved_binder_index => |info| try printT(writer, "note_unsolved_binder_index", .{info.number}),

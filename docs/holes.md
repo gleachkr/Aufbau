@@ -213,6 +213,13 @@ not check the line again, so a line that is wrong for every value of its
 names gets the note too. Errors no value could change, such as a malformed
 reference or an unknown rule, get no note.
 
+When the pre-pass solved nothing because the lines' equations clash, the
+note says so instead, naming the first line by which they clash and, when
+two terms could not be equal, the two: "the proof does not solve ?f: the
+lines up to l3 give the named unknowns values that disagree (v cannot
+equal u)". The pre-pass finds that line by solving ever longer runs of
+lines from the first.
+
 A name may also stand in an explicit binding, so that a rule application
 says which unknown a binder is: `imp_intro (a := $ ?h $)` discharges the
 assumption `?h`. A binding whose names are all known by the time its line

@@ -13,7 +13,9 @@
 //! `@acui` bag the bag step cannot decide yet. Waiting only leaves more
 //! solutions, never a wrong one. An equation under a definition unfolds
 //! the later definition and equates its body with the other side. A clash
-//! anywhere solves nothing; the walk then reports it where it meets it.
+//! anywhere solves nothing; the walk then reports it where it meets it,
+//! and the pass names the first line by which the lines clash and, when
+//! two terms could not be equal, which.
 //!
 //! A `@view`, `@recover`, `@abstract` or `@fresh` rule is checked through
 //! its view, but the proof applies the rule itself, so its literal
@@ -63,6 +65,7 @@ pub fn solve(inputs: Inputs, out: *Unknowns.Unknowns) !void {
     // A clash, or anything else the pass cannot read, solves nothing.
     solver.run() catch |err| switch (err) {
         error.OutOfMemory => return err,
+        error.Clash => return reportClash(inputs, out),
         else => return,
     };
     var it = solver.names.iterator();
@@ -83,6 +86,26 @@ pub fn solve(inputs: Inputs, out: *Unknowns.Unknowns) !void {
         } else {
             try out.bound.put(inputs.allocator, name, value);
         }
+    }
+}
+
+/// The lines clash: find the first line by which they do and tell the
+/// walk. The pass solves the lines in no fixed order, and how far it gets
+/// before an equation must wait depends on that order, so each prefix of
+/// the lines is solved afresh as a whole; the whole block clashed, so one
+/// does. No name is solved.
+fn reportClash(inputs: Inputs, out: *Unknowns.Unknowns) !void {
+    for (1..inputs.lines.len + 1) |len| {
+        var prefix = inputs;
+        prefix.lines = inputs.lines[0..len];
+        if (len < inputs.lines.len) prefix.conclusion = null;
+        var solver = Solver{ .inputs = prefix };
+        defer solver.deinit();
+        solver.run() catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            error.Clash => return solver.recordClash(prefix.lines[len - 1].label, out),
+            else => {},
+        };
     }
 }
 
@@ -109,6 +132,9 @@ const Solver = struct {
     /// Normal forms of the equations under a `@rewrite` head; made on
     /// first use.
     canonicalizer: ?Canonicalizer = null,
+    /// The two terms of the clash, when it was between two terms that
+    /// cannot be equal.
+    clash_terms: ?[2]ExprId = null,
 
     const Choice = struct {
         app: RuleApplication,
@@ -177,6 +203,29 @@ const Solver = struct {
         };
         try self.settle();
         try self.decideChoices();
+    }
+
+    /// Tell the walk that the lines up to `line` clash, as this solver
+    /// found; no name is solved.
+    fn recordClash(self: *Solver, line: []const u8, out: *Unknowns.Unknowns) !void {
+        const allocator = self.inputs.allocator;
+        var terms: ?[2]ExprId = null;
+        if (self.clash_terms) |pair| {
+            terms = .{ try self.resolveFully(pair[0]), try self.resolveFully(pair[1]) };
+        }
+        out.clash = .{ .line = line, .terms = terms };
+        // A name still open inside the terms is written as itself.
+        var it = self.names.iterator();
+        while (it.next()) |entry| {
+            const value = try self.resolveFully(entry.value_ptr.*);
+            switch (self.inputs.theorem.interner.node(value).*) {
+                .placeholder => |pid| {
+                    const open = try out.open.getOrPut(allocator, pid);
+                    if (!open.found_existing) open.value_ptr.* = entry.key_ptr.*;
+                },
+                else => {},
+            }
+        }
     }
 
     /// Solve the pending equations, retrying the postponed ones while
@@ -466,9 +515,9 @@ const Solver = struct {
                     .app => |app| if (self.undecided(app.term_id)) {
                         try self.rewritePair(lhs, rhs);
                         continue;
-                    } else return error.Clash,
+                    } else return self.clash(lhs, rhs),
                     // Distinct theorem variables.
-                    .variable => return error.Clash,
+                    .variable => return self.clash(lhs, rhs),
                     .placeholder => continue,
                 },
                 .placeholder => continue,
@@ -478,7 +527,7 @@ const Solver = struct {
                 .variable => if (self.undecided(lhs_app.term_id)) {
                     try self.rewritePair(lhs, rhs);
                     continue;
-                } else return error.Clash,
+                } else return self.clash(lhs, rhs),
                 .placeholder => continue,
             };
             if (self.undecided(lhs_app.term_id) or self.undecided(rhs_app.term_id)) {
@@ -489,8 +538,15 @@ const Solver = struct {
                 for (lhs_app.args, rhs_app.args) |l, r| try self.equate(l, r);
                 continue;
             }
-            return error.Clash;
+            return self.clash(lhs, rhs);
         }
+    }
+
+    /// `lhs` and `rhs`, decided and different, cannot be equal. A trial's
+    /// clash only rules out its rule, so it is not the one to report.
+    fn clash(self: *Solver, lhs: ExprId, rhs: ExprId) error{Clash} {
+        if (!self.in_trial) self.clash_terms = .{ lhs, rhs };
+        return error.Clash;
     }
 
     /// `lhs = rhs`, where a side is headed by a `@rewrite` head. Each

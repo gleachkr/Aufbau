@@ -2162,6 +2162,39 @@ test "a failing line notes the names the proof does not determine yet" {
     try expectHasNote(diag, "the proof does not determine ?x, ?y yet; this line may check once it does");
 }
 
+test "a failing line names the line by which the lines clash and the terms" {
+    const proof_src =
+        \\t
+        \\---
+        \\
+        \\l1: $ ?x -> ?y -> ?x $ by ax1 []
+        \\l2: $ ?x -> q -> p $ by ax1 []
+        \\l3: $ ?x -> q -> q $ by ax1 []
+        \\l4: $ p -> q -> p $ by ax1 []
+    ;
+    var compiler = Compiler.initWithProof(std.testing.allocator, undetermined_names_mm0, proof_src);
+    try std.testing.expect(std.meta.isError(compiler.check()));
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqualStrings("l1", diag.line_label.?);
+    try expectHasNote(diag, "the proof does not solve ?x, ?y: the lines up to l3 give the named unknowns values that disagree (p cannot equal q)");
+}
+
+test "a clash between no two terms names only the line" {
+    // `?x` would have to contain itself.
+    const proof_src =
+        \\t
+        \\---
+        \\
+        \\l1: $ (?x -> p) -> q -> ?x $ by ax1 []
+        \\l2: $ p -> q -> p $ by ax1 []
+    ;
+    var compiler = Compiler.initWithProof(std.testing.allocator, undetermined_names_mm0, proof_src);
+    try std.testing.expect(std.meta.isError(compiler.check()));
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqualStrings("l1", diag.line_label.?);
+    try expectHasNote(diag, "the proof does not solve ?x: the lines up to l1 give the named unknowns values that disagree");
+}
+
 test "a malformed reference gets no undetermined-names note" {
     const proof_src =
         \\t
