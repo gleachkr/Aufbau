@@ -120,6 +120,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   a theory that does not declare `(` and `)` as delimiters, which read back
   as the token `(p` and failed to parse. The parentheses are now spaced
   unless the theory declares them as delimiters.
+- The verifier and `abc` skipped a `.mm0` statement led by `local`, `pub`,
+  `input` or `output`, so they accepted specs that mm0-c rejects. They now
+  reject it as an unexpected keyword, as mm0-c does: `local` and `pub` are
+  MM1 modifiers, and neither verifier supports `input` or `output`.
 
 ### Removed
 
