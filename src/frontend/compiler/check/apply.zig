@@ -85,7 +85,6 @@ const foldTemplateOrRestore = @import("./inline_hints.zig").foldTemplateOrRestor
 const inferExpectedRefsForInlineApplicationProbe = @import("./inline_hints.zig").inferExpectedRefsForInlineApplicationProbe;
 const fillHoleyInlineHints = @import("./inline_hints.zig").fillHoleyInlineHints;
 const demoteAcuiSpineBindingsForRule = @import("./inline_hints.zig").demoteAcuiSpineBindingsForRule;
-const mintHintHole = @import("./inline_hints.zig").mintHintHole;
 const ambiguousPrincipalPins = @import("./inline_hints.zig").ambiguousPrincipalPins;
 const freePrincipalPins = @import("./inline_hints.zig").freePrincipalPins;
 const cloneNameExprMap = @import("./types.zig").cloneNameExprMap;
@@ -2215,26 +2214,74 @@ fn partialInlineGoal(
     defer allocator.free(bindings);
     const snap = try allocator.alloc(?ExprId, slot.partial_bindings.len);
     defer allocator.free(snap);
+    const goal = LineGoal.of(slot.expected_conclusion_hint, slot.line_assertion);
     try foldGoalAndSiblings(
         theorem,
         rule,
-        LineGoal.of(slot.expected_conclusion_hint, slot.line_assertion),
+        goal,
         slot.partial_bindings,
         slot.siblings,
         true,
         bindings,
         snap,
     );
+    // A part that differs from its template only inside an ACUI combiner,
+    // whose members line up modulo order, still fixes the binders outside it.
+    if (goal) |line_goal| switch (line_goal) {
+        .expr => |expr| foldOutsideCombiners(theorem, context.registry, rule.concl, expr, bindings, snap),
+        .holey => {},
+    };
+    for (rule.hyps, slot.siblings) |hyp, sibling| {
+        foldOutsideCombiners(theorem, context.registry, hyp, sibling orelse continue, bindings, snap);
+    }
     demoteAcuiSpineBindingsForRule(context.registry, rule, slot.partial_bindings, bindings);
-    return try OpenTerms.instantiateTemplateHoley(
-        theorem,
-        context.env,
-        context.registry,
-        rule,
-        rule.hyps[slot.idx],
-        bindings,
-        .{ .placeholder_factory = .{ .makeFn = mintHintHole } },
-    );
+    // Each binder still open is a hole of its sort, inside a combiner too,
+    // so the members the premise does fix stay in its goal.
+    const filled = try allocator.alloc(ExprId, bindings.len);
+    defer allocator.free(filled);
+    for (bindings, filled, rule.args) |binding, *out, arg| {
+        out.* = binding orelse try theorem.addLineHolePlaceholder(arg.sort_name);
+    }
+    return try theorem.instantiateTemplate(rule.hyps[slot.idx], filled);
+}
+
+/// Fold `expr` through `template` like `foldTemplateOrRestore`, except that an
+/// ACUI combiner subterm of the template matches anything and binds nothing.
+/// All or nothing.
+fn foldOutsideCombiners(
+    theorem: *TheoremContext,
+    registry: *const RewriteRegistry,
+    template: TemplateExpr,
+    expr: ExprId,
+    bindings: []?ExprId,
+    snap: []?ExprId,
+) void {
+    @memcpy(snap, bindings);
+    if (!matchOutsideCombiners(theorem, registry, template, expr, bindings)) {
+        @memcpy(bindings, snap);
+    }
+}
+
+fn matchOutsideCombiners(
+    theorem: *const TheoremContext,
+    registry: *const RewriteRegistry,
+    template: TemplateExpr,
+    expr: ExprId,
+    bindings: []?ExprId,
+) bool {
+    switch (template) {
+        .binder => return theorem.matchTemplate(template, expr, bindings),
+        .app => |app| {
+            if (registry.hasStructuralCombiner(app.term_id)) return true;
+            const node = theorem.interner.node(expr);
+            if (node.* != .app or node.app.term_id != app.term_id or
+                node.app.args.len != app.args.len) return false;
+            for (app.args, node.app.args) |targ, earg| {
+                if (!matchOutsideCombiners(theorem, registry, targ, earg, bindings)) return false;
+            }
+            return true;
+        },
+    }
 }
 
 /// A probed goal whose holes are placeholders (`probeRuleConclusion`) fixes

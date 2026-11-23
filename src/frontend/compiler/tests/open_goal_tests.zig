@@ -156,6 +156,74 @@ test "the analysis behind a failed compile reports every open goal as an error" 
     try std.testing.expectEqual(@as(usize, 0), analysis.warningDiagnostics().len);
 }
 
+test "an editor's analysis behind a failed compile reports an open goal once, as a warning" {
+    // The compile stops at the `?` with an error; the editor's analysis
+    // admits it, and the compile's error is not added beside its warning.
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ q -> p $ by mp [?, #1]
+    ;
+    var compile = Compiler.initWithProof(std.testing.allocator, mm0_src, proof_src);
+    try std.testing.expectError(error.OpenGoal, compile.compileMmb(std.testing.allocator));
+
+    var analysis = compile.failureAnalysis();
+    analysis.allow_search_placeholders = true;
+    try std.testing.expect(analysis.analyzeCompileFailure(&compile));
+    try std.testing.expectEqual(@as(usize, 0), analysis.primaryDiagnostics().len);
+    const warnings = analysis.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), warnings.len);
+    try expectOpenGoal(warnings[0], proof_src, "p -> q -> p");
+}
+
+const ctx_mm0_src =
+    \\delimiter $ ( ) $;
+    \\--| @hole _wff
+    \\sort wff;
+    \\--| @hole _ctx
+    \\sort ctx;
+    \\provable sort jdg;
+    \\term p: wff;
+    \\term q: wff;
+    \\term or (a b: wff): wff; infixl or: $\/$ prec 10;
+    \\term emp: ctx;
+    \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+    \\term join (g h: ctx): ctx; infixl join: $,$ prec 5;
+    \\term hyp (a: wff): ctx; coercion hyp: wff > ctx;
+    \\term nd (g: ctx) (a: wff): jdg; infixl nd: $|-$ prec 1;
+    \\term ctx_eq (g h: ctx): jdg;
+    \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+    \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+    \\axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+    \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+    \\axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+    \\axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+    \\axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+    \\axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+    \\axiom or_elim (g d s t: ctx) (a b c: wff):
+    \\  $ g |- a \/ b $ > $ d , a |- c $ > $ s , b |- c $ > $ g , d , s , t |- c $;
+    \\theorem t: $ p \/ q |- q \/ p $;
+;
+
+test "an inline open goal keeps what its line fixes outside and inside a context" {
+    // The line and `l2` fix `c` only modulo the order of their contexts, and
+    // `l1` fixes `b`; the context `s` stays open beside `b`.
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ p \/ q |- p \/ q $ by ?
+        \\l2: $ p |- q \/ p $ by ?
+        \\l3: $ p \/ q |- q \/ p $ by or_elim [l1, l2, ?]
+    ;
+    var compiler = Compiler.initWithProof(std.testing.allocator, ctx_mm0_src, proof_src);
+    compiler.allow_search_placeholders = true;
+    try compiler.analyze();
+    try std.testing.expectEqual(@as(usize, 0), compiler.primaryDiagnostics().len);
+    const warnings = compiler.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 3), warnings.len);
+    try expectOpenGoal(warnings[2], proof_src, "_ctx , q |- q \\/ p");
+}
+
 test "an open goal in a rule application that falls back is reported once" {
     // `bad` fails on its second premise after its first, the open goal,
     // was admitted; `good` then checks the line. Only the attempt that

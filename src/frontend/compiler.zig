@@ -168,17 +168,26 @@ pub const Compiler = struct {
     /// warning promoted to an error. False when the compile failed with no
     /// diagnostic at all (out of memory, say), for the host to report.
     ///
-    /// Search placeholders are the host's call: an editor admits them and
-    /// lists them itself, while the command line leaves each one an error.
+    /// Search placeholders and open goals are the host's call: an editor's
+    /// analysis admits them, an open goal as a warning that stands for the
+    /// compile's error, while the command line leaves each one an error.
     pub fn analyzeCompileFailure(self: *Compiler, compile: *const Compiler) bool {
         self.analyze() catch {};
         const diag = compile.getDiagnostic() orelse return false;
-        for (self.primaryDiagnostics()) |found| {
+        if (containsDiagnostic(self.primaryDiagnostics(), diag)) return true;
+        const promoted = containsDiagnostic(compile.warningDiagnostics(), diag);
+        if (!promoted and containsDiagnostic(self.warningDiagnostics(), diag)) return true;
+        self.addPrimaryDiagnostic(diag);
+        return true;
+    }
+
+    /// Whether `diags` reports `diag`'s error at its place.
+    fn containsDiagnostic(diags: []const Diagnostic, diag: Diagnostic) bool {
+        for (diags) |found| {
             if (found.err == diag.err and found.source == diag.source and
                 std.meta.eql(found.span, diag.span)) return true;
         }
-        self.addPrimaryDiagnostic(diag);
-        return true;
+        return false;
     }
 
     pub fn primaryDiagnostics(self: *const Compiler) []const Diagnostic {
