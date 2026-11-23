@@ -297,10 +297,6 @@ const TopLevelLead = enum {
     def,
     axiom,
     theorem,
-    pub_kw,
-    local,
-    input,
-    output,
     delimiter,
     prefix,
     infixl,
@@ -603,10 +599,6 @@ pub const MM0Parser = struct {
         lead: TopLevelLead,
     ) !bool {
         switch (lead) {
-            .local, .input, .output => {
-                try self.skipToSemicolon();
-                return true;
-            },
             .delimiter => {
                 try self.parseDelimiterStmt();
                 return true;
@@ -700,22 +692,6 @@ pub const MM0Parser = struct {
             .def => return .{ .term = try self.parseTermStmt(true) },
             .axiom => return .{ .assertion = try self.parseAssertionStmt(.axiom, false) },
             .theorem => return .{ .assertion = try self.parseAssertionStmt(.theorem, false) },
-            .pub_kw => {
-                _ = self.consumeIdent();
-                self.skipWhitespaceAndComments();
-                const next_word = self.peekIdent() orelse {
-                    self.recordCurrentTokenError();
-                    return error.ExpectedKeyword;
-                };
-                if (std.mem.eql(u8, next_word, "def")) {
-                    return .{ .term = try self.parseTermStmt(true) };
-                }
-                if (std.mem.eql(u8, next_word, "theorem")) {
-                    return .{ .assertion = try self.parseAssertionStmt(.theorem, false) };
-                }
-                self.recordCurrentTokenError();
-                return error.UnexpectedKeyword;
-            },
             else => {
                 self.recordCurrentTokenError();
                 return error.UnexpectedKeyword;
@@ -2514,10 +2490,6 @@ fn classifyTopLevelLead(word: []const u8) TopLevelLead {
     if (std.mem.eql(u8, word, "def")) return .def;
     if (std.mem.eql(u8, word, "axiom")) return .axiom;
     if (std.mem.eql(u8, word, "theorem")) return .theorem;
-    if (std.mem.eql(u8, word, "pub")) return .pub_kw;
-    if (std.mem.eql(u8, word, "local")) return .local;
-    if (std.mem.eql(u8, word, "input")) return .input;
-    if (std.mem.eql(u8, word, "output")) return .output;
     if (std.mem.eql(u8, word, "delimiter")) return .delimiter;
     if (std.mem.eql(u8, word, "prefix")) return .prefix;
     if (std.mem.eql(u8, word, "infixl")) return .infixl;
@@ -2534,7 +2506,6 @@ fn isPublicLead(lead: TopLevelLead) bool {
         .def,
         .axiom,
         .theorem,
-        .pub_kw,
         => true,
         else => false,
     };
@@ -2565,19 +2536,6 @@ fn scanPublicStmtHeader(src: []const u8, pos: *usize) ?PublicStmtHeader {
             .theorem => {
                 return scanNamedHeader(src, word_info.span.end, .theorem);
             },
-            .pub_kw => {
-                pos.* = word_info.span.end;
-                scanWhitespaceAndComments(src, pos);
-                const pub_kw = scanIdentInfo(src, pos.*) orelse return null;
-                return switch (classifyTopLevelLead(pub_kw.text)) {
-                    .def => scanNamedHeader(src, pub_kw.span.end, .def),
-                    .theorem => scanNamedHeader(src, pub_kw.span.end, .theorem),
-                    else => null,
-                };
-            },
-            .local,
-            .input,
-            .output,
             .delimiter,
             .prefix,
             .infixl,

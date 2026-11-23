@@ -122,16 +122,19 @@ test "compiler rejects unexpected top-level mm0 keywords" {
     try std.testing.expectEqualStrings("trict", mm0_src[span.start..span.end]);
 }
 
-test "compiler still ignores unsupported input and output statements" {
-    const mm0_src =
-        \\sort nat;
-        \\term zero: nat;
-        \\output string: $ zero $;
-        \\input string: zero;
-    ;
+test "compiler rejects unsupported input and output statements" {
+    for ([_][]const u8{ "output", "input" }) |keyword| {
+        const mm0_src = try std.mem.concat(std.testing.allocator, u8, &.{
+            "sort nat;\nterm zero: nat;\n", keyword, " string: $ zero $;\n",
+        });
+        defer std.testing.allocator.free(mm0_src);
 
-    var compiler = Compiler.init(std.testing.allocator, mm0_src);
-    try compiler.check();
+        var compiler = Compiler.init(std.testing.allocator, mm0_src);
+        try std.testing.expectError(error.UnexpectedKeyword, compiler.check());
+        const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+        const span = diag.span orelse return error.ExpectedDiagnosticSpan;
+        try std.testing.expectEqualStrings(keyword, mm0_src[span.start..span.end]);
+    }
 }
 
 test "compiler pinpoints unknown sorts in mm0 declarations" {

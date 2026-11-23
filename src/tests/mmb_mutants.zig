@@ -188,6 +188,33 @@ const mutants = [_]Mutant{
         .expected = error.UnexpectedKeyword,
         .mm0c = "invalid command keyword",
     },
+    // `local` and `pub` are MM1 modifiers, not MM0 keywords; `input` and
+    // `output` are MM0 commands neither verifier supports. Skipping any of
+    // them would accept a spec mm0-c rejects.
+    .{
+        .name = "spec statement led by local",
+        .spec_suffix = "local axiom bogus (a: wff): $ a $;\n",
+        .expected = error.UnexpectedKeyword,
+        .mm0c = "invalid command keyword",
+    },
+    .{
+        .name = "spec statement led by pub",
+        .spec_suffix = "pub theorem bogus (a: wff): $ a $;\n",
+        .expected = error.UnexpectedKeyword,
+        .mm0c = "invalid command keyword",
+    },
+    .{
+        .name = "input command",
+        .spec_suffix = "input string: $ $;\n",
+        .expected = error.UnexpectedKeyword,
+        .mm0c = "invalid command keyword",
+    },
+    .{
+        .name = "output command",
+        .spec_suffix = "output string: $ $;\n",
+        .expected = error.UnexpectedKeyword,
+        .mm0c = "invalid command keyword",
+    },
 
     // Binders (mm0-c's `load_args`). Local statements have no spec to
     // cross-check against, so only these checks stand between a bad binder

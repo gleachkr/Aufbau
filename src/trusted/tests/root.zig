@@ -684,41 +684,23 @@ test "MM0 parser handles dependent args in arrow signatures" {
     }
 }
 
-test "MM0 parser skips local theorems and unknown declarations" {
-    const src =
-        \\provable sort wff;
-        \\notation "|-";
-        \\theorem visible0 {x: wff}: $ |- x $;
-        \\local theorem hidden {x: wff}: $ |- x $;
-        \\pub theorem visible1 {x: wff}: $ |- x $;
-    ;
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var parser = MM0Parser.init(src, arena.allocator());
-    _ = (try parser.next()).?;
-    const stmt0 = (try parser.next()).?;
-    switch (stmt0) {
-        .assertion => |assert_stmt| {
-            try std.testing.expectEqualStrings("visible0", assert_stmt.name);
-            try std.testing.expectEqual(@as(usize, 1), assert_stmt.args.len);
-            try std.testing.expect(assert_stmt.args[0].bound);
-        },
-        else => return error.UnexpectedStatementKind,
+test "MM0 parser rejects local, pub, input and output" {
+    // MM1's `local`/`pub` modifiers, and the MM0 `input`/`output` commands
+    // that neither this verifier nor mm0-c supports.
+    const leads = [_][]const u8{
+        "local theorem hidden {x: wff}: $ |- x $;",
+        "pub theorem visible {x: wff}: $ |- x $;",
+        "input string: $ $;",
+        "output string: $ $;",
+    };
+    for (leads) |lead| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const src = try std.mem.concat(arena.allocator(), u8, &.{ "provable sort wff;\nnotation \"|-\";\n", lead });
+        var parser = MM0Parser.init(src, arena.allocator());
+        _ = (try parser.next()).?;
+        try std.testing.expectError(error.UnexpectedKeyword, parser.next());
     }
-
-    const stmt1 = (try parser.next()).?;
-    switch (stmt1) {
-        .assertion => |assert_stmt| {
-            try std.testing.expectEqualStrings("visible1", assert_stmt.name);
-            try std.testing.expectEqual(@as(usize, 1), assert_stmt.args.len);
-            try std.testing.expect(assert_stmt.args[0].bound);
-        },
-        else => return error.UnexpectedStatementKind,
-    }
-
-    try std.testing.expect((try parser.next()) == null);
 }
 
 fn parseAllStatements(src: []const u8) !void {
