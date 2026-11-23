@@ -1,9 +1,9 @@
 //! A compile's memory follows its largest proof, not the sum of its proofs
 //! (#634): each theorem and lemma is checked in an arena reset once its MMB
-//! records are out. So does the analysis that explains a failed compile,
-//! which checks every proof again. The tests compile the same proof repeated
-//! a few times and many times, as theorems and as lemmas, and compare peak
-//! live bytes.
+//! records are out. So does an analysis: the one that explains a failed
+//! compile, which checks every proof again, and an editor's, which keeps a
+//! check memo. The tests compile the same proof repeated a few times and
+//! many times, as theorems and as lemmas, and compare peak live bytes.
 
 const helpers = @import("./helpers.zig");
 const std = helpers.std;
@@ -69,15 +69,20 @@ const theory =
 
 const Kind = enum { theorem, lemma };
 
-/// Whether every proof checks, or the last cites an unknown rule, so the
-/// compile fails and its failure is analyzed as the command line does.
-const Outcome = enum { passes, last_fails };
+const Run = enum {
+    compile,
+    /// The last proof cites an unknown rule, so the compile fails and its
+    /// failure is analyzed as the command line does.
+    failed_compile,
+    /// An analysis with a check memo and a hole sink, as the language
+    /// server runs it.
+    editor_analysis,
+};
 
-/// The peak live bytes of compiling `count` copies of `a → a` (and, when the
-/// last fails, of analyzing the failure), each proved in five lines after
-/// five lines about a long implication chain `x`, so the proof is large
-/// while the statement every later proof keeps is small.
-fn compilePeak(kind: Kind, outcome: Outcome, count: usize) !usize {
+/// The peak live bytes of `run` over `count` copies of `a → a`, each proved
+/// in five lines after five lines about a long implication chain `x`, so
+/// the proof is large while the statement every later proof keeps is small.
+fn runPeak(kind: Kind, run: Run, count: usize) !usize {
     const gpa = std.testing.allocator;
     var x: std.ArrayListUnmanaged(u8) = .empty;
     defer x.deinit(gpa);
@@ -101,7 +106,7 @@ fn compilePeak(kind: Kind, outcome: Outcome, count: usize) !usize {
             },
             .lemma => try auf.print(gpa, "lemma {s}\n---\n", .{statement}),
         }
-        const fails = outcome == .last_fails and idx + 1 == count;
+        const fails = run == .failed_compile and idx + 1 == count;
         for ([_][]const u8{ "x", "y" }, [_][]const u8{ X, "a" }) |label, f| try auf.print(gpa,
             \\{0s}1: $ {1s} -> ({1s} -> {1s}) -> {1s} $ by ax_1
             \\{0s}2: $ ({1s} -> ({1s} -> {1s}) -> {1s}) -> ({1s} -> {1s} -> {1s}) -> {1s} -> {1s} $ by ax_2
@@ -116,9 +121,9 @@ fn compilePeak(kind: Kind, outcome: Outcome, count: usize) !usize {
     var peak = PeakAllocator{ .child = gpa };
     const allocator = peak.allocator();
     var compiler = Compiler.initWithProof(allocator, mm0.items, auf.items);
-    switch (outcome) {
-        .passes => allocator.free(try compiler.compileMmb(allocator)),
-        .last_fails => {
+    switch (run) {
+        .compile => allocator.free(try compiler.compileMmb(allocator)),
+        .failed_compile => {
             if (compiler.compileMmb(allocator)) |mmb| {
                 allocator.free(mmb);
                 return error.TestUnexpectedResult;
@@ -126,13 +131,27 @@ fn compilePeak(kind: Kind, outcome: Outcome, count: usize) !usize {
             var analysis = compiler.failureAnalysis();
             try std.testing.expect(analysis.analyzeCompileFailure(&compiler));
         },
+        .editor_analysis => {
+            var memo = helpers.mm0.CheckMemo.init(allocator);
+            defer memo.deinit();
+            var holes = helpers.mm0.CompilerSupport.Context.HoleInferenceSink{
+                .allocator = allocator,
+            };
+            defer holes.deinit();
+            compiler.check_memo = &memo;
+            compiler.hole_inference_sink = &holes;
+            try compiler.analyze();
+            // Every block went through the memo, so its path is the one
+            // measured.
+            try std.testing.expectEqual(@as(usize, count), memo.misses);
+        },
     }
     return peak.peak;
 }
 
-fn expectBoundedByLargestProof(kind: Kind, outcome: Outcome) !void {
-    const few = try compilePeak(kind, outcome, 4);
-    const many = try compilePeak(kind, outcome, 32);
+fn expectBoundedByLargestProof(kind: Kind, run: Run) !void {
+    const few = try runPeak(kind, run, 4);
+    const many = try runPeak(kind, run, 32);
     // Eight times the proofs; held memory would grow about eightfold.
     // What remains per proof is its MMB records and its parsed block.
     if (many >= 2 * few) {
@@ -142,17 +161,25 @@ fn expectBoundedByLargestProof(kind: Kind, outcome: Outcome) !void {
 }
 
 test "a compile frees each theorem's work once its records are out" {
-    try expectBoundedByLargestProof(.theorem, .passes);
+    try expectBoundedByLargestProof(.theorem, .compile);
 }
 
 test "a compile frees each lemma's work once its records are out" {
-    try expectBoundedByLargestProof(.lemma, .passes);
+    try expectBoundedByLargestProof(.lemma, .compile);
 }
 
 test "a failed compile's analysis frees each theorem's work once it is checked" {
-    try expectBoundedByLargestProof(.theorem, .last_fails);
+    try expectBoundedByLargestProof(.theorem, .failed_compile);
 }
 
 test "a failed compile's analysis frees each lemma's work once it is checked" {
-    try expectBoundedByLargestProof(.lemma, .last_fails);
+    try expectBoundedByLargestProof(.lemma, .failed_compile);
+}
+
+test "an editor's analysis frees each theorem's work, check memo and all" {
+    try expectBoundedByLargestProof(.theorem, .editor_analysis);
+}
+
+test "an editor's analysis frees each lemma's work, check memo and all" {
+    try expectBoundedByLargestProof(.lemma, .editor_analysis);
 }

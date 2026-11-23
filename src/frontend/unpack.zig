@@ -61,14 +61,18 @@ pub fn hasTargetAt(
 
 /// Compute the unpack rewrite for the proof line at `offset`, or null when
 /// there is nothing to unpack there or the rewrite cannot be validated.
-/// The returned strings are owned by `allocator`.
+/// The returned strings are owned by `allocator`. `work_allocator` backs the
+/// working memory, which the two analyses free theorem by theorem: a caller
+/// whose `allocator` is an arena (the LSP's per-request one) passes the
+/// allocator under it, or those frees reclaim nothing.
 pub fn unpackAtSourceOffset(
     allocator: std.mem.Allocator,
+    work_allocator: std.mem.Allocator,
     mm0_src: []const u8,
     proof_src: []const u8,
     offset: usize,
 ) std.mem.Allocator.Error!?UnpackSuggestion {
-    var work_arena = ArenaAllocator.init(allocator);
+    var work_arena = ArenaAllocator.init(work_allocator);
     defer work_arena.deinit();
     const work = work_arena.allocator();
 
@@ -79,7 +83,7 @@ pub fn unpackAtSourceOffset(
     // cleanly, with the sink recording every inline application's
     // elaborated conclusion.
     var sink = InlineConclusionSink{ .allocator = work };
-    if (!try analyzesCleanly(work, mm0_src, proof_src, &sink)) return null;
+    if (!try analyzesCleanly(work_allocator, mm0_src, proof_src, &sink)) return null;
 
     // Aborted fallback/retry attempts roll their entries back (see
     // `InlineConclusionSink`), so every entry comes from the surviving
@@ -102,7 +106,7 @@ pub fn unpackAtSourceOffset(
         built.replacement,
         proof_src[target.line.span.end..],
     });
-    if (!try analyzesCleanly(work, mm0_src, spliced, null)) return null;
+    if (!try analyzesCleanly(work_allocator, mm0_src, spliced, null)) return null;
 
     const title = if (built.count == 1)
         try allocator.dupe(u8, "Unpack inline application")

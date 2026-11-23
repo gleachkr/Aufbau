@@ -48,6 +48,7 @@ fn expectUnpack(
     const allocator = std.testing.allocator;
     const suggestion = (try Unpack.unpackAtSourceOffset(
         allocator,
+        allocator,
         test_mm0,
         test_auf,
         offset,
@@ -112,7 +113,7 @@ test "unpack offers nothing on lines without inline applications" {
     const offset = offsetOf("l1_1: $ top $");
     try std.testing.expectEqual(
         @as(?Unpack.UnpackSuggestion, null),
-        try Unpack.unpackAtSourceOffset(allocator, test_mm0, test_auf, offset),
+        try Unpack.unpackAtSourceOffset(allocator, allocator, test_mm0, test_auf, offset),
     );
     try std.testing.expect(
         !Unpack.hasTargetAt(allocator, test_auf, offset),
@@ -145,6 +146,7 @@ test "unpack targets a line after local def and notation items" {
     const offset = std.mem.indexOf(u8, auf, "by conj_i [conj_i").?;
     try std.testing.expect(Unpack.hasTargetAt(allocator, auf, offset));
     const suggestion = (try Unpack.unpackAtSourceOffset(
+        allocator,
         allocator,
         test_mm0,
         auf,
@@ -179,7 +181,7 @@ test "unpack offers nothing on a line containing a search placeholder" {
     try std.testing.expect(!Unpack.hasTargetAt(allocator, auf, offset));
     try std.testing.expectEqual(
         @as(?Unpack.UnpackSuggestion, null),
-        try Unpack.unpackAtSourceOffset(allocator, test_mm0, auf, offset),
+        try Unpack.unpackAtSourceOffset(allocator, allocator, test_mm0, auf, offset),
     );
 }
 
@@ -201,6 +203,7 @@ test "unpack round-trips on a real fixture with rich notation" {
     const offset = std.mem.indexOf(u8, auf_src, marker) orelse
         return error.MissingFixtureMarker;
     const suggestion = (try Unpack.unpackAtSourceOffset(
+        allocator,
         allocator,
         mm0_src,
         auf_src,
@@ -226,6 +229,6 @@ test "unpack offers nothing when the document does not analyze cleanly" {
     try std.testing.expect(Unpack.hasTargetAt(allocator, auf, offset));
     try std.testing.expectEqual(
         @as(?Unpack.UnpackSuggestion, null),
-        try Unpack.unpackAtSourceOffset(allocator, test_mm0, auf, offset),
+        try Unpack.unpackAtSourceOffset(allocator, allocator, test_mm0, auf, offset),
     );
 }

@@ -1049,6 +1049,7 @@ pub const Handler = struct {
         if (!Unpack.hasTargetAt(arena, proof_text, offset)) return null;
         const suggestion = Unpack.unpackAtSourceOffset(
             arena,
+            self.allocator,
             nav.unit.mm0.joined.text,
             proof_text,
             offset,
@@ -1910,8 +1911,12 @@ pub const Handler = struct {
             states,
         );
 
+        // The handler's allocator, not the request's arena: the analysis
+        // frees each theorem's work once it is checked, which an arena
+        // could not take back. What outlives it is the diagnostics, which
+        // the compiler holds in storage of its own, and the holes.
         var compiler = mm0.Compiler.initWithProof(
-            arena,
+            self.allocator,
             unit.mm0.joined.text,
             unit.proof.?.joined.text,
         );

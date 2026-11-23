@@ -244,11 +244,11 @@ pub const Compiler = struct {
     }
 
     /// The context for a run that checks proofs: each theorem's work goes to
-    /// `theorem_scratch`, unless a check memo, which keeps what a check
-    /// allocates, is attached.
+    /// `theorem_scratch`. A check memo copies what it records into its own
+    /// entries, so it needs none of that work kept.
     fn runContext(self: *Compiler, theorem_scratch: *ArenaAllocator) CompilerContext {
         var result = self.context();
-        if (result.check_memo == null) result.theorem_scratch = theorem_scratch;
+        result.theorem_scratch = theorem_scratch;
         return result;
     }
 

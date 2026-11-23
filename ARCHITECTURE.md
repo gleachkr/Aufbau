@@ -1332,8 +1332,9 @@ The important lifetimes are:
   (`CompilerContext.theorem_scratch`), reset once its MMB records are copied
   to the call's arena (or, in an analysis, once its outcome is recorded), so
   memory follows the largest proof, not their sum; the parser allocates
-  there while the block is checked. A call with a check memo attached keeps
-  checks in the call's arena.
+  there while the block is checked. These arenas take their memory from the
+  `Compiler`'s allocator, which must be able to take it back: the language
+  server passes its own allocator, not a request's arena.
 - `TheoremContext.clone()` uses a COW interner. A scratch clone borrows a
   stable base prefix; the base must outlive it and stay at a stable address.
   `flatten()` makes the clone independent before it replaces its parent or

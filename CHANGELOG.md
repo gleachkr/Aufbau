@@ -117,6 +117,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   so one bad line late in a large library could exhaust memory and report
   "ran out of memory" in an unrelated theorem. That pass now frees each
   theorem's and lemma's memory as a compile does.
+- The language server kept every proof's memory while it checked a file,
+  so opening a file at the end of a large library could exhaust memory
+  before any diagnostics appeared. Its checks, and the two the unpack code
+  action runs, now free each theorem's and lemma's memory as a compile
+  does: opening the last file of a 126 MB library ran out of memory at
+  40 GB and now peaks at 3.9 GB.
 - `auto?` and `exact?` free each step's records when the step returns: one
   Cardano goal fell from 1.1 GiB to 30 MiB.
 - The search budget charges the work of matching large contexts, so a
