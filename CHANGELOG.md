@@ -112,6 +112,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   records are written, so memory follows the largest proof rather than the
   sum of all of them. Lean0's whole TG library (about 5,300 lemmas), killed
   at 55 GB before, compiles in 3.9 GiB.
+- When a compile failed, the pass that collects every error checked all
+  the proofs again, imports included, while keeping every proof's memory,
+  so one bad line late in a large library could exhaust memory and report
+  "ran out of memory" in an unrelated theorem. That pass now frees each
+  theorem's and lemma's memory as a compile does.
 - `auto?` and `exact?` free each step's records when the step returns: one
   Cardano goal fell from 1.1 GiB to 30 MiB.
 - The search budget charges the work of matching large contexts, so a

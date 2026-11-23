@@ -12,7 +12,6 @@ const DefItem = ProofScript.DefItem;
 const NotationItem = ProofScript.NotationItem;
 const TopLevelItem = ProofScript.TopLevelItem;
 const Span = ProofScript.Span;
-const Check = @import("../check.zig");
 const CompilerVars = @import("../vars.zig");
 const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
@@ -27,6 +26,9 @@ const TermRecoverySnapshot = Recovery.TermRecoverySnapshot;
 const AssertionRecoverySnapshot = Recovery.AssertionRecoverySnapshot;
 const ProofItemStream = Common.ProofItemStream;
 const anchorMatches = Common.anchorMatches;
+const checkBlock = Common.checkBlock;
+const releaseTheoremScratch = Common.releaseTheoremScratch;
+const theoremAllocator = Common.theoremAllocator;
 const isLocalProofItem = Common.isLocalProofItem;
 const processAssertion = Common.processAssertion;
 const processLocalDefItem = Common.processLocalDefItem;
@@ -1000,21 +1002,24 @@ fn analyzeTheoremProof(
                 }
 
                 const warnings = WarningSnapshot.capture(self);
-                var theorem = TheoremContext.init(allocator);
+                const scratch = theoremAllocator(self, allocator);
+                defer releaseTheoremScratch(self);
+                var theorem = TheoremContext.init(scratch);
                 defer theorem.deinit();
 
                 try theorem.seedAssertion(assertion);
                 const theorem_concl = try theorem.internParsedExpr(
                     assertion.concl,
                 );
-                _ = Check.checkTheoremBlockMemoized(
+                _ = checkBlock(
                     self,
-                    allocator,
+                    scratch,
                     theory,
                     assertion,
                     block,
                     &theorem,
                     theorem_concl,
+                    .memoized,
                 ) catch |err| {
                     // The theorem fails, but the warnings its lines raised
                     // (a line citing a failed one, `sorry!`) still stand.

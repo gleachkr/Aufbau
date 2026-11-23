@@ -1205,9 +1205,9 @@ pub fn processAssertion(
     );
 }
 
-/// The allocator for one theorem's or lemma's own work: the compile path's
-/// per-theorem arena (`CompilerContext.theorem_scratch`), else the run's.
-fn theoremAllocator(
+/// The allocator for one theorem's or lemma's own work: the per-theorem
+/// arena (`CompilerContext.theorem_scratch`), else the run's.
+pub fn theoremAllocator(
     self: *const CompilerContext,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator {
@@ -1218,7 +1218,7 @@ fn theoremAllocator(
 /// Forget a theorem's work once its records are out. The arena keeps its
 /// largest chunk for the next theorem, except in a safe build, which gives
 /// the memory back so that a pointer outliving its theorem faults.
-fn releaseTheoremScratch(self: *const CompilerContext) void {
+pub fn releaseTheoremScratch(self: *const CompilerContext) void {
     const arena = self.theorem_scratch orelse return;
     _ = arena.reset(if (std.debug.runtime_safety) .free_all else .retain_capacity);
 }
@@ -1228,7 +1228,7 @@ const CheckMode = enum { direct, memoized };
 /// Check `block` as `assertion`'s proof. With a per-theorem arena the
 /// parser allocates there meanwhile: the proof's math and the theorem's
 /// dummy variables are the theorem's own, and a check parses no statement.
-fn checkBlock(
+pub fn checkBlock(
     self: *CompilerContext,
     scratch: std.mem.Allocator,
     theory: *TheoryState,

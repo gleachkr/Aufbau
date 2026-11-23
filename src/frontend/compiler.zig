@@ -103,8 +103,10 @@ pub const Compiler = struct {
 
         var arena = ArenaAllocator.init(self.allocator);
         defer arena.deinit();
+        var theorem_scratch = ArenaAllocator.init(self.allocator);
+        defer theorem_scratch.deinit();
 
-        var compiler_context = self.context();
+        var compiler_context = self.runContext(&theorem_scratch);
         if (self.proof_source != null) {
             try Pipeline.analyze(&compiler_context, arena.allocator());
             return;
@@ -241,7 +243,7 @@ pub const Compiler = struct {
         self.diagnostics.clear();
     }
 
-    /// The context for a compile-path run: each theorem's work goes to
+    /// The context for a run that checks proofs: each theorem's work goes to
     /// `theorem_scratch`, unless a check memo, which keeps what a check
     /// allocates, is attached.
     fn runContext(self: *Compiler, theorem_scratch: *ArenaAllocator) CompilerContext {

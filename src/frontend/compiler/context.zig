@@ -384,12 +384,12 @@ pub const CompilerContext = struct {
     /// Memo of block check outcomes for editor re-analysis; null on the
     /// compile path. See `check_memo.zig`.
     check_memo: ?*CheckMemo = null,
-    /// The compile path's per-theorem arena: a theorem's check and its
-    /// proof's emission allocate here, and it is reset once the theorem's
-    /// MMB records are copied out, so a compile holds the memory of its
-    /// largest proof rather than of all of them. Null on the analysis
-    /// path and whenever a check memo, which keeps what a check
-    /// allocates, is attached.
+    /// The per-theorem arena: a theorem's check and its proof's emission
+    /// allocate here, and it is reset once the theorem is done (its MMB
+    /// records copied out, or its failure recorded), so a run holds the
+    /// memory of its largest proof rather than of all of them. Null
+    /// whenever a check memo, which keeps what a check allocates, is
+    /// attached.
     theorem_scratch: ?*ArenaAllocator = null,
     /// `@frameAddress` of the outermost frame that elaborates rule
     /// applications: the first `applyRuleApplication` on the stack, or a
