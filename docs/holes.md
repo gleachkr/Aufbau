@@ -175,7 +175,10 @@ successful check must agree with:
 - two applications of an `@acui` combiner are solved as bags under the
   combiner's laws, and only where the answer is forced (a member that can
   equal one member of a side with no rest, a single rest taking what is
-  left). A symmetric split (`{g, p, q} = {Γ, ?a, ?b}`) stays open. A unit
+  left). Whether two members can be equal is read off their normal forms:
+  an ∃-elimination's minor premise `Δ , [x := a] (F x) ⊢ χ`, with `Δ` left
+  out, against a line's context `R , ?h` fixes `?h` as `F a`, which `R`
+  cannot be. A symmetric split (`{g, p, q} = {Γ, ?a, ?b}`) stays open. A unit
   is dropped only where unit laws remove it from both sides, and a rest
   keeps the units its side writes;
 - a rule with `@view`, `@recover`, `@abstract` or `@fresh` is checked

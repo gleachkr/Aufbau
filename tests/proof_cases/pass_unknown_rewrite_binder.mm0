@@ -98,6 +98,10 @@ axiom all_elim {x: obj} (g: ctx x) (t: obj) (p: wff x):
 --| @recover y q p x
 axiom all_intro {x y: obj} (g: ctx x) (p: wff x):
   $ nd g (sb x y p) $ > $ nd g (A. x p) $;
+--| @view {x y: obj} (g d s: ctx x) (p: wff x) (q: wff) (c: wff x): $ nd g (E. x p) $ > $ nd (join d (hyp q)) c $ > $ nd (join (join g d) s) c $
+--| @recover y q p x
+axiom ex_elim {x y: obj} (g d s: ctx x) (p: wff x) (c: wff x):
+  $ nd g (E. x p) $ > $ nd (join d (hyp (sb x y p))) c $ > $ nd (join (join g d) s) c $;
 
 -- Swap two universal quantifiers: l3's premise is `sb x ?t (A. y ..)`,
 -- which equals `A. ?z ?q` only by `sb_all`. The eigenvariables are `@vars`
@@ -108,3 +112,8 @@ theorem unknown_rewrite_binder_all {x y: obj}:
 -- equal l2's conclusion `E. ?z ?q`, which only `sb_ex` gives.
 theorem unknown_rewrite_binder_ex (u v: obj) {x y: obj}:
   $ nd (hyp (P u \/ Q v)) (E. x E. y (P x \/ Q y)) $;
+-- An existential elimination whose side context `d` is left out: l3's
+-- context `?h , Q u` must be `d , sb x a (P x)`, and only `?h` can be the
+-- substitution, whose normal form `P a` cannot be `Q u`.
+theorem unknown_rewrite_member (u: obj) {x: obj}:
+  $ nd (join (hyp (E. x P x)) (hyp (Q u))) (E. x P x) $;

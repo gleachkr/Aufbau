@@ -1184,10 +1184,13 @@ const Solver = struct {
     }
 
     /// Whether `lhs` and `rhs` could be equal: false only when no binding
-    /// of the pass's variables makes them so.
+    /// of the pass's variables makes them so. A side under a `@rewrite` or
+    /// definition head is read by its normal form (`decidedForm`), so a
+    /// substitution its bindings let fire is told apart by the head it
+    /// rewrites to.
     fn compatible(self: *Solver, lhs_id: ExprId, rhs_id: ExprId) !bool {
-        const lhs = self.resolve(lhs_id);
-        const rhs = self.resolve(rhs_id);
+        const lhs = try self.decidedForm(lhs_id);
+        const rhs = try self.decidedForm(rhs_id);
         if (lhs == rhs or self.isVariable(lhs) or self.isVariable(rhs)) return true;
         const theorem = self.inputs.theorem;
         const lhs_node = theorem.interner.node(lhs).*;
@@ -1214,6 +1217,15 @@ const Solver = struct {
                 },
             },
         }
+    }
+
+    /// `id` resolved, or its normal form when it sits under a `@rewrite`
+    /// or definition head. The normal form equals it under any binding of
+    /// the pass's variables (`mint`), so comparing it forces nothing more.
+    fn decidedForm(self: *Solver, id: ExprId) !ExprId {
+        const resolved = self.resolve(id);
+        if (self.decided(resolved)) return resolved;
+        return self.normalForm(resolved);
     }
 
     /// Heads whose applications may equal a term with another head.

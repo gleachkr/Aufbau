@@ -45,7 +45,9 @@ This file records notable user-facing changes to Aufbau. The project follows
     agree on.
   - A rule with `@view`, `@recover`, `@abstract` or `@fresh` fixes names by
     its own statement: a line `$ Γ ⊢ ?c $` cited as an ∃-elimination's
-    minor premise takes the goal's conclusion.
+    minor premise takes the goal's conclusion, and one whose context is
+    `R , ?h`, with the side context left out, fixes `?h` as the
+    substituted formula.
   - An equation under a `@rewrite` head is solved by normal forms: a line
     `F a ∨ ?q` cited by an ∃- or ∀-introduction for `∃x (F x ∨ G x)` fixes
     `?q` and the witness. A rewrite that needs a value to avoid a variable
