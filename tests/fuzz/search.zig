@@ -7,8 +7,8 @@
 //! The search must not panic, leak, hang or run away with memory, and
 //! must not fail; it must trim every suggestion it returns; and putting
 //! each found proof in its marker's place (and the original proofs back
-//! on a line where a marker found none) must give a file that compiles
-//! and verifies.
+//! on a line where a marker found none, or in a whole proof that names an
+//! unknown) must give a file that compiles and verifies.
 //! Steps on lines with holes are left alone: a search there may fill the
 //! holes differently, which breaks the lines that rely on them.
 const std = @import("std");
@@ -24,8 +24,9 @@ const markers = [_][]const u8{ "auto?", "exact?", "conversion?" };
 /// A proof step to replace, in the original proof text.
 const Step = struct {
     span: ProofScript.Span,
-    /// Where its proof line starts.
-    line: usize,
+    /// Where the steps whose originals go back together start: the proof
+    /// line, or the whole proof when it names an unknown.
+    group: usize,
 };
 
 fn search(seeds: []const harness.Seed, input: harness.Input) !void {
@@ -65,7 +66,7 @@ fn search(seeds: []const harness.Seed, input: harness.Input) !void {
         place.* = .{
             .at = text.items.len,
             .original = seed.auf[step.span.start..step.span.end],
-            .line = step.line,
+            .group = step.group,
         };
         try text.appendSlice(arena.allocator(), marker);
         copied = step.span.end;
@@ -94,6 +95,9 @@ fn search(seeds: []const harness.Seed, input: harness.Input) !void {
     // marker, so a sibling marker on the line was searched against the
     // rule variables the found proof fixed, and the original may not fit
     // them: a line with any marker not found gets all its originals back.
+    // A named unknown ties every line of its proof together, so there the
+    // proof is the unit: a found proof may fix a name differently from
+    // what an original elsewhere relies on, even one that only cites it.
     const marker_places = try arena.allocator().alloc(*const Placed, result.markers.len);
     for (result.markers, marker_places) |marker, *marker_place| {
         marker_place.* = for (placed) |*place| {
@@ -108,10 +112,10 @@ fn search(seeds: []const harness.Seed, input: harness.Input) !void {
         i -= 1;
         const marker = result.markers[i];
         const place = marker_places[i];
-        const line_found = for (result.markers, marker_places) |other, other_place| {
-            if (other_place.line == place.line and other.outcome != .found) break false;
+        const group_found = for (result.markers, marker_places) |other, other_place| {
+            if (other_place.group == place.group and other.outcome != .found) break false;
         } else true;
-        const edit: SearchDriver.Edit = if (line_found)
+        const edit: SearchDriver.Edit = if (group_found)
             marker.edit.?
         else
             .{ .span = marker.span, .text = place.original };
@@ -136,32 +140,53 @@ const Placed = struct {
     at: usize,
     /// The proof step it replaced.
     original: []const u8,
-    /// Where the step's proof line starts in the original proof text.
-    line: usize,
+    /// The step's `Step.group`.
+    group: usize,
 };
 
 /// The span of every proof step in `auf` on a line without holes: the
 /// line's rule application and each inline sub-proof, nested ones
 /// included.
 fn proofSteps(arena: std.mem.Allocator, mm0_src: []const u8, auf: []const u8) ![]const Step {
-    const holes = try holeTokens(arena, mm0_src);
+    const holes = try annotationTokens(arena, mm0_src, "@hole");
+    const unknowns = try annotationTokens(arena, mm0_src, "@unknown");
     var steps: std.ArrayList(Step) = .empty;
     var parser = ProofScript.Parser.init(arena, auf);
     while (parser.nextItem() catch return steps.items) |item| switch (item) {
-        .block => |block| for (block.lines) |line| {
-            if (!mentionsAny(line.assertion.text, holes)) try collect(arena, &steps, line.span.start, line.application);
+        .block => |block| {
+            const named = for (block.lines) |line| {
+                if (mentionsAny(line.assertion.text, unknowns) or bindsAny(line.application, unknowns)) break true;
+            } else false;
+            for (block.lines) |line| {
+                if (mentionsAny(line.assertion.text, holes)) continue;
+                try collect(arena, &steps, if (named) block.span.start else line.span.start, line.application);
+            }
         },
         .def, .notation => {},
     };
     return steps.items;
 }
 
-/// The tokens `@hole` declares in `mm0_src`.
-fn holeTokens(arena: std.mem.Allocator, mm0_src: []const u8) ![]const []const u8 {
+/// Whether an explicit binding in `application` or its inline sub-proofs
+/// mentions one of `tokens`.
+fn bindsAny(application: ProofScript.RuleApplication, tokens: []const []const u8) bool {
+    for (application.arg_bindings) |binding| {
+        if (mentionsAny(binding.formula.text, tokens)) return true;
+    }
+    for (application.refs) |ref| switch (ref) {
+        .application => |child| if (bindsAny(child, tokens)) return true,
+        .hyp, .line => {},
+    };
+    return false;
+}
+
+/// The tokens the `annotation` (`@hole` or `@unknown`) lines declare in
+/// `mm0_src`.
+fn annotationTokens(arena: std.mem.Allocator, mm0_src: []const u8, annotation: []const u8) ![]const []const u8 {
     var tokens: std.ArrayList([]const u8) = .empty;
     var rest = mm0_src;
-    while (std.mem.indexOf(u8, rest, "@hole")) |at| {
-        rest = std.mem.trimStart(u8, rest[at + "@hole".len ..], " \t");
+    while (std.mem.indexOf(u8, rest, annotation)) |at| {
+        rest = std.mem.trimStart(u8, rest[at + annotation.len ..], " \t");
         const end = std.mem.indexOfAny(u8, rest, " \t\r\n") orelse rest.len;
         if (end != 0) try tokens.append(arena, rest[0..end]);
         rest = rest[end..];
@@ -176,10 +201,10 @@ fn mentionsAny(text: []const u8, tokens: []const []const u8) bool {
     return false;
 }
 
-fn collect(arena: std.mem.Allocator, steps: *std.ArrayList(Step), line: usize, application: ProofScript.RuleApplication) !void {
-    try steps.append(arena, .{ .span = application.span, .line = line });
+fn collect(arena: std.mem.Allocator, steps: *std.ArrayList(Step), group: usize, application: ProofScript.RuleApplication) !void {
+    try steps.append(arena, .{ .span = application.span, .group = group });
     for (application.refs) |ref| switch (ref) {
-        .application => |child| try collect(arena, steps, line, child),
+        .application => |child| try collect(arena, steps, group, child),
         .hyp, .line => {},
     };
 }
