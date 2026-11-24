@@ -267,5 +267,6 @@ pub fn addNotationToken(
         self.allocator,
         token,
         decl_index,
+        self.proof_blocks.items.len,
     );
 }

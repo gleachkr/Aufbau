@@ -4,9 +4,11 @@ const ArenaAllocator = @import("../arena_allocator.zig").ArenaAllocator;
 const completion = @import("completion.zig");
 const CompilerModule = @import("../compiler.zig");
 const Builder = @import("builder.zig").Builder;
+const indexBody = @import("builder_body.zig").indexBody;
 const markdown = @import("markdown.zig");
 const model = @import("model.zig");
 const notation = @import("notation.zig");
+const references = @import("references.zig");
 const rename = @import("rename.zig");
 const Types = @import("types.zig");
 
@@ -30,9 +32,10 @@ pub const Highlight = rename.Highlight;
 const NavigationSymbol = model.NavigationSymbol;
 const ProofBlockInfo = model.ProofBlockInfo;
 const ProofRuleDecl = model.ProofRuleDecl;
-const ProofLineDecl = model.ProofLineDecl;
-const ProofApplicationInfo = model.ProofApplicationInfo;
+const ProofBody = model.ProofBody;
+const NameTable = model.NameTable;
 const NotationCompletionDecl = notation.NotationCompletionDecl;
+const proofSpanRange = @import("builder_support.zig").proofSpanRange;
 
 const InferredHoleHover = struct {
     range: SourceRange,
@@ -54,14 +57,24 @@ const HoleInfo = struct {
     fills: []const HoleFill = &.{},
 };
 
+/// The index of one unit: its `.mm0` text and proof headers, plus the proof
+/// body last asked about. A proof's bodies are nearly all of its text, and
+/// most requests look into one.
 pub const Snapshot = struct {
     arena: ArenaAllocator,
+    /// Backs `body`.
+    body_arena: ArenaAllocator,
+    body: ?struct { block_index: usize, body: ProofBody } = null,
     mm0_uri: []const u8,
     mm0_text: []const u8,
     proof_uri: ?[]const u8,
     proof_text: ?[]const u8,
     declarations: []const Declaration,
-    decl_by_name: std.StringHashMapUnmanaged(usize),
+    decl_by_name: NameTable,
+    notation_by_token: NameTable,
+    proof_rule_by_name: NameTable,
+    sort_var_by_token: std.StringHashMapUnmanaged(usize),
+    /// The symbols outside proof bodies.
     symbols: []const NavigationSymbol,
     inferred_hole_hovers: []const InferredHoleHover,
     hole_fills: []const HoleFill,
@@ -69,8 +82,6 @@ pub const Snapshot = struct {
     proof_outline: []const OutlineSymbol,
     proof_blocks: []const ProofBlockInfo,
     proof_rules: []const ProofRuleDecl,
-    proof_lines: []const ProofLineDecl,
-    proof_applications: []const ProofApplicationInfo,
     notations: []const NotationCompletionDecl,
     hole_tokens: []const []const u8,
     /// Whether every statement, proof item and line parsed.
@@ -89,34 +100,36 @@ pub const Snapshot = struct {
         var builder = Builder.init(arena);
 
         const mm0_uri = try arena.dupe(u8, input.mm0_uri);
-        const mm0_text = try arena.dupe(u8, input.mm0_text);
         const proof_uri = if (input.proof_uri) |uri|
             try arena.dupe(u8, uri)
         else
             null;
-        const proof_text = if (input.proof_text) |text|
-            try arena.dupe(u8, text)
-        else
-            null;
 
-        try builder.indexMm0(mm0_text);
-        if (proof_text) |text| {
-            try builder.indexProof(text);
+        try builder.indexMm0(input.mm0_text);
+        if (input.proof_text) |text| {
+            try builder.indexProof(
+                text,
+                if (input.check_memo) |memo| memo.knownBodies() else null,
+            );
         }
-        const hole_info: HoleInfo = if (proof_text) |text|
-            try buildHoleInfo(allocator, arena, mm0_text, text, input)
+        const hole_info: HoleInfo = if (input.proof_text) |text|
+            try buildHoleInfo(allocator, arena, input.mm0_text, text, input)
         else
             .{};
 
         // Copy the arena last: the slices below can add buffers to it.
         var snapshot: Snapshot = .{
             .arena = undefined,
+            .body_arena = ArenaAllocator.init(allocator),
             .mm0_uri = mm0_uri,
-            .mm0_text = mm0_text,
+            .mm0_text = input.mm0_text,
             .proof_uri = proof_uri,
-            .proof_text = proof_text,
+            .proof_text = input.proof_text,
             .declarations = try builder.declarations.toOwnedSlice(arena),
             .decl_by_name = builder.decl_by_name,
+            .notation_by_token = builder.notation_by_token,
+            .proof_rule_by_name = builder.proof_rule_by_name,
+            .sort_var_by_token = builder.sort_var_by_token,
             .symbols = try builder.symbols.toOwnedSlice(arena),
             .inferred_hole_hovers = hole_info.hovers,
             .hole_fills = hole_info.fills,
@@ -124,8 +137,6 @@ pub const Snapshot = struct {
             .proof_outline = try builder.proof_outline.toOwnedSlice(arena),
             .proof_blocks = try builder.proof_blocks.toOwnedSlice(arena),
             .proof_rules = try builder.proof_rules.toOwnedSlice(arena),
-            .proof_lines = try builder.proof_lines.toOwnedSlice(arena),
-            .proof_applications = try builder.proof_applications.toOwnedSlice(arena),
             .notations = try builder.notations.toOwnedSlice(arena),
             .hole_tokens = try builder.hole_tokens.toOwnedSlice(arena),
             .complete = builder.complete,
@@ -137,15 +148,16 @@ pub const Snapshot = struct {
     }
 
     pub fn deinit(self: *Snapshot) void {
+        self.body_arena.deinit();
         self.arena.deinit();
         self.* = undefined;
     }
 
     pub fn hoverAt(
-        self: *const Snapshot,
+        self: *Snapshot,
         document: DocumentId,
         offset: usize,
-    ) ?HoverResult {
+    ) !?HoverResult {
         if (document == .proof) {
             for (self.inferred_hole_hovers) |hover| {
                 if (hover.range.contains(document, offset)) {
@@ -156,7 +168,7 @@ pub const Snapshot = struct {
                 }
             }
         }
-        const hit = self.lookupAt(document, offset) orelse return null;
+        const hit = try self.lookupAt(document, offset) orelse return null;
         return .{
             .range = hit.source_range,
             .markdown = hit.markdown,
@@ -181,11 +193,11 @@ pub const Snapshot = struct {
     }
 
     pub fn definitionAt(
-        self: *const Snapshot,
+        self: *Snapshot,
         document: DocumentId,
         offset: usize,
-    ) ?DefinitionResult {
-        const hit = self.lookupAt(document, offset) orelse return null;
+    ) !?DefinitionResult {
+        const hit = try self.lookupAt(document, offset) orelse return null;
         const target_range = hit.target_range orelse return null;
         return self.locationForRange(target_range);
     }
@@ -204,40 +216,52 @@ pub const Snapshot = struct {
     }
 
     pub fn referencesAt(
-        self: *const Snapshot,
+        self: *Snapshot,
         allocator: std.mem.Allocator,
         document: DocumentId,
         offset: usize,
         include_declaration: bool,
     ) ![]const SourceRange {
-        const hit = self.lookupAt(document, offset) orelse {
-            return try allocator.alloc(SourceRange, 0);
-        };
-        const target_range = hit.target_range orelse {
-            return try allocator.alloc(SourceRange, 0);
-        };
+        const hit = try self.lookupAt(document, offset) orelse return &.{};
+        const declaration = hit.target_range orelse return &.{};
+        const ranges = try self.referencesTo(allocator, declaration, null);
+        if (include_declaration) return ranges;
 
-        var list = std.ArrayListUnmanaged(SourceRange).empty;
-        for (self.symbols) |symbol| {
-            const symbol_target = symbol.target_range orelse continue;
-            if (!symbol_target.eql(target_range)) continue;
-            if (!include_declaration and symbol.source_range.eql(target_range)) continue;
-            if (symbol.source_range.listedIn(list.items)) continue;
-            try list.append(allocator, symbol.source_range);
+        defer allocator.free(ranges);
+        var uses = std.ArrayListUnmanaged(SourceRange).empty;
+        for (ranges) |range| {
+            if (!range.eql(declaration)) try uses.append(allocator, range);
         }
-        return try list.toOwnedSlice(allocator);
+        return try uses.toOwnedSlice(allocator);
+    }
+
+    /// Where `declaration` is referred to, itself included: in all of the
+    /// unit, or in one of the ranges `within`.
+    pub fn referencesTo(
+        self: *Snapshot,
+        allocator: std.mem.Allocator,
+        declaration: SourceRange,
+        within: ?[]const SourceRange,
+    ) ![]const SourceRange {
+        const found = try references.occurrences(self, allocator, declaration, within);
+        defer allocator.free(found);
+        var ranges = std.ArrayListUnmanaged(SourceRange).empty;
+        errdefer ranges.deinit(allocator);
+        for (found) |occurrence| try ranges.append(allocator, occurrence.range);
+        references.sortedUnique(&ranges);
+        return try ranges.toOwnedSlice(allocator);
     }
 
     pub fn renameTargetAt(
-        self: *const Snapshot,
+        self: *Snapshot,
         document: DocumentId,
         offset: usize,
-    ) ?RenameTarget {
+    ) !?RenameTarget {
         return rename.renameTargetAt(self, document, offset);
     }
 
     pub fn renameEdits(
-        self: *const Snapshot,
+        self: *Snapshot,
         allocator: std.mem.Allocator,
         target: RenameTarget,
         new_name: []const u8,
@@ -246,12 +270,13 @@ pub const Snapshot = struct {
     }
 
     pub fn highlightsAt(
-        self: *const Snapshot,
+        self: *Snapshot,
         allocator: std.mem.Allocator,
         document: DocumentId,
         offset: usize,
+        within: []const SourceRange,
     ) ![]const Highlight {
-        return rename.highlightsAt(self, allocator, document, offset);
+        return rename.highlightsAt(self, allocator, document, offset, within);
     }
 
     pub fn textForDocument(
@@ -275,7 +300,7 @@ pub const Snapshot = struct {
     }
 
     pub fn completionsAt(
-        self: *const Snapshot,
+        self: *Snapshot,
         allocator: std.mem.Allocator,
         document: DocumentId,
         offset: usize,
@@ -291,22 +316,69 @@ pub const Snapshot = struct {
     }
 
     pub fn isProofRuleCompletionAt(
-        self: *const Snapshot,
+        self: *Snapshot,
         offset: usize,
-    ) bool {
+    ) !bool {
         return completion.isProofRuleCompletionAt(self, offset);
     }
 
     /// The first symbol containing `offset`.
     pub fn lookupAt(
-        self: *const Snapshot,
+        self: *Snapshot,
         document: DocumentId,
         offset: usize,
-    ) ?NavigationSymbol {
-        for (self.symbols) |symbol| {
+    ) std.mem.Allocator.Error!?NavigationSymbol {
+        const symbols = if (self.blockWithBodyAt(document, offset)) |block_index|
+            (try self.bodyOf(block_index)).symbols
+        else
+            self.symbols;
+        for (symbols) |symbol| {
             if (symbol.source_range.contains(document, offset)) return symbol;
         }
         return null;
+    }
+
+    /// The block whose body `offset` is in.
+    pub fn blockWithBodyAt(
+        self: *const Snapshot,
+        document: DocumentId,
+        offset: usize,
+    ) ?usize {
+        if (document != .proof) return null;
+        const block_index = self.proofBlockNear(offset) orelse return null;
+        if (!self.proof_blocks[block_index].bodyContains(offset)) return null;
+        return block_index;
+    }
+
+    /// The last block that starts at or before `offset`.
+    pub fn proofBlockNear(self: *const Snapshot, offset: usize) ?usize {
+        const after = std.sort.upperBound(
+            ProofBlockInfo,
+            self.proof_blocks,
+            offset,
+            struct {
+                fn order(at: usize, block: ProofBlockInfo) std.math.Order {
+                    return std.math.order(at, block.source.span.start);
+                }
+            }.order,
+        );
+        return if (after == 0) null else after - 1;
+    }
+
+    /// The index of a block's body, valid until another block's is asked
+    /// for.
+    pub fn bodyOf(
+        self: *Snapshot,
+        block_index: usize,
+    ) std.mem.Allocator.Error!ProofBody {
+        if (self.body) |cached| {
+            if (cached.block_index == block_index) return cached.body;
+        }
+        self.body = null;
+        _ = self.body_arena.reset(.free_all);
+        const body = try indexBody(self.body_arena.allocator(), self, block_index);
+        self.body = .{ .block_index = block_index, .body = body };
+        return body;
     }
 
     pub fn uriForDocument(
@@ -346,9 +418,9 @@ pub const Snapshot = struct {
         decl_index: usize,
     ) ?SourceRange {
         for (self.proof_blocks) |block| {
-            if (block.kind != .theorem) continue;
+            if (block.source.kind != .theorem) continue;
             if (block.decl_index != decl_index) continue;
-            return block.name_range;
+            return proofSpanRange(block.source.name_span);
         }
         return null;
     }

@@ -46,9 +46,9 @@ fn targetAt(
     word: []const u8,
     nth: usize,
 ) !struct { snapshot: Snapshot, target: Index.RenameTarget } {
-    const snapshot = try build(arena, texts);
+    var snapshot = try build(arena, texts);
     const offset = try wordOffset(texts.of(document), word, nth);
-    const target = snapshot.renameTargetAt(document, offset) orelse
+    const target = try snapshot.renameTargetAt(document, offset) orelse
         return error.NothingToRename;
     return .{ .snapshot = snapshot, .target = target };
 }
@@ -62,7 +62,7 @@ fn renamed(
     nth: usize,
     new_name: []const u8,
 ) !Texts {
-    const found = try targetAt(arena, texts, document, word, nth);
+    var found = try targetAt(arena, texts, document, word, nth);
     var edits: [2]std.ArrayListUnmanaged(Edit) = .{ .empty, .empty };
     for (try found.snapshot.renameEdits(arena, found.target, new_name)) |range| {
         try edits[@backingInt(range.document)].append(arena, .{ .range = range, .text = new_name });
@@ -99,7 +99,7 @@ fn expectRefused(
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const found = try targetAt(arena, texts, document, word, nth);
+    var found = try targetAt(arena, texts, document, word, nth);
     try std.testing.expectError(expected, found.snapshot.renameEdits(arena, found.target, new_name));
 }
 
@@ -302,6 +302,8 @@ test "renaming a proof line stays in its block" {
     });
     try expectRefused(lines_texts, .proof, "l1", 1, "l2", error.NameInUse);
     try expectRefused(lines_texts, .proof, "l1", 1, "keep", error.NameInUse);
+    // A global name may not repeat a line of any block.
+    try expectRefused(lines_texts, .mm0, "keep", 0, "l3", error.NameInUse);
 }
 
 test "renaming a sort follows every signature" {
@@ -386,7 +388,7 @@ test "rename refuses notation tokens, invalid names and names in use" {
     };
     var snapshot = try build(arena_state.allocator(), texts);
     const arrow = std.mem.lastIndexOf(u8, texts.mm0, "->").?;
-    try std.testing.expect(snapshot.renameTargetAt(.mm0, arrow) == null);
+    try std.testing.expect(try snapshot.renameTargetAt(.mm0, arrow) == null);
 
     try expectRefused(texts, .mm0, "top", 0, "2top", error.InvalidName);
     try expectRefused(texts, .mm0, "top", 0, "_", error.InvalidName);
@@ -456,7 +458,12 @@ test "highlights mark the declaration and every use, notation included" {
         \\axiom ax (a: wff): $ im a (a -> a) $;
     ;
     var snapshot = try build(arena, .{ .mm0 = text });
-    const highlights = try snapshot.highlightsAt(arena, .mm0, try wordOffset(text, "im", 2));
+    const highlights = try snapshot.highlightsAt(
+        arena,
+        .mm0,
+        try wordOffset(text, "im", 2),
+        &.{.{ .document = .mm0, .start = 0, .end = text.len }},
+    );
     var spellings = std.ArrayListUnmanaged(u8).empty;
     for (highlights) |highlight| {
         try spellings.print(arena, "{s}{s} ", .{
@@ -488,9 +495,14 @@ fn expectProofCaseSurvivesRenamingEverything(stem: []const u8) !void {
 
     var declarations = std.ArrayListUnmanaged(SourceRange).empty;
     var edits: [2]std.ArrayListUnmanaged(Edit) = .{ .empty, .empty };
-    for (snapshot.symbols) |symbol| {
-        const range = symbol.source_range;
-        const target = snapshot.renameTargetAt(range.document, range.start) orelse continue;
+    var names = std.ArrayListUnmanaged(SourceRange).empty;
+    for (snapshot.symbols) |symbol| try names.append(arena, symbol.source_range);
+    for (0..snapshot.proof_blocks.len) |block_index| {
+        const body = try snapshot.bodyOf(block_index);
+        for (body.symbols) |symbol| try names.append(arena, symbol.source_range);
+    }
+    for (names.items) |range| {
+        const target = try snapshot.renameTargetAt(range.document, range.start) orelse continue;
         const seen = for (declarations.items) |declaration| {
             if (declaration.eql(target.declaration)) break true;
         } else false;

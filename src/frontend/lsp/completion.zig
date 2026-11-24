@@ -62,7 +62,7 @@ pub fn completionsAt(
             );
         },
         .proof => {
-            const context = proofContextAt(self, text, safe_offset);
+            const context = try proofContextAt(self, text, safe_offset);
             const math: ?SourceSpan = switch (context) {
                 .math => |span| span,
                 else => null,
@@ -116,32 +116,30 @@ const ProofContext = union(enum) {
 /// Resolve the completion context at `offset`: comments and math and headers
 /// shadow the application slots, which shadow a bare rule position, so
 /// consumers do not mistake one for another.
-fn proofContextAt(self: anytype, text: []const u8, offset: usize) ProofContext {
+fn proofContextAt(self: anytype, text: []const u8, offset: usize) !ProofContext {
     if (lineCommentContextAt(text, offset)) return .comment;
     if (mathStringAt(text, offset)) |math| return .{ .math = math };
     if (proofHeaderContextAt(text, offset)) return .header;
-    if (proofRuleApplicationAt(self, offset)) |app| {
+    const block_index = self.proofBlockNear(offset) orelse return .none;
+    const applications = (try self.bodyOf(block_index)).applications;
+    if (proofRuleApplicationAt(applications, offset)) |app| {
         return .{ .rule_name = app };
     }
-    if (proofBindingApplicationAt(self, offset)) |app| {
+    if (proofBindingApplicationAt(applications, offset)) |app| {
         return .{ .binding_slot = app };
     }
-    if (proofReferenceApplicationAt(self, offset)) |app| {
+    if (proofReferenceApplicationAt(applications, offset)) |app| {
         return .{ .reference_slot = app };
     }
-    if (proofRuleContextAt(text, offset)) {
-        if (proofBlockNear(self, offset)) |block_index| {
-            return .{ .rule_position = block_index };
-        }
-    }
+    if (proofRuleContextAt(text, offset)) return .{ .rule_position = block_index };
     return .none;
 }
 
 /// Whether `offset` is in a proof-rule completion position.
-pub fn isProofRuleCompletionAt(self: anytype, offset: usize) bool {
+pub fn isProofRuleCompletionAt(self: anytype, offset: usize) !bool {
     const text = self.textForDocument(.proof) orelse return false;
     const safe_offset = @min(offset, text.len);
-    return switch (proofContextAt(self, text, safe_offset)) {
+    return switch (try proofContextAt(self, text, safe_offset)) {
         .rule_name, .rule_position => true,
         else => false,
     };
@@ -255,7 +253,7 @@ fn proofCompletionsAt(
     switch (context) {
         .comment, .none => {},
         .math => {
-            const block = proofBlockNear(self, offset);
+            const block = self.proofBlockNear(offset);
             if (block) |block_index| {
                 try appendBlockBinders(
                     self,
@@ -852,15 +850,13 @@ fn appendProofReferenceCompletions(
             replacement,
         );
     }
-    for (self.proof_lines) |line| {
-        if (line.block_index != block_index) continue;
+    for ((try self.bodyOf(block_index)).lines) |line| {
         if (line.line_start >= line_start) continue;
-        const decl = self.declarations[line.decl_index];
         try list.append(allocator, .{
             .label = line.name,
             .kind = .proof_line,
             .detail = "proof line",
-            .documentation_markdown = decl.markdown,
+            .documentation_markdown = line.markdown,
             .replacement = replacement,
             .replacement_text = line.name,
             .sort_text = line.sort_text,
@@ -938,24 +934,11 @@ fn mm0DeclarationIndexAt(
     return null;
 }
 
-fn proofBlockNear(self: anytype, offset: usize) ?usize {
-    var best: ?usize = null;
-    for (self.proof_blocks, 0..) |block, i| {
-        if (block.span.start > offset) continue;
-        if (best == null or
-            block.span.start > self.proof_blocks[best.?].span.start)
-        {
-            best = i;
-        }
-    }
-    return best;
-}
-
 fn proofRuleApplicationAt(
-    self: anytype,
+    applications: []const ProofApplicationInfo,
     offset: usize,
 ) ?ProofApplicationInfo {
-    for (self.proof_applications) |app| {
+    for (applications) |app| {
         if (offset >= app.rule_span.start and offset <= app.rule_span.end) {
             return app;
         }
@@ -964,10 +947,10 @@ fn proofRuleApplicationAt(
 }
 
 fn proofBindingApplicationAt(
-    self: anytype,
+    applications: []const ProofApplicationInfo,
     offset: usize,
 ) ?ProofApplicationInfo {
-    for (self.proof_applications) |app| {
+    for (applications) |app| {
         const range = app.binding_list_span orelse continue;
         if (offset >= range.start and offset <= range.end) return app;
     }
@@ -975,10 +958,10 @@ fn proofBindingApplicationAt(
 }
 
 fn proofReferenceApplicationAt(
-    self: anytype,
+    applications: []const ProofApplicationInfo,
     offset: usize,
 ) ?ProofApplicationInfo {
-    for (self.proof_applications) |app| {
+    for (applications) |app| {
         const range = app.refs_span orelse continue;
         if (offset >= range.start and offset <= range.end) return app;
     }
@@ -1213,7 +1196,6 @@ pub fn sortGroupForDeclaration(kind: DeclarationKind) []const u8 {
         .term, .def => sort_group_term,
         .axiom, .theorem => sort_group_global_rule,
         .lemma => sort_group_proof_lemma,
-        .proof_line => sort_group_proof_reference,
         .sort_var => sort_group_local_binder,
     };
 }
@@ -1517,7 +1499,6 @@ fn completionKindForDeclaration(kind: DeclarationKind) CompletionKind {
         .axiom => .axiom,
         .theorem => .theorem,
         .lemma => .lemma,
-        .proof_line => .proof_line,
         .sort_var => .binder,
     };
 }
@@ -1530,7 +1511,6 @@ pub fn declarationKindName(kind: DeclarationKind) []const u8 {
         .axiom => "axiom",
         .theorem => "theorem",
         .lemma => "lemma",
-        .proof_line => "proof line",
         .sort_var => "sort variable",
     };
 }

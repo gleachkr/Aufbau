@@ -109,6 +109,15 @@ This file records notable user-facing changes to Aufbau. The project follows
   `conversion?`, no longer checks the lemmas before the cursor again. A
   rule completion in the last file of a 126 MB library took 25 s after an
   edit and 21 s without one, and now takes 4.3 s and 0.8 s.
+- In a large library, the first hover, completion, code action or
+  go-to-definition after an edit no longer indexes every proof: the language
+  server indexes the proof a request looks into. In the last file of a
+  126 MB library, a hover after an edit took 3.8 s and now takes 0.3 s, and
+  the server's memory fell from 11.6 to 0.9 GiB. References and rename index
+  only the proofs that could mention the name, and list their results in
+  file order. Highlights read only the file asked about: for a rule used
+  45,000 times they took 31 s there and now take 0.2 s, and a rename took
+  31 s and now takes 3.4 s.
 
 ### Fixed
 

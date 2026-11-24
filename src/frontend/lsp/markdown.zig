@@ -423,7 +423,6 @@ fn declarationTitle(kind: DeclarationKind) []const u8 {
         .axiom => "Axiom",
         .theorem => "Theorem",
         .lemma => "Local lemma",
-        .proof_line => "Proof line",
         .sort_var => "Theorem-local dummy",
     };
 }

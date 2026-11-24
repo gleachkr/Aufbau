@@ -3,9 +3,12 @@
 //! proof line, except notation tokens, which use a term without naming it.
 const std = @import("std");
 
+const Snapshot = @import("index.zig").Snapshot;
+const references = @import("references.zig");
 const source = @import("source.zig");
 const Types = @import("types.zig");
 
+const ProofBody = @import("model.zig").ProofBody;
 const DocumentId = Types.DocumentId;
 const SourceRange = Types.SourceRange;
 const Declaration = Types.Declaration;
@@ -52,11 +55,11 @@ pub const Highlight = struct {
 /// What a rename at `offset` would rename, or null when the cursor is not
 /// on a renameable name.
 pub fn renameTargetAt(
-    snapshot: anytype,
+    snapshot: *Snapshot,
     document: DocumentId,
     offset: usize,
-) ?RenameTarget {
-    const symbol = snapshot.lookupAt(document, offset) orelse return null;
+) std.mem.Allocator.Error!?RenameTarget {
+    const symbol = try snapshot.lookupAt(document, offset) orelse return null;
     if (symbol.via_notation) return null;
     const declaration = symbol.target_range orelse return null;
     const name = textAt(snapshot, declaration) orelse return null;
@@ -64,13 +67,13 @@ pub fn renameTargetAt(
         .range = nameRange(snapshot, symbol.source_range, name) orelse return null,
         .name = name,
         .declaration = declaration,
-        .scope = scopeOf(snapshot, declaration) orelse return null,
+        .scope = try scopeOf(snapshot, declaration) orelse return null,
     };
 }
 
 /// The ranges to replace with `new_name`. Empty when the name is unchanged.
 pub fn renameEdits(
-    snapshot: anytype,
+    snapshot: *Snapshot,
     allocator: std.mem.Allocator,
     target: RenameTarget,
     new_name: []const u8,
@@ -78,33 +81,35 @@ pub fn renameEdits(
     if (!snapshot.complete) return error.SyntaxError;
     if (!isValidName(new_name)) return error.InvalidName;
     if (std.mem.eql(u8, new_name, target.name)) return &.{};
-    if (declarationCount(snapshot, target.scope, target.name) > 1) return error.DuplicateName;
-    if (nameInUse(snapshot, target.scope, new_name)) return error.NameInUse;
+    if (try declarationCount(snapshot, target.scope, target.name) > 1) return error.DuplicateName;
+    if (try nameInUse(snapshot, allocator, target.scope, new_name)) return error.NameInUse;
 
+    const found = try references.occurrences(snapshot, allocator, target.declaration, null);
+    defer allocator.free(found);
     var edits = std.ArrayListUnmanaged(SourceRange).empty;
+    errdefer edits.deinit(allocator);
     try edits.append(allocator, target.declaration);
-    for (snapshot.symbols) |symbol| {
-        if (symbol.via_notation) continue;
-        const declaration = symbol.target_range orelse continue;
-        if (!declaration.eql(target.declaration)) continue;
-        const range = nameRange(snapshot, symbol.source_range, target.name) orelse continue;
-        if (range.listedIn(edits.items)) continue;
+    for (found) |occurrence| {
+        if (occurrence.via_notation) continue;
+        const range = nameRange(snapshot, occurrence.range, target.name) orelse continue;
         try edits.append(allocator, range);
     }
+    references.sortedUnique(&edits);
     return try edits.toOwnedSlice(allocator);
 }
 
-/// Every occurrence of what the symbol at `offset` refers to, notation
-/// tokens included: its references, marking the declaration.
+/// The occurrences, in `within`, of what the symbol at `offset` refers to,
+/// notation tokens included, marking the declaration.
 pub fn highlightsAt(
-    snapshot: anytype,
+    snapshot: *Snapshot,
     allocator: std.mem.Allocator,
     document: DocumentId,
     offset: usize,
-) ![]const Highlight {
-    const symbol = snapshot.lookupAt(document, offset) orelse return &.{};
+    within: []const SourceRange,
+) std.mem.Allocator.Error![]const Highlight {
+    const symbol = try snapshot.lookupAt(document, offset) orelse return &.{};
     const declaration = symbol.target_range orelse return &.{};
-    const ranges = try snapshot.referencesAt(allocator, document, offset, true);
+    const ranges = try snapshot.referencesTo(allocator, declaration, within);
     defer allocator.free(ranges);
     const highlights = try allocator.alloc(Highlight, ranges.len);
     for (ranges, highlights) |range, *highlight| {
@@ -113,7 +118,7 @@ pub fn highlightsAt(
     return highlights;
 }
 
-fn textAt(snapshot: anytype, range: SourceRange) ?[]const u8 {
+fn textAt(snapshot: *const Snapshot, range: SourceRange) ?[]const u8 {
     const text = snapshot.textForDocument(range.document) orelse return null;
     if (range.end > text.len or range.start > range.end) return null;
     return text[range.start..range.end];
@@ -122,7 +127,7 @@ fn textAt(snapshot: anytype, range: SourceRange) ?[]const u8 {
 /// The part of an occurrence that spells `name`: all of it, or all but the
 /// `#` of a named hypothesis reference. Null for anything else, such as a
 /// positional `#2`.
-fn nameRange(snapshot: anytype, range: SourceRange, name: []const u8) ?SourceRange {
+fn nameRange(snapshot: *const Snapshot, range: SourceRange, name: []const u8) ?SourceRange {
     const text = textAt(snapshot, range) orelse return null;
     if (std.mem.eql(u8, text, name)) return range;
     if (text.len == name.len + 1 and text[0] == '#' and std.mem.eql(u8, text[1..], name)) {
@@ -131,34 +136,24 @@ fn nameRange(snapshot: anytype, range: SourceRange, name: []const u8) ?SourceRan
     return null;
 }
 
-fn scopeOf(snapshot: anytype, declaration: SourceRange) ?Scope {
+fn scopeOf(
+    snapshot: *Snapshot,
+    declaration: SourceRange,
+) std.mem.Allocator.Error!?Scope {
+    if (snapshot.blockWithBodyAt(declaration.document, declaration.start)) |block_index| {
+        const body = try snapshot.bodyOf(block_index);
+        for (body.lines) |line| {
+            if (line.name_range.eql(declaration)) return .{ .block = block_index };
+        }
+        return null;
+    }
     for (snapshot.declarations, 0..) |decl, index| {
-        if (decl.name_range.eql(declaration)) {
-            if (decl.kind != .proof_line) return .global;
-            for (snapshot.proof_lines) |line| {
-                if (line.decl_index == index) return .{ .block = line.block_index };
-            }
-            return null;
-        }
-        if (declaresBinder(decl.binders, declaration) or
-            declaresBinder(decl.local_binders, declaration))
-        {
+        if (decl.name_range.eql(declaration)) return .global;
+        if (decl.declaresBinder(declaration) or decl.declaresHypothesis(declaration)) {
             return .{ .declaration = index };
-        }
-        for (decl.hypotheses) |hyp| {
-            const range = hyp.name_range orelse continue;
-            if (range.eql(declaration)) return .{ .declaration = index };
         }
     }
     return null;
-}
-
-fn declaresBinder(binders: []const BinderDecl, declaration: SourceRange) bool {
-    for (binders) |binder| {
-        const range = binder.range orelse continue;
-        if (range.eql(declaration)) return true;
-    }
-    return false;
 }
 
 /// Whether `name` is taken where the renamed thing lives. Deliberately
@@ -166,25 +161,34 @@ fn declaresBinder(binders: []const BinderDecl, declaration: SourceRange) bool {
 /// never be captured by a binder or shadow a line; a binder, hypothesis or
 /// line may not repeat a global name or one from its own declaration or
 /// block.
-fn nameInUse(snapshot: anytype, scope: Scope, name: []const u8) bool {
+fn nameInUse(
+    snapshot: *Snapshot,
+    allocator: std.mem.Allocator,
+    scope: Scope,
+    name: []const u8,
+) std.mem.Allocator.Error!bool {
     for (snapshot.notations) |notation| {
         if (std.mem.eql(u8, notation.token, name)) return true;
     }
     for (snapshot.hole_tokens) |token| {
         if (std.mem.eql(u8, token, name)) return true;
     }
-    const global = scope == .global;
     for (snapshot.declarations) |decl| {
-        // A line's name matters to a global name; to another line, only
-        // in its own block.
-        if ((global or decl.kind != .proof_line) and std.mem.eql(u8, decl.name, name)) return true;
-        if (global and countDeclared(decl, name) > 0) return true;
+        if (std.mem.eql(u8, decl.name, name)) return true;
+        if (scope == .global and countDeclared(decl, name) > 0) return true;
     }
     switch (scope) {
-        .global => return false,
+        .global => {
+            var bodies = references.BodyWalk.init(snapshot, allocator, &.{name}, null);
+            defer bodies.deinit();
+            while (try bodies.next()) |body| {
+                if (countLines(body, name) > 0) return true;
+            }
+            return false;
+        },
         .declaration => |index| return countDeclared(snapshot.declarations[index], name) > 0,
         .block => |block_index| {
-            if (countLines(snapshot, block_index, name) > 0) return true;
+            if (countLines(try snapshot.bodyOf(block_index), name) > 0) return true;
             const decl_index = snapshot.proof_blocks[block_index].decl_index orelse return false;
             return countDeclared(snapshot.declarations[decl_index], name) > 0;
         },
@@ -192,17 +196,21 @@ fn nameInUse(snapshot: anytype, scope: Scope, name: []const u8) bool {
 }
 
 /// How many things `name` names where the renamed thing lives.
-fn declarationCount(snapshot: anytype, scope: Scope, name: []const u8) usize {
+fn declarationCount(
+    snapshot: *Snapshot,
+    scope: Scope,
+    name: []const u8,
+) std.mem.Allocator.Error!usize {
     return switch (scope) {
         .global => blk: {
             var count: usize = 0;
             for (snapshot.declarations) |decl| {
-                if (decl.kind != .proof_line and std.mem.eql(u8, decl.name, name)) count += 1;
+                if (std.mem.eql(u8, decl.name, name)) count += 1;
             }
             break :blk count;
         },
         .declaration => |index| countDeclared(snapshot.declarations[index], name),
-        .block => |block_index| countLines(snapshot, block_index, name),
+        .block => |block_index| countLines(try snapshot.bodyOf(block_index), name),
     };
 }
 
@@ -221,11 +229,11 @@ fn countDeclared(decl: Declaration, name: []const u8) usize {
     return count;
 }
 
-/// How many lines of the block are called `name`.
-fn countLines(snapshot: anytype, block_index: usize, name: []const u8) usize {
+/// How many lines of the body are called `name`.
+fn countLines(body: ProofBody, name: []const u8) usize {
     var count: usize = 0;
-    for (snapshot.proof_lines) |line| {
-        if (line.block_index == block_index and std.mem.eql(u8, line.name, name)) count += 1;
+    for (body.lines) |line| {
+        if (std.mem.eql(u8, line.name, name)) count += 1;
     }
     return count;
 }

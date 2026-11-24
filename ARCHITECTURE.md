@@ -306,8 +306,10 @@ Editor indexing and source rendering:
 
 - `lsp/index.zig` and `lsp/builder.zig` build navigation snapshots;
   `lsp/builder_names.zig` indexes the names outside math strings
-  (signature sorts and dependencies, annotation arguments)
-- `lsp/rename.zig` provides rename and document highlights over a snapshot
+  (signature sorts and dependencies, annotation arguments), and
+  `lsp/builder_body.zig` one proof block's body, on demand
+- `lsp/references.zig` finds the uses of a declaration;
+  `lsp/rename.zig` provides rename and document highlights over them
 - `lsp/completion.zig` provides completion logic
 - `lsp/diagnostics.zig` translates compiler diagnostics to LSP records
 - `lsp/offsets.zig` converts byte offsets to LSP positions and back for any
@@ -1389,6 +1391,12 @@ invalidation is centralized in `Handler.invalidateCachesForUri`; the memo
 needs none, being keyed by content.
 `src/frontend/lsp/index.zig` owns arena-backed navigation snapshots; its
 builder uses lenient proof parsing rather than requiring a successful proof.
+A snapshot holds the `.mm0` side and the proof headers. A proof body is
+indexed when a request looks into it, and the last one is kept. Names
+resolve in it as they stood at its block (`NameTable.seenBy`). A search for
+the uses of a declaration indexes, one at a time, the bodies of the blocks
+whose text spells it. With the check memo, the parse behind a snapshot also
+passes over the bodies the memo knows. A snapshot borrows the unit's texts.
 The handler translates byte spans through the negotiated LSP offset encoding.
 
 The native entry uses `lsp_kit`'s server loop over

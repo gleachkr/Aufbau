@@ -230,12 +230,16 @@ pub const ProofBlock = struct {
         self: ProofBlock,
         allocator: std.mem.Allocator,
         src: []const u8,
-    ) ParseError!ProofBlock {
+    ) std.mem.Allocator.Error!ProofBlock {
         if (self.known_body == null) return self;
         var parser = Parser.initLenient(allocator, src);
         parser.pos = self.underline_span.?.end;
         var full = self;
-        full.lines = (try parser.parseProofLines()).lines;
+        full.lines = (parser.parseProofLines() catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // A lenient parser keeps what it can of a broken line.
+            else => unreachable,
+        }).lines;
         full.known_body = null;
         return full;
     }

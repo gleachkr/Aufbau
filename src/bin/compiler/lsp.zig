@@ -19,6 +19,7 @@ const LSP_SERVER_NAME = lsp_diagnostics.SERVER_NAME;
 /// open goal `?` it added (arguments: the document uri and the range).
 const show_open_goal_command = "aufbau.showOpenGoal";
 const zeroRange = lsp_diagnostics.zeroRange;
+const highlightsToLsp = lsp_diagnostics.highlightsToLsp;
 const sourceRangesToLocations = lsp_diagnostics.sourceRangesToLocations;
 const completionsToLsp = lsp_diagnostics.completionsToLsp;
 const outlineSymbolsToLsp = lsp_diagnostics.outlineSymbolsToLsp;
@@ -387,7 +388,7 @@ fn navEntryContainsUri(entry: NavigationCacheEntry, uri: []const u8) bool {
 /// A navigation request's view of its unit: the index over the joined
 /// texts plus which file of the unit the request document is.
 const NavigationSnapshot = struct {
-    snapshot: *const LspIndex.Snapshot,
+    snapshot: *LspIndex.Snapshot,
     unit: *const Unit,
     document: LspIndex.DocumentId,
     file_index: usize,
@@ -413,6 +414,23 @@ const NavigationSnapshot = struct {
             encoding,
         );
         return self.side().joinedOffset(self.file_index, offset);
+    }
+
+    /// The runs of the joined text that come from the request document.
+    fn fileRanges(
+        self: NavigationSnapshot,
+        arena: std.mem.Allocator,
+    ) ![]const LspIndex.SourceRange {
+        var ranges = std.ArrayListUnmanaged(LspIndex.SourceRange).empty;
+        for (self.side().joined.map.segments) |segment| {
+            if (segment.file_index != self.file_index) continue;
+            try ranges.append(arena, .{
+                .document = self.document,
+                .start = segment.joined_start,
+                .end = segment.joined_start + segment.len,
+            });
+        }
+        return ranges.items;
     }
 };
 
@@ -972,7 +990,7 @@ pub const Handler = struct {
             params.position,
             self.offset_encoding,
         ) orelse return null;
-        const hover = nav.snapshot.hoverAt(nav.document, offset) orelse return null;
+        const hover = try nav.snapshot.hoverAt(nav.document, offset) orelse return null;
         return .{
             .contents = .{
                 .markup_content = .{
@@ -1007,7 +1025,7 @@ pub const Handler = struct {
             .{ .snippet_support = self.snippet_support },
         );
         if (nav.document == .proof and
-            nav.snapshot.isProofRuleCompletionAt(offset))
+            try nav.snapshot.isProofRuleCompletionAt(offset))
         {
             completions = try applicableRuleCompletions(
                 arena,
@@ -1489,7 +1507,7 @@ pub const Handler = struct {
             params.position,
             self.offset_encoding,
         ) orelse return null;
-        const definition = nav.snapshot.definitionAt(
+        const definition = try nav.snapshot.definitionAt(
             nav.document,
             offset,
         ) orelse return null;
@@ -1568,22 +1586,16 @@ pub const Handler = struct {
             arena,
             nav.document,
             offset,
-        );
-        var result = std.ArrayListUnmanaged(types.DocumentHighlight).empty;
-        for (highlights) |highlight| {
-            const location = nav.unit.rangeLocator().toLocation(
-                highlight.range,
-                self.offset_encoding,
-            ) orelse continue;
             // Highlights belong to the requested file; the others are
             // references.
-            if (!std.mem.eql(u8, location.uri, params.textDocument.uri)) continue;
-            try result.append(arena, .{
-                .range = location.range,
-                .kind = if (highlight.declaration) .Write else .Read,
-            });
-        }
-        return result.items;
+            try nav.fileRanges(arena),
+        );
+        return try highlightsToLsp(
+            arena,
+            nav.unit.rangeLocator(),
+            highlights,
+            self.offset_encoding,
+        );
     }
 
     pub fn @"textDocument/prepareRename"(
@@ -1599,7 +1611,7 @@ pub const Handler = struct {
             params.position,
             self.offset_encoding,
         ) orelse return null;
-        const target = nav.snapshot.renameTargetAt(
+        const target = try nav.snapshot.renameTargetAt(
             nav.document,
             offset,
         ) orelse return null;
@@ -1629,7 +1641,7 @@ pub const Handler = struct {
             params.position,
             self.offset_encoding,
         ) orelse return null;
-        const target = nav.snapshot.renameTargetAt(nav.document, offset) orelse {
+        const target = try nav.snapshot.renameTargetAt(nav.document, offset) orelse {
             try self.showError(arena, "Nothing here can be renamed.", .{});
             return null;
         };
@@ -1664,11 +1676,13 @@ pub const Handler = struct {
         var by_uri: std.StringArrayHashMapUnmanaged(
             std.ArrayListUnmanaged(types.TextEdit),
         ) = .empty;
-        for (ranges) |range| {
-            const location = nav.unit.rangeLocator().toLocation(
-                range,
-                self.offset_encoding,
-            ) orelse continue;
+        const locations = try sourceRangesToLocations(
+            arena,
+            nav.unit.rangeLocator(),
+            ranges,
+            self.offset_encoding,
+        );
+        for (locations) |location| {
             const entry = try by_uri.getOrPut(arena, location.uri);
             if (!entry.found_existing) entry.value_ptr.* = .empty;
             try entry.value_ptr.append(arena, .{

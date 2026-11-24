@@ -11,7 +11,6 @@ const SourceRange = Types.SourceRange;
 
 const SourceSpan = source.SourceSpan;
 const StatementIterator = source.StatementIterator;
-const MathTokenCursor = source.MathTokenCursor;
 const statementHeader = source.statementHeader;
 const nextMathStringIn = source.nextMathStringIn;
 
@@ -79,32 +78,6 @@ pub fn indexLemmaHeaderMath(
     }
 }
 
-pub fn indexProofMathString(
-    self: anytype,
-    block_index: usize,
-    math: proof_script.MathString,
-) !void {
-    const block = self.proof_blocks.items[block_index];
-    try self.indexMathString(
-        .proof,
-        math.text,
-        math.span.start + 1,
-        block.decl_index,
-        true,
-        block.global_available_before,
-    );
-}
-
-pub fn indexRuleApplicationMath(
-    self: anytype,
-    block_index: usize,
-    app: proof_script.RuleApplication,
-) !void {
-    for (app.arg_bindings) |binding| {
-        try self.indexProofMathString(block_index, binding.formula);
-    }
-}
-
 pub fn indexMathString(
     self: anytype,
     document: DocumentId,
@@ -115,7 +88,7 @@ pub fn indexMathString(
     available_before: ?usize,
 ) !void {
     const binders = if (decl_index) |idx|
-        self.declarations.items[idx].binders
+        self.declaration(idx).binders
     else
         &.{};
     try indexMathStringIn(
@@ -131,7 +104,8 @@ pub fn indexMathString(
 }
 
 /// `indexMathString` with the variables in scope given as `binders`, of
-/// declaration `decl_index`.
+/// declaration `decl_index`. `self` is the `Builder` or a `BodyBuilder`:
+/// they differ in which declarations a name may mean.
 pub fn indexMathStringIn(
     self: anytype,
     document: DocumentId,
@@ -142,11 +116,7 @@ pub fn indexMathStringIn(
     allow_sort_vars: bool,
     available_before: ?usize,
 ) !void {
-    var cursor = MathTokenCursor{
-        .src = math,
-        .left_delims = self.left_delims,
-        .right_delims = self.right_delims,
-    };
+    var cursor = self.mathTokens(math);
     while (cursor.next()) |token| {
         if (token.text.len == 0) continue;
         const range = SourceRange{
@@ -155,7 +125,7 @@ pub fn indexMathStringIn(
             .end = base + token.end,
         };
         if (decl_index) |idx| {
-            const decl = self.declarations.items[idx];
+            const decl = self.declaration(idx);
             if (findBinderIn(binders, token.text)) |binder| {
                 try self.addSymbol(.{
                     .source_range = range,
@@ -169,8 +139,8 @@ pub fn indexMathStringIn(
                 continue;
             }
         }
-        if (self.notation_by_token.get(token.text)) |idx| {
-            const decl = self.declarations.items[idx];
+        if (self.declWithNotation(token.text)) |idx| {
+            const decl = self.declaration(idx);
             try self.addSymbol(.{
                 .source_range = range,
                 .target_range = targetRangeForUse(
@@ -184,8 +154,8 @@ pub fn indexMathStringIn(
             });
             continue;
         }
-        if (self.decl_by_name.get(token.text)) |idx| {
-            const decl = self.declarations.items[idx];
+        if (self.declNamed(token.text)) |idx| {
+            const decl = self.declaration(idx);
             if (decl.kind == .term or decl.kind == .def) {
                 try self.addSymbol(.{
                     .source_range = range,
@@ -201,8 +171,8 @@ pub fn indexMathStringIn(
             }
         }
         if (allow_sort_vars) {
-            if (self.sort_var_by_token.get(token.text)) |idx| {
-                const decl = self.declarations.items[idx];
+            if (self.sortVarDecl(token.text)) |idx| {
+                const decl = self.declaration(idx);
                 try self.addSymbol(.{
                     .source_range = range,
                     .target_range = targetRangeForUse(

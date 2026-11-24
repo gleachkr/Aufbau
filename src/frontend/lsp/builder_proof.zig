@@ -4,38 +4,24 @@ const proof_script = @import("../proof_script.zig");
 
 const markdown = @import("markdown.zig");
 const Types = @import("types.zig");
-const model = @import("model.zig");
 const completion = @import("completion.zig");
 const support = @import("builder_support.zig");
 
 const Declaration = Types.Declaration;
 
-const RuleResolution = model.RuleResolution;
-
 const completionSortText = completion.completionSortText;
 const sort_group_proof_lemma = completion.sort_group_proof_lemma;
-const sort_group_proof_reference = completion.sort_group_proof_reference;
 
-const ambiguousHypMarkdown = markdown.ambiguousHypMarkdown;
-const binderMarkdown = markdown.binderMarkdown;
-const hypRefMarkdown = markdown.hypRefMarkdown;
-const namedHypMarkdown = markdown.namedHypMarkdown;
 const lemmaMarkdown = markdown.lemmaMarkdown;
-const proofLineMarkdown = markdown.proofLineMarkdown;
-const unknownBindingMarkdown = markdown.unknownBindingMarkdown;
-const unknownHypMarkdown = markdown.unknownHypMarkdown;
-const unknownNamedHypMarkdown = markdown.unknownNamedHypMarkdown;
-const unknownLineMarkdown = markdown.unknownLineMarkdown;
-const unknownRuleMarkdown = markdown.unknownRuleMarkdown;
-const unresolvedBindingMarkdown = markdown.unresolvedBindingMarkdown;
 
 const bindersFromLemma = support.bindersFromLemma;
-const findBinder = support.findBinder;
 const hypothesesFromLemma = support.hypothesesFromLemma;
 const isFatalIndexError = support.isFatalIndexError;
 const proofBlockDeclarationKind = support.proofBlockDeclarationKind;
 const proofSpanRange = support.proofSpanRange;
 
+/// Index a block's header. Its body is indexed on demand
+/// (`builder_body.zig`).
 pub fn addProofBlock(
     self: anytype,
     block: proof_script.ProofBlock,
@@ -43,10 +29,7 @@ pub fn addProofBlock(
 ) !void {
     const block_index = self.proof_blocks.items.len;
     try self.proof_blocks.append(self.allocator, .{
-        .kind = block.kind,
-        .name = block.name,
-        .name_range = proofSpanRange(block.name_span),
-        .span = proofSpanRange(block.span),
+        .source = block,
         .global_available_before = global_available_before,
     });
     try self.addProofOutline(.{
@@ -61,8 +44,9 @@ pub fn addProofBlock(
         .lemma => try self.addLemmaBlockHeader(block_index, block),
     }
 
+    // A known body has no incomplete line.
     for (block.lines) |line| {
-        try self.addProofLine(block_index, line);
+        if (line.incomplete) self.complete = false;
     }
 
     const info = self.proof_blocks.items[block_index];
@@ -72,6 +56,7 @@ pub fn addProofBlock(
                 self.allocator,
                 block.name,
                 self.proof_rules.items.len,
+                self.proof_blocks.items.len,
             );
             try self.proof_rules.append(self.allocator, .{
                 .name = block.name,
@@ -176,359 +161,6 @@ pub fn parseLemmaAssertion(
     };
 }
 
-pub fn addProofLine(
-    self: anytype,
-    block_index: usize,
-    line: proof_script.ProofLine,
-) !void {
-    const decl: Declaration = .{
-        .name = line.label,
-        .kind = .proof_line,
-        .name_range = proofSpanRange(line.label_span),
-        .markdown = try proofLineMarkdown(self.allocator, line),
-    };
-    const decl_index = try self.addDeclaration(decl);
-    // An incomplete line has no application to speak of — its placeholder
-    // would index as an unknown rule and hover as one.
-    if (line.incomplete) {
-        self.complete = false;
-    } else {
-        try self.indexRuleApplication(
-            block_index,
-            line.application,
-            line.span.start,
-        );
-    }
-    try self.indexProofMathString(block_index, line.assertion);
-    try self.proof_lines.append(self.allocator, .{
-        .block_index = block_index,
-        .name = line.label,
-        .decl_index = decl_index,
-        .line_start = line.span.start,
-        .sort_text = try completionSortText(
-            self.allocator,
-            sort_group_proof_reference,
-            line.span.start,
-            line.label,
-        ),
-    });
-}
-
-pub fn indexRuleApplication(
-    self: anytype,
-    block_index: usize,
-    app: proof_script.RuleApplication,
-    line_start: usize,
-) !void {
-    try self.proof_applications.append(self.allocator, .{
-        .block_index = block_index,
-        .rule_name = app.rule_name,
-        .rule_span = proofSpanRange(app.rule_span),
-        .binding_list_span = if (app.binding_list_span) |span|
-            proofSpanRange(span)
-        else
-            null,
-        .refs_span = if (app.refs_span) |span| proofSpanRange(span) else null,
-        .span = proofSpanRange(app.span),
-        .use_start = app.rule_span.start,
-        .line_start = line_start,
-    });
-    if (proof_script.isSorryRuleName(app.rule_name)) {
-        try self.addSymbol(.{
-            .source_range = proofSpanRange(app.rule_span),
-            .target_range = null,
-            .markdown = markdown.sorry_markdown,
-        });
-        return;
-    }
-    if (proof_script.isOpenGoalRuleName(app.rule_name)) {
-        try self.addSymbol(.{
-            .source_range = proofSpanRange(app.rule_span),
-            .target_range = null,
-            .markdown = markdown.open_goal_markdown,
-        });
-        return;
-    }
-    const maybe_rule = self.resolveRule(
-        block_index,
-        app.rule_name,
-        app.rule_span.start,
-    );
-    if (maybe_rule) |rule| {
-        const decl = self.declarations.items[rule.decl_index];
-        try self.addSymbol(.{
-            .source_range = proofSpanRange(app.rule_span),
-            .target_range = if (rule.available) decl.name_range else null,
-            .markdown = decl.markdown,
-        });
-        try self.indexArgBindings(app, rule.decl_index, rule.available);
-    } else {
-        try self.addSymbol(.{
-            .source_range = proofSpanRange(app.rule_span),
-            .target_range = null,
-            .markdown = try unknownRuleMarkdown(
-                self.allocator,
-                app.rule_name,
-            ),
-        });
-        try self.indexUnknownArgBindings(app);
-    }
-
-    try self.indexRuleApplicationMath(block_index, app);
-
-    for (app.refs) |ref| {
-        switch (ref) {
-            .hyp => |hyp| try self.addHypRef(block_index, hyp),
-            .line => |line| try self.addLineRef(block_index, line, line_start),
-            .application => |child| {
-                try self.indexRuleApplication(block_index, child, line_start);
-            },
-        }
-    }
-}
-
-pub fn indexArgBindings(
-    self: anytype,
-    app: proof_script.RuleApplication,
-    decl_index: usize,
-    rule_available: bool,
-) !void {
-    const decl = self.declarations.items[decl_index];
-    for (app.arg_bindings) |binding| {
-        const binder = findBinder(decl, binding.name) orelse {
-            try self.addSymbol(.{
-                .source_range = proofSpanRange(binding.name_span),
-                .target_range = null,
-                .markdown = try unknownBindingMarkdown(
-                    self.allocator,
-                    binding.name,
-                    decl.name,
-                ),
-            });
-            continue;
-        };
-        try self.addSymbol(.{
-            .source_range = proofSpanRange(binding.name_span),
-            .target_range = if (rule_available)
-                binder.range orelse decl.name_range
-            else
-                null,
-            .markdown = try binderMarkdown(
-                self.allocator,
-                decl,
-                binder,
-            ),
-        });
-    }
-}
-
-pub fn indexUnknownArgBindings(
-    self: anytype,
-    app: proof_script.RuleApplication,
-) !void {
-    for (app.arg_bindings) |binding| {
-        try self.addSymbol(.{
-            .source_range = proofSpanRange(binding.name_span),
-            .target_range = null,
-            .markdown = try unresolvedBindingMarkdown(
-                self.allocator,
-                binding.name,
-                app.rule_name,
-            ),
-        });
-    }
-}
-
-pub fn addHypRef(
-    self: anytype,
-    block_index: usize,
-    hyp: proof_script.HypRef,
-) !void {
-    const block = self.proof_blocks.items[block_index];
-    if (hyp.name) |name| {
-        return addNamedHypRef(self, block, hyp, name);
-    }
-    if (hyp.index == 0 or
-        (block.hyp_count_known and hyp.index > block.hyp_count))
-    {
-        try self.addSymbol(.{
-            .source_range = proofSpanRange(hyp.span),
-            .target_range = null,
-            .markdown = try unknownHypMarkdown(
-                self.allocator,
-                block.name,
-                hyp.index,
-            ),
-        });
-        return;
-    }
-    const decl_index = block.decl_index orelse {
-        try self.addSymbol(.{
-            .source_range = proofSpanRange(hyp.span),
-            .target_range = null,
-            .markdown = try unknownHypMarkdown(
-                self.allocator,
-                block.name,
-                hyp.index,
-            ),
-        });
-        return;
-    };
-    const decl = self.declarations.items[decl_index];
-    const hyp_decl = if (hyp.index <= decl.hypotheses.len)
-        decl.hypotheses[hyp.index - 1]
-    else
-        null;
-    try self.addSymbol(.{
-        .source_range = proofSpanRange(hyp.span),
-        .target_range = if (hyp_decl) |item| item.range else decl.name_range,
-        .markdown = try hypRefMarkdown(
-            self.allocator,
-            block.name,
-            null,
-            hyp.index,
-            block.hyp_count,
-            block.hyp_count_known,
-            if (hyp_decl) |item| item.text else null,
-        ),
-    });
-}
-
-fn addNamedHypRef(
-    self: anytype,
-    block: model.ProofBlockInfo,
-    hyp: proof_script.HypRef,
-    name: []const u8,
-) !void {
-    const source_range = proofSpanRange(hyp.span);
-    const decl_index = block.decl_index orelse {
-        try self.addSymbol(.{
-            .source_range = source_range,
-            .target_range = null,
-            .markdown = try namedHypMarkdown(self.allocator, block.name, name),
-        });
-        return;
-    };
-    const decl = self.declarations.items[decl_index];
-    // Validate only against a complete table: when the header scan came up
-    // short, a missed name is indistinguishable from missing data, so fall
-    // back to naming the ref without judging it.
-    if (!block.hyp_count_known or decl.hypotheses.len < block.hyp_count) {
-        try self.addSymbol(.{
-            .source_range = source_range,
-            .target_range = decl.name_range,
-            .markdown = try namedHypMarkdown(self.allocator, block.name, name),
-        });
-        return;
-    }
-    const hyp_names = try model.hypNamesFromHypotheses(
-        self.allocator,
-        decl.hypotheses,
-    );
-    defer self.allocator.free(hyp_names);
-    const index = switch (proof_script.resolveHypRef(
-        hyp_names,
-        decl.hypotheses.len,
-        hyp,
-    )) {
-        .ambiguous => {
-            try self.addSymbol(.{
-                .source_range = source_range,
-                .target_range = null,
-                .markdown = try ambiguousHypMarkdown(
-                    self.allocator,
-                    block.name,
-                    name,
-                ),
-            });
-            return;
-        },
-        .unknown => {
-            try self.addSymbol(.{
-                .source_range = source_range,
-                .target_range = null,
-                .markdown = try unknownNamedHypMarkdown(
-                    self.allocator,
-                    block.name,
-                    name,
-                ),
-            });
-            return;
-        },
-        .index => |idx| idx,
-    };
-    const item = decl.hypotheses[index];
-    try self.addSymbol(.{
-        .source_range = source_range,
-        .target_range = item.name_range orelse item.range,
-        .markdown = try hypRefMarkdown(
-            self.allocator,
-            block.name,
-            name,
-            index + 1,
-            block.hyp_count,
-            block.hyp_count_known,
-            item.text,
-        ),
-    });
-}
-
-pub fn addLineRef(
-    self: anytype,
-    block_index: usize,
-    ref: proof_script.LineRef,
-    line_start: usize,
-) !void {
-    const decl_index = self.resolveLine(block_index, ref.label, line_start) orelse {
-        try self.addSymbol(.{
-            .source_range = proofSpanRange(ref.span),
-            .target_range = null,
-            .markdown = try unknownLineMarkdown(self.allocator, ref.label),
-        });
-        return;
-    };
-    const decl = self.declarations.items[decl_index];
-    try self.addSymbol(.{
-        .source_range = proofSpanRange(ref.span),
-        .target_range = decl.name_range,
-        .markdown = decl.markdown,
-    });
-}
-
-pub fn resolveRule(
-    self: anytype,
-    block_index: usize,
-    name: []const u8,
-    use_start: usize,
-) ?RuleResolution {
-    if (self.proof_rule_by_name.get(name)) |index| {
-        const rule = self.proof_rules.items[index];
-        if (rule.available_start <= use_start) {
-            return .{ .decl_index = rule.decl_index, .available = true };
-        }
-    }
-    return self.globalRuleResolution(block_index, name);
-}
-
-pub fn globalRuleResolution(
-    self: anytype,
-    block_index: usize,
-    name: []const u8,
-) ?RuleResolution {
-    const decl_index = self.decl_by_name.get(name) orelse return null;
-    const decl = self.declarations.items[decl_index];
-    switch (decl.kind) {
-        .axiom, .theorem => {},
-        else => return null,
-    }
-    const bound = self.proof_blocks.items[block_index].global_available_before;
-    const available = if (bound) |before|
-        decl.name_range.start < before
-    else
-        true;
-    return .{ .decl_index = decl_index, .available = available };
-}
-
 pub fn sortNameForId(self: anytype, id: u7) ?[]const u8 {
     const idx: usize = id;
     if (idx >= self.sort_names.items.len) return null;
@@ -547,23 +179,4 @@ pub fn sortDeclIndex(self: anytype, name: []const u8) ?usize {
     const decl = self.declarations.items[decl_index];
     if (decl.kind != .sort) return null;
     return decl_index;
-}
-
-pub fn resolveLine(
-    self: anytype,
-    block_index: usize,
-    label: []const u8,
-    line_start: usize,
-) ?usize {
-    // The block being indexed holds the last lines, in source order: the
-    // nearest earlier line with the label is the first one back.
-    var index = self.proof_lines.items.len;
-    while (index > 0) {
-        index -= 1;
-        const line = self.proof_lines.items[index];
-        if (line.block_index != block_index) break;
-        if (line.line_start >= line_start) continue;
-        if (std.mem.eql(u8, line.name, label)) return line.decl_index;
-    }
-    return null;
 }

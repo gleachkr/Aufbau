@@ -1,5 +1,7 @@
 const std = @import("std");
 const Index = @import("index.zig");
+const CheckMemo = @import("../compiler/check_memo.zig").CheckMemo;
+const CompilerModule = @import("../compiler.zig");
 
 const Snapshot = Index.Snapshot;
 
@@ -57,7 +59,7 @@ test "malformed sources still index parsed prefixes" {
 
     const rule_offset =
         (std.mem.indexOf(u8, proof_text, "top_i") orelse unreachable) + 1;
-    const def = snapshot.definitionAt(.proof, rule_offset) orelse {
+    const def = try snapshot.definitionAt(.proof, rule_offset) orelse {
         return error.MissingPrefixDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
@@ -1421,7 +1423,7 @@ test "definition lookup resolves declaration and simple global use" {
 
     const decl_offset =
         (std.mem.indexOf(u8, text, "imp") orelse unreachable) + 1;
-    const decl_def = snapshot.definitionAt(.mm0, decl_offset) orelse {
+    const decl_def = try snapshot.definitionAt(.mm0, decl_offset) orelse {
         return error.MissingDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.mm0", decl_def.uri);
@@ -1432,7 +1434,7 @@ test "definition lookup resolves declaration and simple global use" {
 
     const use_offset =
         (std.mem.lastIndexOf(u8, text, "imp") orelse unreachable) + 1;
-    const use_def = snapshot.definitionAt(.mm0, use_offset) orelse {
+    const use_def = try snapshot.definitionAt(.mm0, use_offset) orelse {
         return error.MissingDefinition;
     };
     try std.testing.expectEqual(decl_def.range.start, use_def.range.start);
@@ -1452,7 +1454,7 @@ test "hover returns markdown and source token range" {
 
     const offset =
         (std.mem.indexOf(u8, text, "top") orelse unreachable) + 1;
-    const hover = snapshot.hoverAt(.mm0, offset) orelse {
+    const hover = try snapshot.hoverAt(.mm0, offset) orelse {
         return error.MissingHover;
     };
     try std.testing.expectEqualStrings(
@@ -1494,7 +1496,7 @@ test "proof hole hover shows the inferred expression" {
 
     const offset =
         (std.mem.indexOf(u8, proof_text, "_wff") orelse unreachable) + 1;
-    const hover = snapshot.hoverAt(.proof, offset) orelse {
+    const hover = try snapshot.hoverAt(.proof, offset) orelse {
         return error.MissingInferredHoleHover;
     };
     try std.testing.expectEqualStrings(
@@ -1540,7 +1542,7 @@ test "named unknown hovers show the value at every occurrence" {
     var start: usize = 0;
     var seen: usize = 0;
     while (std.mem.indexOfPos(u8, proof_text, start, "?c")) |at| : (start = at + 2) {
-        const hover = snapshot.hoverAt(.proof, at + 1) orelse {
+        const hover = try snapshot.hoverAt(.proof, at + 1) orelse {
             return error.MissingNamedUnknownHover;
         };
         try std.testing.expectEqualStrings(
@@ -1572,7 +1574,7 @@ fn expectPartlyInferredHover(
     });
     defer snapshot.deinit();
     const at = std.mem.indexOf(u8, proof_text, token) orelse unreachable;
-    const hover = snapshot.hoverAt(.proof, at + 1) orelse {
+    const hover = try snapshot.hoverAt(.proof, at + 1) orelse {
         return error.MissingPartlyInferredHover;
     };
     try std.testing.expectEqualStrings(
@@ -1647,10 +1649,10 @@ test "proof hole hovers are independent for each occurrence" {
     };
     try std.testing.expect(first_offset != second_offset);
 
-    const first = snapshot.hoverAt(.proof, first_offset + 1) orelse {
+    const first = try snapshot.hoverAt(.proof, first_offset + 1) orelse {
         return error.MissingFirstHoleHover;
     };
-    const second = snapshot.hoverAt(.proof, second_offset + 1) orelse {
+    const second = try snapshot.hoverAt(.proof, second_offset + 1) orelse {
         return error.MissingSecondHoleHover;
     };
     try std.testing.expectEqual(first_offset, first.range.start);
@@ -1685,7 +1687,7 @@ test "global hover shows definition bodies and assertion formulas" {
 
     const def_offset =
         (std.mem.indexOf(u8, text, "id") orelse unreachable) + 1;
-    const def_hover = snapshot.hoverAt(.mm0, def_offset) orelse {
+    const def_hover = try snapshot.hoverAt(.mm0, def_offset) orelse {
         return error.MissingDefinitionHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -1704,7 +1706,7 @@ test "global hover shows definition bodies and assertion formulas" {
     const ax_offset =
         (std.mem.indexOf(u8, text, "axiom mp") orelse unreachable) +
         "axiom ".len + 1;
-    const ax_hover = snapshot.hoverAt(.mm0, ax_offset) orelse {
+    const ax_hover = try snapshot.hoverAt(.mm0, ax_offset) orelse {
         return error.MissingAssertionHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -1745,7 +1747,7 @@ test "global hover renders dependency masks as bound names" {
 
     const offset =
         (std.mem.indexOf(u8, text, "dep_rule") orelse unreachable) + 1;
-    const hover = snapshot.hoverAt(.mm0, offset) orelse {
+    const hover = try snapshot.hoverAt(.mm0, offset) orelse {
         return error.MissingDependencyHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -1775,7 +1777,7 @@ test "sort references in signatures resolve explicitly" {
 
     const offset =
         (std.mem.lastIndexOf(u8, text, "wff") orelse unreachable) + 1;
-    const def = snapshot.definitionAt(.mm0, offset) orelse {
+    const def = try snapshot.definitionAt(.mm0, offset) orelse {
         return error.MissingSortDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
@@ -1784,7 +1786,7 @@ test "sort references in signatures resolve explicitly" {
         snapshot.mm0_text[def.range.start..def.range.end],
     );
 
-    const hover = snapshot.hoverAt(.mm0, offset) orelse {
+    const hover = try snapshot.hoverAt(.mm0, offset) orelse {
         return error.MissingSortHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -1809,8 +1811,8 @@ test "comments do not produce global hovers" {
 
     const offset =
         (std.mem.lastIndexOf(u8, text, "top") orelse unreachable) + 1;
-    try std.testing.expect(snapshot.hoverAt(.mm0, offset) == null);
-    try std.testing.expect(snapshot.definitionAt(.mm0, offset) == null);
+    try std.testing.expect(try snapshot.hoverAt(.mm0, offset) == null);
+    try std.testing.expect(try snapshot.definitionAt(.mm0, offset) == null);
 }
 
 test "proof block header resolves to matching theorem" {
@@ -1835,7 +1837,7 @@ test "proof block header resolves to matching theorem" {
 
     const offset =
         (std.mem.indexOf(u8, proof_text, "main") orelse unreachable) + 1;
-    const def = snapshot.definitionAt(.proof, offset) orelse {
+    const def = try snapshot.definitionAt(.proof, offset) orelse {
         return error.MissingDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
@@ -1978,8 +1980,8 @@ test "proof block header ignores non-theorem globals" {
 
     const offset =
         (std.mem.indexOf(u8, proof_text, "main") orelse unreachable) + 1;
-    try std.testing.expect(snapshot.definitionAt(.proof, offset) == null);
-    try std.testing.expect(snapshot.hoverAt(.proof, offset) == null);
+    try std.testing.expect(try snapshot.definitionAt(.proof, offset) == null);
+    try std.testing.expect(try snapshot.hoverAt(.proof, offset) == null);
 }
 
 test "proof rule applications ignore non-rule globals" {
@@ -2003,7 +2005,7 @@ test "proof rule applications ignore non-rule globals" {
 
     const offset =
         (std.mem.lastIndexOf(u8, proof_text, "top") orelse unreachable) + 1;
-    const hover = snapshot.hoverAt(.proof, offset) orelse {
+    const hover = try snapshot.hoverAt(.proof, offset) orelse {
         return error.MissingUnknownRuleHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2012,7 +2014,7 @@ test "proof rule applications ignore non-rule globals" {
         1,
         "unknown rule `top`",
     ));
-    try std.testing.expect(snapshot.definitionAt(.proof, offset) == null);
+    try std.testing.expect(try snapshot.definitionAt(.proof, offset) == null);
 }
 
 test "forward global proof rules hover but do not define" {
@@ -2037,7 +2039,7 @@ test "forward global proof rules hover but do not define" {
 
     const offset =
         (std.mem.indexOf(u8, proof_text, "later") orelse unreachable) + 1;
-    const hover = snapshot.hoverAt(.proof, offset) orelse {
+    const hover = try snapshot.hoverAt(.proof, offset) orelse {
         return error.MissingForwardRuleHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2046,7 +2048,7 @@ test "forward global proof rules hover but do not define" {
         1,
         "axiom later",
     ));
-    try std.testing.expect(snapshot.definitionAt(.proof, offset) == null);
+    try std.testing.expect(try snapshot.definitionAt(.proof, offset) == null);
 }
 
 test "current theorem is not available as a proof rule" {
@@ -2070,7 +2072,7 @@ test "current theorem is not available as a proof rule" {
 
     const offset =
         (std.mem.lastIndexOf(u8, proof_text, "main") orelse unreachable) + 1;
-    const hover = snapshot.hoverAt(.proof, offset) orelse {
+    const hover = try snapshot.hoverAt(.proof, offset) orelse {
         return error.MissingSelfRuleHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2079,7 +2081,7 @@ test "current theorem is not available as a proof rule" {
         1,
         "theorem main",
     ));
-    try std.testing.expect(snapshot.definitionAt(.proof, offset) == null);
+    try std.testing.expect(try snapshot.definitionAt(.proof, offset) == null);
 }
 
 test "proof rule and line references resolve" {
@@ -2106,7 +2108,7 @@ test "proof rule and line references resolve" {
 
     const rule_offset =
         (std.mem.lastIndexOf(u8, proof_text, "keep") orelse unreachable) + 1;
-    const rule_def = snapshot.definitionAt(.proof, rule_offset) orelse {
+    const rule_def = try snapshot.definitionAt(.proof, rule_offset) orelse {
         return error.MissingRuleDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.mm0", rule_def.uri);
@@ -2117,7 +2119,7 @@ test "proof rule and line references resolve" {
 
     const ref_offset =
         (std.mem.lastIndexOf(u8, proof_text, "l1") orelse unreachable) + 1;
-    const ref_def = snapshot.definitionAt(.proof, ref_offset) orelse {
+    const ref_def = try snapshot.definitionAt(.proof, ref_offset) orelse {
         return error.MissingLineDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.auf", ref_def.uri);
@@ -2153,7 +2155,7 @@ test "local lemma rule resolves in later proof block" {
 
     const rule_offset =
         (std.mem.lastIndexOf(u8, proof_text, "helper") orelse unreachable) + 1;
-    const def = snapshot.definitionAt(.proof, rule_offset) orelse {
+    const def = try snapshot.definitionAt(.proof, rule_offset) orelse {
         return error.MissingDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.auf", def.uri);
@@ -2200,7 +2202,7 @@ test "local proof defs navigate, hover, complete, and outline" {
     };
     try std.testing.expectEqual(Index.CompletionKind.def, item.kind);
 
-    const def = snapshot.definitionAt(.proof, use_offset) orelse {
+    const def = try snapshot.definitionAt(.proof, use_offset) orelse {
         return error.MissingLocalDefDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.auf", def.uri);
@@ -2209,7 +2211,7 @@ test "local proof defs navigate, hover, complete, and outline" {
     };
     try std.testing.expectEqual(decl_offset, def.range.start);
 
-    const hover = snapshot.hoverAt(.proof, use_offset) orelse {
+    const hover = try snapshot.hoverAt(.proof, use_offset) orelse {
         return error.MissingLocalDefHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2286,7 +2288,7 @@ test "local proof def binders navigate from bodies" {
     const body_offset = std.mem.lastIndexOf(u8, proof_text, "d") orelse {
         return error.MissingLocalDummyUse;
     };
-    const def = snapshot.definitionAt(.proof, body_offset) orelse {
+    const def = try snapshot.definitionAt(.proof, body_offset) orelse {
         return error.MissingLocalDummyDefinition;
     };
     const dummy_offset = std.mem.indexOf(u8, proof_text, ".d") orelse {
@@ -2318,7 +2320,7 @@ test "public proof def bodies navigate to mm0 declarations" {
     const name_offset = std.mem.indexOf(u8, proof_text, "hold") orelse {
         return error.MissingPublicDefBodyName;
     };
-    const name_def = snapshot.definitionAt(.proof, name_offset) orelse {
+    const name_def = try snapshot.definitionAt(.proof, name_offset) orelse {
         return error.MissingPublicDefBodyDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.mm0", name_def.uri);
@@ -2330,7 +2332,7 @@ test "public proof def bodies navigate to mm0 declarations" {
     const body_offset = std.mem.indexOf(u8, proof_text, "x") orelse {
         return error.MissingPublicDefBodyBinder;
     };
-    const binder_def = snapshot.definitionAt(.proof, body_offset) orelse {
+    const binder_def = try snapshot.definitionAt(.proof, body_offset) orelse {
         return error.MissingPublicDefBodyBinderDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.mm0", binder_def.uri);
@@ -2364,7 +2366,7 @@ test "hypothesis refs hover and jump to exact theorem hypothesis" {
 
     const offset =
         (std.mem.indexOf(u8, proof_text, "#2") orelse unreachable) + 1;
-    const hover = snapshot.hoverAt(.proof, offset) orelse {
+    const hover = try snapshot.hoverAt(.proof, offset) orelse {
         return error.MissingHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2379,7 +2381,7 @@ test "hypothesis refs hover and jump to exact theorem hypothesis" {
         1,
         "hypothesis #2",
     ));
-    const def = snapshot.definitionAt(.proof, offset) orelse {
+    const def = try snapshot.definitionAt(.proof, offset) orelse {
         return error.MissingDefinition;
     };
     const second_hyp = std.mem.lastIndexOf(u8, mm0_text, "$ second $") orelse {
@@ -2419,7 +2421,7 @@ test "named hypothesis refs validate and jump to the theorem binder" {
 
     const named_offset =
         (std.mem.indexOf(u8, proof_text, "#h2") orelse unreachable) + 1;
-    const hover = snapshot.hoverAt(.proof, named_offset) orelse {
+    const hover = try snapshot.hoverAt(.proof, named_offset) orelse {
         return error.MissingHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2434,7 +2436,7 @@ test "named hypothesis refs validate and jump to the theorem binder" {
         1,
         "hypothesis `h2` (#2)",
     ));
-    const def = snapshot.definitionAt(.proof, named_offset) orelse {
+    const def = try snapshot.definitionAt(.proof, named_offset) orelse {
         return error.MissingDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
@@ -2445,7 +2447,7 @@ test "named hypothesis refs validate and jump to the theorem binder" {
 
     const unknown_offset =
         (std.mem.indexOf(u8, proof_text, "#nope") orelse unreachable) + 1;
-    const unknown_hover = snapshot.hoverAt(.proof, unknown_offset) orelse {
+    const unknown_hover = try snapshot.hoverAt(.proof, unknown_offset) orelse {
         return error.MissingUnknownHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2455,7 +2457,7 @@ test "named hypothesis refs validate and jump to the theorem binder" {
         "unknown hypothesis #nope",
     ));
     try std.testing.expect(
-        snapshot.definitionAt(.proof, unknown_offset) == null,
+        try snapshot.definitionAt(.proof, unknown_offset) == null,
     );
 
     const slot_offset =
@@ -2513,7 +2515,7 @@ test "multi-name hypothesis groups pair with their own formula" {
     // h2 shares its group's formula, and jumps to its own name token.
     const h2_offset =
         (std.mem.indexOf(u8, proof_text, "#h2") orelse unreachable) + 1;
-    const h2_hover = snapshot.hoverAt(.proof, h2_offset) orelse {
+    const h2_hover = try snapshot.hoverAt(.proof, h2_offset) orelse {
         return error.MissingGroupedHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2522,7 +2524,7 @@ test "multi-name hypothesis groups pair with their own formula" {
         1,
         "$ first $",
     ));
-    const h2_def = snapshot.definitionAt(.proof, h2_offset) orelse {
+    const h2_def = try snapshot.definitionAt(.proof, h2_offset) orelse {
         return error.MissingGroupedDefinition;
     };
     try std.testing.expectEqualStrings(
@@ -2533,7 +2535,7 @@ test "multi-name hypothesis groups pair with their own formula" {
     // The hypothesis after the group keeps its own formula.
     const h3_offset =
         (std.mem.indexOf(u8, proof_text, "#h3") orelse unreachable) + 1;
-    const h3_hover = snapshot.hoverAt(.proof, h3_offset) orelse {
+    const h3_hover = try snapshot.hoverAt(.proof, h3_offset) orelse {
         return error.MissingAfterGroupHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2546,7 +2548,7 @@ test "multi-name hypothesis groups pair with their own formula" {
     // Positional refs pair the same way.
     const second_offset =
         (std.mem.indexOf(u8, proof_text, "#2") orelse unreachable) + 1;
-    const second_hover = snapshot.hoverAt(.proof, second_offset) orelse {
+    const second_hover = try snapshot.hoverAt(.proof, second_offset) orelse {
         return error.MissingPositionalHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2581,7 +2583,7 @@ test "duplicate hypothesis names make a named ref ambiguous" {
 
     const ref_offset =
         (std.mem.indexOf(u8, proof_text, "#h]") orelse unreachable) + 1;
-    const hover = snapshot.hoverAt(.proof, ref_offset) orelse {
+    const hover = try snapshot.hoverAt(.proof, ref_offset) orelse {
         return error.MissingHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2590,7 +2592,7 @@ test "duplicate hypothesis names make a named ref ambiguous" {
         1,
         "matches more than one hypothesis",
     ));
-    try std.testing.expect(snapshot.definitionAt(.proof, ref_offset) == null);
+    try std.testing.expect(try snapshot.definitionAt(.proof, ref_offset) == null);
 
     const slot_offset =
         (std.mem.indexOf(u8, proof_text, "keep []") orelse unreachable) +
@@ -2635,7 +2637,7 @@ test "named hypothesis refs resolve in lemma headers" {
 
     const ref_offset =
         (std.mem.indexOf(u8, proof_text, "#hf") orelse unreachable) + 1;
-    const hover = snapshot.hoverAt(.proof, ref_offset) orelse {
+    const hover = try snapshot.hoverAt(.proof, ref_offset) orelse {
         return error.MissingHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2650,7 +2652,7 @@ test "named hypothesis refs resolve in lemma headers" {
         1,
         "hypothesis `hf` (#1)",
     ));
-    const def = snapshot.definitionAt(.proof, ref_offset) orelse {
+    const def = try snapshot.definitionAt(.proof, ref_offset) orelse {
         return error.MissingDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.auf", def.uri);
@@ -2682,7 +2684,7 @@ test "unresolved proof symbols still hover" {
 
     const rule_offset =
         (std.mem.indexOf(u8, proof_text, "missing") orelse unreachable) + 1;
-    const rule_hover = snapshot.hoverAt(.proof, rule_offset) orelse {
+    const rule_hover = try snapshot.hoverAt(.proof, rule_offset) orelse {
         return error.MissingRuleHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2691,11 +2693,11 @@ test "unresolved proof symbols still hover" {
         1,
         "unknown rule `missing`",
     ));
-    try std.testing.expect(snapshot.definitionAt(.proof, rule_offset) == null);
+    try std.testing.expect(try snapshot.definitionAt(.proof, rule_offset) == null);
 
     const line_offset =
         (std.mem.indexOf(u8, proof_text, "future") orelse unreachable) + 1;
-    const line_hover = snapshot.hoverAt(.proof, line_offset) orelse {
+    const line_hover = try snapshot.hoverAt(.proof, line_offset) orelse {
         return error.MissingLineHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2707,7 +2709,7 @@ test "unresolved proof symbols still hover" {
 
     const hyp_offset =
         (std.mem.indexOf(u8, proof_text, "#1") orelse unreachable) + 1;
-    const hyp_hover = snapshot.hoverAt(.proof, hyp_offset) orelse {
+    const hyp_hover = try snapshot.hoverAt(.proof, hyp_offset) orelse {
         return error.MissingHypHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2716,7 +2718,7 @@ test "unresolved proof symbols still hover" {
         1,
         "unknown hypothesis #1",
     ));
-    try std.testing.expect(snapshot.definitionAt(.proof, hyp_offset) == null);
+    try std.testing.expect(try snapshot.definitionAt(.proof, hyp_offset) == null);
 }
 
 test "explicit proof bindings resolve to rule binders" {
@@ -2741,7 +2743,7 @@ test "explicit proof bindings resolve to rule binders" {
 
     const binding_offset =
         (std.mem.indexOf(u8, proof_text, "x :=") orelse unreachable);
-    const hover = snapshot.hoverAt(.proof, binding_offset) orelse {
+    const hover = try snapshot.hoverAt(.proof, binding_offset) orelse {
         return error.MissingBindingHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2751,7 +2753,7 @@ test "explicit proof bindings resolve to rule binders" {
         "Expected sort: `obj`. Bound variable.",
     ));
 
-    const def = snapshot.definitionAt(.proof, binding_offset) orelse {
+    const def = try snapshot.definitionAt(.proof, binding_offset) orelse {
         return error.MissingBindingDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
@@ -2762,7 +2764,7 @@ test "explicit proof bindings resolve to rule binders" {
 
     const free_offset =
         (std.mem.indexOf(u8, proof_text, "p :=") orelse unreachable);
-    const free_hover = snapshot.hoverAt(.proof, free_offset) orelse {
+    const free_hover = try snapshot.hoverAt(.proof, free_offset) orelse {
         return error.MissingFreeBindingHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2789,7 +2791,7 @@ test "math notation tokens resolve to defining terms" {
 
     const offset =
         (std.mem.lastIndexOf(u8, mm0_text, "->") orelse unreachable) + 1;
-    const def = snapshot.definitionAt(.mm0, offset) orelse {
+    const def = try snapshot.definitionAt(.mm0, offset) orelse {
         return error.MissingNotationDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
@@ -2798,7 +2800,7 @@ test "math notation tokens resolve to defining terms" {
         snapshot.mm0_text[def.range.start..def.range.end],
     );
 
-    const hover = snapshot.hoverAt(.mm0, offset) orelse {
+    const hover = try snapshot.hoverAt(.mm0, offset) orelse {
         return error.MissingNotationHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2824,7 +2826,7 @@ test "general notation tokens resolve to defining terms" {
 
     const offset =
         (std.mem.lastIndexOf(u8, mm0_text, "⊤") orelse unreachable) + 1;
-    const def = snapshot.definitionAt(.mm0, offset) orelse {
+    const def = try snapshot.definitionAt(.mm0, offset) orelse {
         return error.MissingGeneralNotationDefinition;
     };
     try std.testing.expectEqualStrings(
@@ -2858,7 +2860,7 @@ test "proof math term definitions use mm0 declaration scope" {
         return error.MissingProofMath;
     };
     const offset = proof_top + 2;
-    const def = snapshot.definitionAt(.proof, offset) orelse {
+    const def = try snapshot.definitionAt(.proof, offset) orelse {
         return error.MissingProofTermDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
@@ -2894,7 +2896,7 @@ test "proof math notation definitions use mm0 declaration scope" {
     const offset = std.mem.indexOf(u8, proof_text, "->") orelse {
         return error.MissingProofNotation;
     };
-    const def = snapshot.definitionAt(.proof, offset) orelse {
+    const def = try snapshot.definitionAt(.proof, offset) orelse {
         return error.MissingProofNotationDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
@@ -2928,7 +2930,7 @@ test "forward proof math globals hover without definition" {
     const proof_later = std.mem.indexOf(u8, proof_text, "later") orelse {
         return error.MissingForwardProofMath;
     };
-    const hover = snapshot.hoverAt(.proof, proof_later) orelse {
+    const hover = try snapshot.hoverAt(.proof, proof_later) orelse {
         return error.MissingForwardProofMathHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2937,7 +2939,7 @@ test "forward proof math globals hover without definition" {
         1,
         "term later",
     ));
-    try std.testing.expect(snapshot.definitionAt(.proof, proof_later) == null);
+    try std.testing.expect(try snapshot.definitionAt(.proof, proof_later) == null);
 }
 
 test "proof math binder references resolve to theorem binders" {
@@ -2963,7 +2965,7 @@ test "proof math binder references resolve to theorem binders" {
         return error.MissingProofMath;
     };
     const offset = line_assertion + 2;
-    const def = snapshot.definitionAt(.proof, offset) orelse {
+    const def = try snapshot.definitionAt(.proof, offset) orelse {
         return error.MissingBinderDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
@@ -2972,7 +2974,7 @@ test "proof math binder references resolve to theorem binders" {
         snapshot.mm0_text[def.range.start..def.range.end],
     );
 
-    const hover = snapshot.hoverAt(.proof, offset) orelse {
+    const hover = try snapshot.hoverAt(.proof, offset) orelse {
         return error.MissingBinderHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -3007,7 +3009,7 @@ test "proof @vars dummies hover and jump to pool token" {
 
     const proof_token =
         std.mem.indexOf(u8, proof_text, "x x") orelse unreachable;
-    const hover = snapshot.hoverAt(.proof, proof_token) orelse {
+    const hover = try snapshot.hoverAt(.proof, proof_token) orelse {
         return error.MissingVarsHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -3023,7 +3025,7 @@ test "proof @vars dummies hover and jump to pool token" {
         "Sort: `obj`",
     ));
 
-    const def = snapshot.definitionAt(.proof, proof_token) orelse {
+    const def = try snapshot.definitionAt(.proof, proof_token) orelse {
         return error.MissingVarsDefinition;
     };
     try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
@@ -3036,7 +3038,7 @@ test "proof @vars dummies hover and jump to pool token" {
         snapshot.mm0_text[def.range.start..def.range.end],
     );
 
-    const decl_hover = snapshot.hoverAt(.mm0, vars_token) orelse {
+    const decl_hover = try snapshot.hoverAt(.mm0, vars_token) orelse {
         return error.MissingVarsDeclHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -3075,7 +3077,7 @@ test "global hover shows the declaration's annotations in full" {
     // in the source; the old "Metadata: `@rewrite`." name-only summary is gone.
     const rewrite_offset =
         (std.mem.indexOf(u8, mm0_text, "top_i") orelse unreachable) + 1;
-    const rewrite_hover = snapshot.hoverAt(.mm0, rewrite_offset) orelse {
+    const rewrite_hover = try snapshot.hoverAt(.mm0, rewrite_offset) orelse {
         return error.MissingAnnotatedHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -3096,7 +3098,7 @@ test "global hover shows the declaration's annotations in full" {
     const view_offset =
         (std.mem.indexOf(u8, mm0_text, "axiom weaken") orelse unreachable) +
         "axiom ".len + 1;
-    const view_hover = snapshot.hoverAt(.mm0, view_offset) orelse {
+    const view_hover = try snapshot.hoverAt(.mm0, view_offset) orelse {
         return error.MissingViewHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -3114,7 +3116,7 @@ test "global hover shows the declaration's annotations in full" {
     const sort_offset =
         (std.mem.indexOf(u8, mm0_text, "sort wff") orelse unreachable) +
         "sort ".len + 1;
-    const sort_hover = snapshot.hoverAt(.mm0, sort_offset) orelse {
+    const sort_hover = try snapshot.hoverAt(.mm0, sort_offset) orelse {
         return error.MissingSortHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -3153,7 +3155,7 @@ test "global hover renders prose annotations as a doc comment" {
     // directive join into one paragraph.
     const axiom_offset =
         (std.mem.indexOf(u8, mm0_text, "top_i") orelse unreachable) + 1;
-    const axiom_hover = snapshot.hoverAt(.mm0, axiom_offset) orelse {
+    const axiom_hover = try snapshot.hoverAt(.mm0, axiom_offset) orelse {
         return error.MissingAxiomHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -3181,7 +3183,7 @@ test "global hover renders prose annotations as a doc comment" {
     const sort_offset =
         (std.mem.indexOf(u8, mm0_text, "sort wff") orelse unreachable) +
         "sort ".len + 1;
-    const sort_hover = snapshot.hoverAt(.mm0, sort_offset) orelse {
+    const sort_hover = try snapshot.hoverAt(.mm0, sort_offset) orelse {
         return error.MissingSortHover;
     };
     try std.testing.expectEqualStrings(
@@ -3213,7 +3215,7 @@ test "sorry! hovers as an admitted line and is offered with the tactics" {
 
     const sorry_offset =
         (std.mem.indexOf(u8, proof_text, "sorry!") orelse unreachable) + 1;
-    const hover = snapshot.hoverAt(.proof, sorry_offset) orelse {
+    const hover = try snapshot.hoverAt(.proof, sorry_offset) orelse {
         return error.MissingSorryHover;
     };
     try std.testing.expectEqualStrings(
@@ -3242,4 +3244,254 @@ test "sorry! hovers as an admitted line and is offered with the tactics" {
     };
     try std.testing.expectEqual(Index.CompletionKind.keyword, sorry.kind);
     try std.testing.expectEqualStrings("sorry!", sorry.replacement_text);
+}
+
+test "a proof body sees only the names declared before it" {
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\theorem first: $ top $;
+        \\theorem second: $ top $;
+    ;
+    const proof_text =
+        \\lemma tl: $ top $
+        \\----
+        \\l1: $ top $ by top_i []
+        \\
+        \\first
+        \\-----
+        \\l1: $ lt $ by tl []
+        \\l2: $ ! $ by later []
+        \\
+        \\def lt: wff = $ top $
+        \\prefix lt: $!$ prec max;
+        \\
+        \\lemma tl: $ top $
+        \\----
+        \\l1: $ top $ by top_i []
+        \\
+        \\lemma later: $ top $
+        \\----
+        \\l1: $ top $ by top_i []
+        \\
+        \\second
+        \\------
+        \\l1: $ lt $ by tl []
+        \\l2: $ ! $ by later []
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+
+    const first = std.mem.indexOf(u8, proof_text, "first").?;
+    const second = std.mem.indexOf(u8, proof_text, "second").?;
+    const lemma_one = std.mem.indexOf(u8, proof_text, "tl:").?;
+    const lemma_two = std.mem.lastIndexOf(u8, proof_text, "tl:").?;
+    const local_def = std.mem.indexOf(u8, proof_text, "lt: wff").?;
+
+    for ([_][]const u8{ "lt $", "! $" }) |use| {
+        const before = std.mem.indexOfPos(u8, proof_text, first, use).?;
+        try std.testing.expect(try snapshot.hoverAt(.proof, before) == null);
+        const after = std.mem.indexOfPos(u8, proof_text, second, use).?;
+        const def = (try snapshot.definitionAt(.proof, after)).?;
+        try std.testing.expectEqual(local_def, def.range.start);
+    }
+    for ([_]usize{ first, second }, [_]usize{ lemma_one, lemma_two }) |from, lemma| {
+        const use = std.mem.indexOfPos(u8, proof_text, from, "tl []").?;
+        const def = (try snapshot.definitionAt(.proof, use)).?;
+        try std.testing.expectEqual(lemma, def.range.start);
+    }
+    const unknown = std.mem.indexOfPos(u8, proof_text, first, "later []").?;
+    const hover = (try snapshot.hoverAt(.proof, unknown)).?;
+    try std.testing.expect(std.mem.indexOf(u8, hover.markdown, "unknown") != null);
+}
+
+test "a snapshot with known bodies answers as one that parsed them" {
+    const allocator = std.testing.allocator;
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\theorem main: $ top $;
+    ;
+    const proof_text =
+        \\lemma tl: $ top $
+        \\----
+        \\l1: $ top $ by top_i []
+        \\l2: $ top $ by top_i []
+        \\
+        \\main
+        \\----
+        \\l1: $ top $ by tl []
+        \\
+    ;
+    var memo = CheckMemo.init(allocator);
+    defer memo.deinit();
+    // The memo serves an editor's runs, which collect holes.
+    var holes = CompilerModule.HoleInferenceSink{ .allocator = allocator };
+    defer holes.deinit();
+    var compiler = CompilerModule.Compiler.initWithProof(allocator, mm0_text, proof_text);
+    compiler.hole_inference_sink = &holes;
+    compiler.check_memo = &memo;
+    try compiler.analyze();
+
+    const broken_text = proof_text ++ "l2: $ top $ by\n";
+    for ([_][]const u8{ proof_text, broken_text }, [_]bool{ true, false }) |text, whole| {
+        var input: Index.SnapshotInput = .{
+            .mm0_uri = "file:///test.mm0",
+            .mm0_text = mm0_text,
+            .proof_uri = "file:///test.auf",
+            .proof_text = text,
+        };
+        var parsed = try Snapshot.build(allocator, input);
+        defer parsed.deinit();
+        input.check_memo = &memo;
+        var known = try Snapshot.build(allocator, input);
+        defer known.deinit();
+
+        try std.testing.expect(known.proof_blocks[0].source.known_body != null);
+        try std.testing.expectEqual(whole, known.proof_blocks[1].source.known_body != null);
+        try std.testing.expectEqual(whole, known.complete);
+        try std.testing.expectEqual(whole, parsed.complete);
+        for (0..text.len) |offset| {
+            try std.testing.expectEqualDeep(
+                try parsed.hoverAt(.proof, offset),
+                try known.hoverAt(.proof, offset),
+            );
+        }
+    }
+}
+
+/// Expect the references in the proof to what is at `offset` to start at
+/// `expected`.
+fn expectReferences(
+    snapshot: *Snapshot,
+    document: Index.DocumentId,
+    offset: usize,
+    expected: []const usize,
+) !void {
+    const ranges = try snapshot.referencesAt(std.testing.allocator, document, offset, true);
+    defer std.testing.allocator.free(ranges);
+    var in_proof = std.ArrayListUnmanaged(usize).empty;
+    defer in_proof.deinit(std.testing.allocator);
+    for (ranges) |range| {
+        if (range.document == .proof) try in_proof.append(std.testing.allocator, range.start);
+    }
+    try std.testing.expectEqualSlices(usize, expected, in_proof.items);
+}
+
+test "references reach every body that refers to the declaration" {
+    const mm0_text =
+        \\delimiter $ x ( ) $;
+        \\provable sort wff;
+        \\term a: wff;
+        \\term neg (p: wff): wff;
+        \\prefix neg: $x$ prec 10;
+        \\axiom ax (p: wff) (h: $ p $): $ xp $;
+        \\theorem one (h: $ a $): $ xa $;
+        \\theorem two (h: $ a $): $ xa $;
+    ;
+    const proof_text =
+        \\one
+        \\---
+        \\l1: $ xa $ by ax (p := $ a $) [#1]
+        \\l2: $ xa $ by ax (p := $ a $) [#h]
+        \\
+        \\two
+        \\---
+        \\l1: $ xa $ by ax (p := $ a $) [#1]
+        \\
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+    try std.testing.expect(snapshot.complete);
+
+    const line = "l1: $ xa $ by ax (p := $ a $) [#1]\n";
+    const one = std.mem.indexOf(u8, proof_text, "l1").?;
+    const lines = [_]usize{ one, one + line.len, std.mem.lastIndexOf(u8, proof_text, "l1").? };
+    const at = struct {
+        fn all(starts: [3]usize, comptime use: []const u8) [3]usize {
+            var result = starts;
+            for (&result) |*start| start.* += comptime std.mem.indexOf(u8, line, use).?;
+            return result;
+        }
+    }.all;
+
+    // A letter that is a delimiter ends a token.
+    const a_uses = at(lines, "a $ by");
+    const a_bound = at(lines, "a $) [");
+    try expectReferences(&snapshot, .proof, a_uses[0], &.{
+        a_uses[0], a_bound[0], a_uses[1], a_bound[1], a_uses[2], a_bound[2],
+    });
+    // A notation token.
+    try expectReferences(&snapshot, .proof, at(lines, "xa")[2], &at(lines, "xa"));
+    // A rule, and its binder.
+    try expectReferences(&snapshot, .proof, at(lines, "ax (")[2], &at(lines, "ax ("));
+    try expectReferences(&snapshot, .proof, at(lines, "p :=")[2], &at(lines, "p :="));
+    // A hypothesis by position and by name, each in its own block.
+    const refs = at(lines, "#1");
+    try expectReferences(&snapshot, .proof, refs[0], refs[0..1]);
+    try expectReferences(&snapshot, .proof, refs[1], refs[1..2]);
+    try expectReferences(&snapshot, .proof, refs[2], refs[2..3]);
+    // A line.
+    try expectReferences(&snapshot, .proof, lines[0], lines[0..1]);
+
+    // Highlights read only the ranges asked for.
+    const two = std.mem.indexOf(u8, proof_text, "two").?;
+    const highlights = try snapshot.highlightsAt(std.testing.allocator, .proof, a_uses[0], &.{
+        .{ .document = .proof, .start = 0, .end = lines[1] },
+        .{ .document = .proof, .start = two, .end = proof_text.len },
+    });
+    defer std.testing.allocator.free(highlights);
+    var starts: [4]usize = undefined;
+    try std.testing.expectEqual(starts.len, highlights.len);
+    for (&starts, highlights) |*start, highlight| start.* = highlight.range.start;
+    try std.testing.expectEqualSlices(
+        usize,
+        &.{ a_uses[0], a_bound[0], a_uses[2], a_bound[2] },
+        &starts,
+    );
+}
+
+test "a line reference means the nearest earlier line with its label" {
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\axiom keep (h: $ top $): $ top $;
+        \\theorem main: $ top $;
+    ;
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ top $ by top_i []
+        \\l1: $ top $ by keep [l1]
+        \\l2: $ top $ by keep [l1]
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+
+    const first = std.mem.indexOf(u8, proof_text, "l1:").?;
+    const second = std.mem.lastIndexOf(u8, proof_text, "l1:").?;
+    const in_second = std.mem.indexOf(u8, proof_text, "l1]").?;
+    const in_last = std.mem.lastIndexOf(u8, proof_text, "l1]").?;
+    for ([_]usize{ in_second, in_last }, [_]usize{ first, second }) |use, line| {
+        const def = (try snapshot.definitionAt(.proof, use)).?;
+        try std.testing.expectEqual(line, def.range.start);
+    }
 }

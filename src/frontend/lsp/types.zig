@@ -6,14 +6,17 @@ pub const DocumentId = enum {
     proof,
 };
 
+/// The texts must outlive the snapshot, which indexes proof bodies on demand.
 pub const SnapshotInput = struct {
     mm0_uri: []const u8,
     mm0_text: []const u8,
     proof_uri: ?[]const u8 = null,
     proof_text: ?[]const u8 = null,
     /// The holes an analysis of these texts collected. Null runs one,
-    /// with `check_memo` when given (see `compiler/check_memo.zig`).
+    /// with `check_memo` when given.
     holes: ?*const HoleInferenceSink = null,
+    /// What earlier analyses of the unit found (`compiler/check_memo.zig`).
+    /// The proof parse passes over the bodies it knows.
     check_memo: ?*CheckMemo = null,
 };
 
@@ -30,11 +33,17 @@ pub const SourceRange = struct {
         return range.document == document and offset >= range.start and offset < range.end;
     }
 
-    pub fn listedIn(range: SourceRange, ranges: []const SourceRange) bool {
+    pub fn overlapsAny(range: SourceRange, ranges: []const SourceRange) bool {
         for (ranges) |other| {
-            if (range.eql(other)) return true;
+            if (range.document == other.document and
+                range.start < other.end and other.start < range.end) return true;
         }
         return false;
+    }
+
+    pub fn lessThan(_: void, a: SourceRange, b: SourceRange) bool {
+        if (a.document != b.document) return a.document == .mm0;
+        return if (a.start != b.start) a.start < b.start else a.end < b.end;
     }
 };
 
@@ -97,7 +106,6 @@ pub const DeclarationKind = enum {
     axiom,
     theorem,
     lemma,
-    proof_line,
     sort_var,
 
     pub fn label(self: DeclarationKind) []const u8 {
@@ -108,7 +116,6 @@ pub const DeclarationKind = enum {
             .axiom => "axiom",
             .theorem => "theorem",
             .lemma => "lemma",
-            .proof_line => "proof line",
             .sort_var => "@vars token",
         };
     }
@@ -145,4 +152,32 @@ pub const Declaration = struct {
     sort_text: []const u8 = "",
     hyp_count: usize = 0,
     hypotheses: []const HypothesisDecl = &.{},
+
+    /// Whether `range` declares one of the binders.
+    pub fn declaresBinder(decl: Declaration, range: SourceRange) bool {
+        for ([_][]const BinderDecl{ decl.binders, decl.local_binders }) |binders| {
+            for (binders) |binder| {
+                const declared = binder.range orelse continue;
+                if (declared.eql(range)) return true;
+            }
+        }
+        return false;
+    }
+
+    /// Whether `range` declares the name of one of the hypotheses.
+    pub fn declaresHypothesis(decl: Declaration, range: SourceRange) bool {
+        for (decl.hypotheses) |hyp| {
+            const declared = hyp.name_range orelse continue;
+            if (declared.eql(range)) return true;
+        }
+        return false;
+    }
+
+    /// Whether `range` is the formula of one of the hypotheses.
+    pub fn statesHypothesis(decl: Declaration, range: SourceRange) bool {
+        for (decl.hypotheses) |hyp| {
+            if (hyp.range.eql(range)) return true;
+        }
+        return false;
+    }
 };

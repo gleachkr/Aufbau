@@ -30,8 +30,7 @@ const binderMarkdown = markdown.binderMarkdown;
 const NavigationSymbol = model.NavigationSymbol;
 const ProofBlockInfo = model.ProofBlockInfo;
 const ProofRuleDecl = model.ProofRuleDecl;
-const ProofLineDecl = model.ProofLineDecl;
-const ProofApplicationInfo = model.ProofApplicationInfo;
+const NameTable = model.NameTable;
 
 const NotationCompletionDecl = notation.NotationCompletionDecl;
 
@@ -53,7 +52,7 @@ const completionArgsFromArgs = support.completionArgsFromArgs;
 pub const Builder = struct {
     allocator: std.mem.Allocator,
     declarations: std.ArrayListUnmanaged(Declaration) = .empty,
-    decl_by_name: std.StringHashMapUnmanaged(usize) = .empty,
+    decl_by_name: NameTable = .{},
     symbols: std.ArrayListUnmanaged(NavigationSymbol) = .empty,
     mm0_outline: std.ArrayListUnmanaged(OutlineSymbol) = .empty,
     proof_outline: std.ArrayListUnmanaged(OutlineSymbol) = .empty,
@@ -61,13 +60,11 @@ pub const Builder = struct {
     proof_rules: std.ArrayListUnmanaged(ProofRuleDecl) = .empty,
     /// The latest of `proof_rules` with each name. Lemmas are indexed in
     /// source order, so it is the one a use further on resolves to.
-    proof_rule_by_name: std.StringHashMapUnmanaged(usize) = .empty,
-    proof_lines: std.ArrayListUnmanaged(ProofLineDecl) = .empty,
-    proof_applications: std.ArrayListUnmanaged(ProofApplicationInfo) = .empty,
+    proof_rule_by_name: NameTable = .{},
     notations: std.ArrayListUnmanaged(NotationCompletionDecl) = .empty,
     /// The `@hole` tokens of the sorts: math tokens no name may take.
     hole_tokens: std.ArrayListUnmanaged([]const u8) = .empty,
-    notation_by_token: std.StringHashMapUnmanaged(usize) = .empty,
+    notation_by_token: NameTable = .{},
     sort_var_by_token: std.StringHashMapUnmanaged(usize) = .empty,
     sort_names: std.ArrayListUnmanaged([]const u8) = .empty,
     left_delims: [256]bool = @splat(false),
@@ -97,18 +94,9 @@ pub const Builder = struct {
     pub const addTheoremBlockHeader = proof.addTheoremBlockHeader;
     pub const addLemmaBlockHeader = proof.addLemmaBlockHeader;
     pub const parseLemmaAssertion = proof.parseLemmaAssertion;
-    pub const addProofLine = proof.addProofLine;
-    pub const indexRuleApplication = proof.indexRuleApplication;
-    pub const indexArgBindings = proof.indexArgBindings;
-    pub const indexUnknownArgBindings = proof.indexUnknownArgBindings;
-    pub const addHypRef = proof.addHypRef;
-    pub const addLineRef = proof.addLineRef;
-    pub const resolveRule = proof.resolveRule;
-    pub const globalRuleResolution = proof.globalRuleResolution;
     pub const sortNameForId = proof.sortNameForId;
     pub const theoremDeclIndex = proof.theoremDeclIndex;
     pub const sortDeclIndex = proof.sortDeclIndex;
-    pub const resolveLine = proof.resolveLine;
 
     pub const collectMm0Notation = notation_builder.collectMm0Notation;
     pub const collectNotationStatement =
@@ -123,8 +111,6 @@ pub const Builder = struct {
     pub const indexMm0Math = math_builder.indexMm0Math;
     pub const declIndexForStatement = math_builder.declIndexForStatement;
     pub const indexLemmaHeaderMath = math_builder.indexLemmaHeaderMath;
-    pub const indexProofMathString = math_builder.indexProofMathString;
-    pub const indexRuleApplicationMath = math_builder.indexRuleApplicationMath;
     pub const indexMathString = math_builder.indexMathString;
     pub const indexMathStringIn = math_builder.indexMathStringIn;
 
@@ -160,12 +146,17 @@ pub const Builder = struct {
         try self.indexPendingAnnotations(.mm0);
     }
 
-    pub fn indexProof(self: *Builder, text: []const u8) !void {
+    pub fn indexProof(
+        self: *Builder,
+        text: []const u8,
+        known_bodies: ?proof_script.KnownBodies,
+    ) !void {
         self.proof_text = text;
         // Index leniently: a line whose rule application is half-typed is the
         // normal state of a file being edited, and the strict parser drops the
         // whole block over it.
         var parser = proof_script.Parser.initLenient(self.allocator, text);
+        parser.known_bodies = known_bodies;
         var items = std.ArrayListUnmanaged(proof_script.TopLevelItem).empty;
         while (true) {
             const next = parser.nextItem() catch |err| {
@@ -430,7 +421,7 @@ pub const Builder = struct {
 
     fn addGlobalDeclaration(self: *Builder, decl: Declaration) !usize {
         const index = try self.addDeclaration(decl);
-        try self.decl_by_name.put(self.allocator, decl.name, index);
+        try self.decl_by_name.put(self.allocator, decl.name, index, 0);
         return index;
     }
 
@@ -568,6 +559,30 @@ pub const Builder = struct {
             .target_range = targetRangeIfAvailable(decl, range.start),
             .markdown = decl.markdown,
         });
+    }
+
+    pub fn declaration(self: *const Builder, decl_index: usize) Declaration {
+        return self.declarations.items[decl_index];
+    }
+
+    pub fn declNamed(self: *const Builder, name: []const u8) ?usize {
+        return self.decl_by_name.get(name);
+    }
+
+    pub fn declWithNotation(self: *const Builder, token: []const u8) ?usize {
+        return self.notation_by_token.get(token);
+    }
+
+    pub fn sortVarDecl(self: *const Builder, token: []const u8) ?usize {
+        return self.sort_var_by_token.get(token);
+    }
+
+    pub fn mathTokens(self: *const Builder, math: []const u8) source.MathTokenCursor {
+        return .{
+            .src = math,
+            .left_delims = self.left_delims,
+            .right_delims = self.right_delims,
+        };
     }
 
     pub fn addSymbol(self: *Builder, symbol: NavigationSymbol) !void {
@@ -763,6 +778,11 @@ pub const Builder = struct {
             false,
             null,
         );
-        try self.decl_by_name.put(self.allocator, def.name, decl_index);
+        try self.decl_by_name.put(
+            self.allocator,
+            def.name,
+            decl_index,
+            self.proof_blocks.items.len,
+        );
     }
 };

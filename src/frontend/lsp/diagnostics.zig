@@ -272,6 +272,24 @@ pub fn sourceRangesToLocations(
     return try locations.toOwnedSlice(arena);
 }
 
+pub fn highlightsToLsp(
+    arena: std.mem.Allocator,
+    locator: RangeLocator,
+    highlights: []const LspIndex.Highlight,
+    encoding: lsp.offsets.Encoding,
+) ![]const types.DocumentHighlight {
+    var converter = RangeConverter{ .arena = arena, .encoding = encoding };
+    var result = std.ArrayListUnmanaged(types.DocumentHighlight).empty;
+    for (highlights) |highlight| {
+        const hit = locator.locate(highlight.range) orelse continue;
+        try result.append(arena, .{
+            .range = try converter.range(hit.text, hit.span),
+            .kind = if (highlight.declaration) .Write else .Read,
+        });
+    }
+    return result.items;
+}
+
 /// Completion items whose replacement range lies outside the requesting
 /// document (it never should) are dropped rather than mis-ranged.
 pub fn completionsToLsp(
@@ -394,7 +412,7 @@ fn declarationSymbolKind(kind: LspIndex.DeclarationKind) types.SymbolKind {
         .sort => .Class,
         .term, .def => .Function,
         .axiom, .theorem, .lemma => .Method,
-        .proof_line, .sort_var => .Variable,
+        .sort_var => .Variable,
     };
 }
 
