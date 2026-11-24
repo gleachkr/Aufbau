@@ -118,6 +118,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   file order. Highlights read only the file asked about: for a rule used
   45,000 times they took 31 s there and now take 0.2 s, and a rename took
   31 s and now takes 3.4 s.
+- Code actions and rule completions read only the proof under the cursor
+  to find what to act on, not the whole proof text. A code action in the
+  last file of a 126 MB library took 0.6 s after an edit and 0.3 s without
+  one, and now takes 0.3 s and 0.05 s.
 
 ### Fixed
 

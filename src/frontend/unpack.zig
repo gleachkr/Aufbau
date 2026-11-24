@@ -44,23 +44,10 @@ pub const UnpackSuggestion = struct {
     }
 };
 
-/// Parse-only pre-gate: does `offset` sit on a proof line that the full
-/// (compile-backed) unpack could apply to? Lets callers skip loading the
-/// sibling `.mm0` for the common no-target case.
-pub fn hasTargetAt(
-    allocator: std.mem.Allocator,
-    proof_src: []const u8,
-    offset: usize,
-) bool {
-    var arena = ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const target = findTarget(arena.allocator(), proof_src, offset) catch
-        return false;
-    return target != null;
-}
-
 /// Compute the unpack rewrite for the proof line at `offset`, or null when
 /// there is nothing to unpack there or the rewrite cannot be validated.
+/// `block` is the block touching `offset` (`ProofScript.blockTouching`);
+/// without a target in it, nothing is analyzed.
 /// The returned strings are owned by `allocator`. `work_allocator` backs the
 /// working memory, which the two analyses free theorem by theorem: a caller
 /// whose `allocator` is an arena (the LSP's per-request one) passes the
@@ -70,14 +57,14 @@ pub fn unpackAtSourceOffset(
     work_allocator: std.mem.Allocator,
     mm0_src: []const u8,
     proof_src: []const u8,
+    block: ProofBlock,
     offset: usize,
 ) std.mem.Allocator.Error!?UnpackSuggestion {
+    const line = findTarget(block, offset) orelse return null;
+
     var work_arena = ArenaAllocator.init(work_allocator);
     defer work_arena.deinit();
     const work = work_arena.allocator();
-
-    const target = (try findTarget(work, proof_src, offset)) orelse
-        return null;
 
     // Gate 1 + conclusion capture: the document as written must analyze
     // cleanly, with the sink recording every inline application's
@@ -96,15 +83,16 @@ pub fn unpackAtSourceOffset(
     const built = (try buildReplacement(
         work,
         proof_src,
-        target,
+        block,
+        line,
         &conclusions,
     )) orelse return null;
 
     // Gate 2: the rewritten document must analyze cleanly too.
     const spliced = try std.mem.concat(work, u8, &.{
-        proof_src[0..target.line.span.start],
+        proof_src[0..line.span.start],
         built.replacement,
-        proof_src[target.line.span.end..],
+        proof_src[line.span.end..],
     });
     if (!try analyzesCleanly(work_allocator, mm0_src, spliced, null)) return null;
 
@@ -120,31 +108,24 @@ pub fn unpackAtSourceOffset(
     return .{
         .title = title,
         .replacement = try allocator.dupe(u8, built.replacement),
-        .replace_span = target.line.span,
+        .replace_span = line.span,
     };
 }
 
-const Target = struct {
-    block: ProofBlock,
-    line: ProofLine,
-};
-
-fn findTarget(
-    allocator: std.mem.Allocator,
-    proof_src: []const u8,
-    offset: usize,
-) !?Target {
-    var parser = ProofScript.Parser.init(allocator, proof_src);
-    while (try parser.nextBlockRecovering()) |block| {
-        for (block.lines) |line| {
-            if (offset < line.span.start or offset > line.span.end) continue;
-            if (countInlineApplications(line.application) == 0) return null;
-            // A search placeholder or open goal anywhere in the line means
-            // the proof is still being written there; search actions and
-            // open-goal actions own that surface.
-            if (containsUnfinishedMarker(line.application)) return null;
-            return .{ .block = block, .line = line };
-        }
+/// The line of `block` at `offset` to unpack.
+fn findTarget(block: ProofBlock, offset: usize) ?ProofLine {
+    // A block with a broken line does not analyze cleanly.
+    for (block.lines) |line| {
+        if (line.incomplete) return null;
+    }
+    for (block.lines) |line| {
+        if (offset < line.span.start or offset > line.span.end) continue;
+        if (countInlineApplications(line.application) == 0) return null;
+        // A search placeholder or open goal anywhere in the line means
+        // the proof is still being written there; search actions and
+        // open-goal actions own that surface.
+        if (containsUnfinishedMarker(line.application)) return null;
+        return line;
     }
     return null;
 }
@@ -284,16 +265,16 @@ const Emitter = struct {
 fn buildReplacement(
     allocator: std.mem.Allocator,
     proof_src: []const u8,
-    target: Target,
+    block: ProofBlock,
+    line: ProofLine,
     conclusions: *const std.AutoHashMapUnmanaged(u128, []const u8),
 ) !?Built {
-    const line = target.line;
     var emitter = Emitter{
         .allocator = allocator,
         .proof_src = proof_src,
         .conclusions = conclusions,
         .indent = proof_src[line.span.start..line.label_span.start],
-        .labels = try .init(allocator, line.label, target.block.lines),
+        .labels = try .init(allocator, line.label, block.lines),
     };
 
     const top_text = (try emitter.renderApp(line.application)) orelse

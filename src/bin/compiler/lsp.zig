@@ -11,6 +11,7 @@ const LspIndex = mm0.Frontend.LspIndex;
 const Search = mm0.CompilerSupport.Search;
 const Unpack = mm0.CompilerSupport.Unpack;
 const Imports = mm0.Imports;
+const ProofBlock = mm0.ProofScript.ProofBlock;
 const lsp_diagnostics = @import("lsp_diagnostics");
 const DiagnosticContext = lsp_diagnostics.DiagnosticContext;
 const LocatedDiagnostic = lsp_diagnostics.LocatedDiagnostic;
@@ -608,6 +609,7 @@ fn applicableRuleCompletions(
     // list you get while typing a placeholder, which is exactly when the
     // reader is typing fastest.
     if (allSearchTactics(completions)) return completions;
+    const block = try snapshot.blockTouching(arena, offset) orelse return completions;
 
     var suggestions = Search.suggestionsAtSourceOffset(
         arena,
@@ -618,6 +620,7 @@ fn applicableRuleCompletions(
             .max_results = completions.len,
             .apply_at_offset = true,
             .work_allocator = work_allocator,
+            .block = block,
         },
     ) catch |err| switch (err) {
         error.OutOfMemory => return err,
@@ -1071,18 +1074,20 @@ pub const Handler = struct {
         ) orelse return null;
 
         var actions = std.ArrayListUnmanaged(CodeActionItem).empty;
-        if (try self.suggestionsForUnit(arena, nav, offset)) |suggestions| {
-            for (suggestions) |suggestion| {
-                const action = try self.searchCodeAction(
-                    arena,
-                    nav,
-                    suggestion,
-                ) orelse continue;
+        if (try nav.snapshot.blockTouching(arena, offset)) |block| {
+            if (try self.suggestionsForUnit(arena, nav, block, offset)) |suggestions| {
+                for (suggestions) |suggestion| {
+                    const action = try self.searchCodeAction(
+                        arena,
+                        nav,
+                        suggestion,
+                    ) orelse continue;
+                    try actions.append(arena, .{ .code_action = action });
+                }
+            }
+            if (try self.unpackCodeAction(arena, nav, block, offset)) |action| {
                 try actions.append(arena, .{ .code_action = action });
             }
-        }
-        if (try self.unpackCodeAction(arena, nav, offset)) |action| {
-            try actions.append(arena, .{ .code_action = action });
         }
         if (try self.fillHolesCodeAction(arena, nav, offset)) |action| {
             try actions.append(arena, .{ .code_action = action });
@@ -1092,23 +1097,22 @@ pub const Handler = struct {
     }
 
     /// Offer the `unpack` rewrite when the cursor sits on a checked proof
-    /// line containing inline rule applications. The parse-only `hasTargetAt`
-    /// gate keeps the common case (no inline application under the cursor)
-    /// free of the two compile passes the full rewrite performs.
+    /// line containing inline rule applications. The common case, no inline
+    /// application under the cursor, costs no analysis.
     fn unpackCodeAction(
         self: *Handler,
         arena: std.mem.Allocator,
         nav: NavigationSnapshot,
+        block: ProofBlock,
         offset: usize,
     ) !?types.CodeAction {
         const proof_side = nav.side();
-        const proof_text = proof_side.joined.text;
-        if (!Unpack.hasTargetAt(arena, proof_text, offset)) return null;
         const suggestion = Unpack.unpackAtSourceOffset(
             arena,
             self.allocator,
             nav.unit.mm0.joined.text,
-            proof_text,
+            proof_side.joined.text,
+            block,
             offset,
         ) catch |err| switch (err) {
             error.OutOfMemory => return err,
@@ -1250,6 +1254,7 @@ pub const Handler = struct {
         self: *Handler,
         arena: std.mem.Allocator,
         nav: NavigationSnapshot,
+        block: ProofBlock,
         offset: usize,
     ) !?[]const Search.SourceSuggestion {
         const proof_side = nav.side();
@@ -1277,6 +1282,7 @@ pub const Handler = struct {
                 .generate = .{ .enabled = true },
                 .status_detail = true,
                 .work_allocator = self.allocator,
+                .block = block,
             },
         ) catch |err| switch (err) {
             error.OutOfMemory => return err,

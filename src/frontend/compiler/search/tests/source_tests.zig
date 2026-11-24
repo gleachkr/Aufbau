@@ -84,6 +84,43 @@ test "source search records search counters" {
     try expectTimingCounter(counters.warm_search_ns);
 }
 
+test "a line takes the offset its newline ends at" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\term Q: wff;
+        \\axiom p: $ P $;
+        \\axiom q: $ Q $;
+        \\theorem t: $ P $;
+        \\theorem u: $ Q $;
+    ;
+    const t = "t\n----\nl1: $ P $ by auto?\n";
+    const u = "u\n----\nl1: $ Q $ by auto?\n";
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    for ([_]struct { offset: usize, target: ?usize }{
+        .{ .offset = t.len - 1, .target = 0 },
+        .{ .offset = t.len, .target = 0 },
+        .{ .offset = t.len + 1, .target = null },
+        .{ .offset = t.len + u.len, .target = t.len },
+    }) |case| {
+        const suggestions = try source.suggestionsAtSourceOffset(
+            allocator,
+            mm0_src,
+            t ++ u,
+            case.offset,
+            .{ .generate = .{ .enabled = true } },
+        );
+        const start: ?usize = if (case.target) |block| block + "t\n----\n".len else null;
+        try std.testing.expectEqual(
+            start,
+            if (suggestions.target_span) |span| span.start else null,
+        );
+    }
+}
+
 test "source suggestions can apply at an ordinary rule offset" {
     const mm0_src =
         \\delimiter $ ( ) $;

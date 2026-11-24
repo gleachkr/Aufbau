@@ -243,7 +243,29 @@ pub const ProofBlock = struct {
         full.known_body = null;
         return full;
     }
+
+    /// Whether `offset` is in the body or at its end. The end counts because
+    /// a line takes the offset its newline ends at, which is also where a
+    /// next block with no blank line before it starts. Two bodies have a
+    /// header between them, so no offset touches both.
+    pub fn bodyTouches(self: ProofBlock, offset: usize) bool {
+        return offset >= self.header_span.end and offset <= self.body_end;
+    }
 };
+
+/// The block of `src` whose body touches `offset`, parsed leniently: the
+/// one whose lines can take `offset`.
+pub fn blockTouching(
+    allocator: std.mem.Allocator,
+    src: []const u8,
+    offset: usize,
+) std.mem.Allocator.Error!?ProofBlock {
+    var parser = Parser.initLenient(allocator, src);
+    while (try parser.nextBlockRecovering()) |block| {
+        if (block.bodyTouches(offset)) return block;
+    }
+    return null;
+}
 
 /// Recognises the bodies of blocks parsed before, so that the parser can
 /// pass over them.

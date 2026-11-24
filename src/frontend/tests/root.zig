@@ -901,6 +901,26 @@ test "lenient parser terminates on a run of broken lines at eof" {
     try std.testing.expect((try parser.nextBlock()) == null);
 }
 
+test "a block's body touches the offset it ends at, but no header" {
+    // No blank line before `second`, so it starts where `first` ends.
+    const first = "first\n-----\nl1: $ a $ by ax\n";
+    const second = "second\n------\n";
+    const src = first ++ second ++ "l1: $ b $ by ax\n";
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for ([_]struct { offset: usize, name: ?[]const u8 }{
+        .{ .offset = 0, .name = null },
+        .{ .offset = first.len - 1, .name = "first" },
+        .{ .offset = first.len, .name = "first" },
+        .{ .offset = first.len + 1, .name = null },
+        .{ .offset = first.len + second.len, .name = "second" },
+        .{ .offset = src.len, .name = "second" },
+    }) |case| {
+        const block = try ProofScript.blockTouching(arena.allocator(), src, case.offset);
+        try std.testing.expectEqualDeep(case.name, if (block) |found| found.name else null);
+    }
+}
+
 test "strict parser still rejects a broken proof line" {
     const src =
         \\main

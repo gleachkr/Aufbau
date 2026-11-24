@@ -2,6 +2,7 @@ const std = @import("std");
 const Index = @import("index.zig");
 const CheckMemo = @import("../compiler/check_memo.zig").CheckMemo;
 const CompilerModule = @import("../compiler.zig");
+const proof_script = @import("../proof_script.zig");
 
 const Snapshot = Index.Snapshot;
 
@@ -3341,7 +3342,12 @@ test "a snapshot with known bodies answers as one that parsed them" {
     try compiler.analyze();
 
     const broken_text = proof_text ++ "l2: $ top $ by\n";
-    for ([_][]const u8{ proof_text, broken_text }, [_]bool{ true, false }) |text, whole| {
+    const close_text = try std.mem.replaceOwned(u8, allocator, proof_text, "\n\n", "\n");
+    defer allocator.free(close_text);
+    for (
+        [_][]const u8{ proof_text, close_text, broken_text },
+        [_]bool{ true, true, false },
+    ) |text, whole| {
         var input: Index.SnapshotInput = .{
             .mm0_uri = "file:///test.mm0",
             .mm0_text = mm0_text,
@@ -3363,6 +3369,14 @@ test "a snapshot with known bodies answers as one that parsed them" {
                 try parsed.hoverAt(.proof, offset),
                 try known.hoverAt(.proof, offset),
             );
+        }
+        for (0..text.len + 1) |offset| {
+            var arena_state = std.heap.ArenaAllocator.init(allocator);
+            defer arena_state.deinit();
+            const arena = arena_state.allocator();
+            const block = try proof_script.blockTouching(arena, text, offset);
+            try std.testing.expectEqualDeep(block, try parsed.blockTouching(arena, offset));
+            try std.testing.expectEqualDeep(block, try known.blockTouching(arena, offset));
         }
     }
 }

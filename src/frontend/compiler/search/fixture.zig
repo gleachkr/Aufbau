@@ -27,7 +27,7 @@ const LabelIndexMap = types.LabelIndexMap;
 
 /// A search target resolved from a proof source: the enclosing block plus the
 /// path to the specific line/inline application to search at. Consumed by
-/// `fixtureForSourceTarget`; produced by `source.findSearchLine`.
+/// `fixtureForSourceTarget`; produced by `findSearchLine`.
 pub const SourceTarget = struct {
     block: ProofScript.ProofBlock,
     line_index: usize,
@@ -52,8 +52,8 @@ pub fn fixtureForSourceTarget(
     // item by dropping it, so a broken statement earlier in the file
     // silences neither the analysis nor the search of a later theorem. It
     // checks no proof, so an unfinished one before the target is no trouble.
-    // Its proof stream is lenient like `findSearchLine`'s parse, so the
-    // target lemma's span matches.
+    // Its proof stream is lenient like the target's parse, so the target
+    // lemma's span matches.
     const point = try Analyze.analyzeToSearchPoint(
         &compiler,
         allocator,

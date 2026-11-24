@@ -731,4 +731,8 @@ pub const SourceSuggestionOptions = struct {
     /// LSP's per-request one) passes the allocator under it here, or the
     /// search's frees reclaim nothing until the request ends.
     work_allocator: ?std.mem.Allocator = null,
+    /// The block `ProofScript.blockTouching` finds at the requested offset
+    /// of the same proof source, for a caller that has it already; null
+    /// parses the source for it. Any other block gives wrong targets.
+    block: ?ProofScript.ProofBlock = null,
 };

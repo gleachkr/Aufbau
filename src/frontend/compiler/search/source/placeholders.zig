@@ -205,59 +205,39 @@ fn collectSearchPlaceholders(
     };
 }
 
+/// The marker the editor offers actions on, or with `apply_at_offset` the
+/// rule application, at `offset`. `block` is the block touching it
+/// (`ProofScript.blockTouching`), parsed leniently like every editor-facing
+/// parse: a broken sibling line must not cost a block its targets. Incomplete
+/// lines themselves have no rule application to target.
 pub fn findSearchLine(
     allocator: std.mem.Allocator,
-    proof_src: []const u8,
+    block: ProofScript.ProofBlock,
     offset: usize,
     apply_at_offset: bool,
 ) !?SourceTarget {
-    // Lenient, like every editor-facing parse of the proof source: a broken
-    // sibling line must not cost the block its search targets, nor a broken
-    // header the blocks after it. Incomplete lines themselves have no rule
-    // application to target.
-    var parser = ProofParser.initLenient(allocator, proof_src);
-    while (try parser.nextBlockRecovering()) |block| {
-        for (block.lines, 0..) |line, line_index| {
-            if (line.incomplete) continue;
-            if (apply_at_offset and spanContains(
-                line.application.rule_span,
-                offset,
-            )) {
-                return .{
-                    .block = block,
-                    .line_index = line_index,
-                    .path = &.{},
-                };
-            }
-            if (isActionMarker(line.application.rule_name)) {
-                const span = line.application.ruleApplicationSpan();
-                if (offset >= span.start and offset <= span.end) {
-                    return .{
-                        .block = block,
-                        .line_index = line_index,
-                        .path = &.{},
-                    };
-                }
-                if (offset >= line.span.start and offset <= line.span.end) {
-                    return .{
-                        .block = block,
-                        .line_index = line_index,
-                        .path = &.{},
-                    };
-                }
-            }
-            if (try findNestedSearchPath(
-                allocator,
-                line.application,
-                offset,
-                apply_at_offset,
-            )) |path| {
-                return .{
-                    .block = block,
-                    .line_index = line_index,
-                    .path = path,
-                };
-            }
+    for (block.lines, 0..) |line, line_index| {
+        if (line.incomplete) continue;
+        if ((apply_at_offset and spanContains(line.application.rule_span, offset)) or
+            (isActionMarker(line.application.rule_name) and spanContains(line.span, offset)))
+        {
+            return .{
+                .block = block,
+                .line_index = line_index,
+                .path = &.{},
+            };
+        }
+        if (try findNestedSearchPath(
+            allocator,
+            line.application,
+            offset,
+            apply_at_offset,
+        )) |path| {
+            return .{
+                .block = block,
+                .line_index = line_index,
+                .path = path,
+            };
         }
     }
     return null;

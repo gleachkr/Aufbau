@@ -100,14 +100,16 @@ pub fn suggestionsAtSourceOffset(
     defer work_state.deinit();
     const work = work_state.allocator();
 
+    const no_target: SourceSuggestions = .{ .allocator = allocator, .items = &.{} };
+    const found = options.block orelse
+        try ProofScript.blockTouching(work, proof_src, offset);
+    const block = found orelse return no_target;
     const target = try findSearchLine(
         work,
-        proof_src,
+        block,
         offset,
         options.apply_at_offset,
-    ) orelse {
-        return .{ .allocator = allocator, .items = &.{} };
-    };
+    ) orelse return no_target;
     var fixture = try fixtureForSourceTarget(
         work,
         mm0_src,

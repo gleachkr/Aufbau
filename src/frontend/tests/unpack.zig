@@ -1,6 +1,7 @@
 const std = @import("std");
 const mm0 = @import("mm0");
 
+const ProofScript = mm0.ProofScript;
 const Unpack = mm0.CompilerSupport.Unpack;
 
 const test_mm0 =
@@ -39,6 +40,33 @@ fn offsetOf(needle: []const u8) usize {
     return std.mem.indexOf(u8, test_auf, needle).?;
 }
 
+fn unpackAt(
+    work_allocator: std.mem.Allocator,
+    mm0_src: []const u8,
+    auf: []const u8,
+    offset: usize,
+) !?Unpack.UnpackSuggestion {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const block = try ProofScript.blockTouching(arena_state.allocator(), auf, offset);
+    return try Unpack.unpackAtSourceOffset(
+        std.testing.allocator,
+        work_allocator,
+        mm0_src,
+        auf,
+        block.?,
+        offset,
+    );
+}
+
+/// Expect no rewrite at `offset`, decided without analyzing the document.
+fn expectNoTarget(auf: []const u8, offset: usize) !void {
+    try std.testing.expectEqual(
+        @as(?Unpack.UnpackSuggestion, null),
+        try unpackAt(std.testing.failing_allocator, test_mm0, auf, offset),
+    );
+}
+
 fn expectUnpack(
     offset: usize,
     expected_title: []const u8,
@@ -46,13 +74,8 @@ fn expectUnpack(
     expected_replacement: []const u8,
 ) !void {
     const allocator = std.testing.allocator;
-    const suggestion = (try Unpack.unpackAtSourceOffset(
-        allocator,
-        allocator,
-        test_mm0,
-        test_auf,
-        offset,
-    )) orelse return error.ExpectedUnpackSuggestion;
+    const suggestion = (try unpackAt(allocator, test_mm0, test_auf, offset)) orelse
+        return error.ExpectedUnpackSuggestion;
     defer suggestion.deinit(allocator);
     try std.testing.expectEqualStrings(expected_title, suggestion.title);
     try std.testing.expectEqualStrings(
@@ -109,18 +132,7 @@ test "unpack preserves hypothesis refs and renders variable conclusions" {
 }
 
 test "unpack offers nothing on lines without inline applications" {
-    const allocator = std.testing.allocator;
-    const offset = offsetOf("l1_1: $ top $");
-    try std.testing.expectEqual(
-        @as(?Unpack.UnpackSuggestion, null),
-        try Unpack.unpackAtSourceOffset(allocator, allocator, test_mm0, test_auf, offset),
-    );
-    try std.testing.expect(
-        !Unpack.hasTargetAt(allocator, test_auf, offset),
-    );
-    try std.testing.expect(
-        Unpack.hasTargetAt(allocator, test_auf, offsetOf("by conj_i [conj_i")),
-    );
+    try expectNoTarget(test_auf, offsetOf("l1_1: $ top $"));
 }
 
 test "unpack targets a line after local def and notation items" {
@@ -144,14 +156,8 @@ test "unpack targets a line after local def and notation items" {
         \\
     ;
     const offset = std.mem.indexOf(u8, auf, "by conj_i [conj_i").?;
-    try std.testing.expect(Unpack.hasTargetAt(allocator, auf, offset));
-    const suggestion = (try Unpack.unpackAtSourceOffset(
-        allocator,
-        allocator,
-        test_mm0,
-        auf,
-        offset,
-    )) orelse return error.ExpectedUnpackSuggestion;
+    const suggestion = (try unpackAt(allocator, test_mm0, auf, offset)) orelse
+        return error.ExpectedUnpackSuggestion;
     defer suggestion.deinit(allocator);
     try std.testing.expectEqualStrings(
         "Unpack 4 inline applications",
@@ -170,19 +176,36 @@ test "unpack targets a line after local def and notation items" {
 }
 
 test "unpack offers nothing on a line containing a search placeholder" {
-    const allocator = std.testing.allocator;
     const auf =
         \\t1
         \\---
         \\l1: $ b -> top $ by weaken (b := $ b $) [auto?]
         \\
     ;
-    const offset = std.mem.indexOf(u8, auf, "by weaken").?;
-    try std.testing.expect(!Unpack.hasTargetAt(allocator, auf, offset));
-    try std.testing.expectEqual(
-        @as(?Unpack.UnpackSuggestion, null),
-        try Unpack.unpackAtSourceOffset(allocator, allocator, test_mm0, auf, offset),
-    );
+    try expectNoTarget(auf, std.mem.indexOf(u8, auf, "by weaken").?);
+}
+
+test "unpack offers nothing in a block with a line that does not parse" {
+    const auf =
+        \\t1
+        \\---
+        \\l0: $ top $ by
+        \\l1: $ b -> top $ by weaken (b := $ b $) [top_i []]
+        \\
+    ;
+    try expectNoTarget(auf, std.mem.indexOf(u8, auf, "by weaken").?);
+}
+
+test "unpack offers nothing on the offset shared with a line before it" {
+    // A line takes the offset its newline ends at.
+    const auf =
+        \\t1
+        \\---
+        \\l0: $ top $ by top_i []
+        \\l1: $ b -> top $ by weaken (b := $ b $) [top_i []]
+        \\
+    ;
+    try expectNoTarget(auf, std.mem.indexOf(u8, auf, "l1:").?);
 }
 
 test "unpack round-trips on a real fixture with rich notation" {
@@ -202,13 +225,8 @@ test "unpack round-trips on a real fixture with rich notation" {
     const marker = "by valid_mp [box_k []";
     const offset = std.mem.indexOf(u8, auf_src, marker) orelse
         return error.MissingFixtureMarker;
-    const suggestion = (try Unpack.unpackAtSourceOffset(
-        allocator,
-        allocator,
-        mm0_src,
-        auf_src,
-        offset,
-    )) orelse return error.ExpectedUnpackSuggestion;
+    const suggestion = (try unpackAt(allocator, mm0_src, auf_src, offset)) orelse
+        return error.ExpectedUnpackSuggestion;
     defer suggestion.deinit(allocator);
     try std.testing.expect(
         std.mem.indexOf(u8, suggestion.replacement, "by box_k") != null,
@@ -226,9 +244,12 @@ test "unpack offers nothing when the document does not analyze cleanly" {
         \\
     ;
     const offset = std.mem.indexOf(u8, auf, "by weaken").?;
-    try std.testing.expect(Unpack.hasTargetAt(allocator, auf, offset));
+    try std.testing.expectError(
+        error.OutOfMemory,
+        unpackAt(std.testing.failing_allocator, test_mm0, auf, offset),
+    );
     try std.testing.expectEqual(
         @as(?Unpack.UnpackSuggestion, null),
-        try Unpack.unpackAtSourceOffset(allocator, allocator, test_mm0, auf, offset),
+        try unpackAt(allocator, test_mm0, auf, offset),
     );
 }

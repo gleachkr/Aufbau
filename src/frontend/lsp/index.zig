@@ -35,6 +35,7 @@ const ProofRuleDecl = model.ProofRuleDecl;
 const ProofBody = model.ProofBody;
 const NameTable = model.NameTable;
 const NotationCompletionDecl = notation.NotationCompletionDecl;
+const ProofBlock = @import("../proof_script.zig").ProofBlock;
 const proofSpanRange = @import("builder_support.zig").proofSpanRange;
 
 const InferredHoleHover = struct {
@@ -363,6 +364,24 @@ pub const Snapshot = struct {
             }.order,
         );
         return if (after == 0) null else after - 1;
+    }
+
+    /// What `proof_script.blockTouching` finds in the proof text. Unlike
+    /// `blockWithBodyAt`, the body's end counts: a line takes the offset its
+    /// newline ends at.
+    pub fn blockTouching(
+        self: *const Snapshot,
+        allocator: std.mem.Allocator,
+        offset: usize,
+    ) std.mem.Allocator.Error!?ProofBlock {
+        // A body that ends at `offset` can belong to the block before the
+        // one that starts there.
+        const near = self.proofBlockNear(offset) orelse return null;
+        for (self.proof_blocks[near -| 1 .. near + 1]) |info| {
+            if (!info.source.bodyTouches(offset)) continue;
+            return try info.source.withLines(allocator, self.proof_text.?);
+        }
+        return null;
     }
 
     /// The index of a block's body, valid until another block's is asked
