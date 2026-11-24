@@ -5,6 +5,9 @@ const source = helpers.source;
 const acui = helpers.acui;
 const ExprId = helpers.ExprId;
 const Canonicalizer = @import("../../../normalizer.zig").Canonicalizer;
+const Analyze = @import("../../pipeline/analyze.zig");
+const CompilerContext = @import("../../context.zig").CompilerContext;
+const DiagnosticSink = @import("../../diagnostic_sink.zig").DiagnosticSink;
 const TheoremContext = helpers.TheoremContext;
 const Check = helpers.Check;
 const apply = helpers.apply;
@@ -341,8 +344,7 @@ test "source suggestions are blocked by a line the checker rejects" {
 }
 
 // Same story one block earlier: a local lemma before the target holds the
-// broken line. The lenient proof stream and the placeholder-tolerant fixture
-// compiler keep the fixture build alive.
+// broken line. The lenient proof stream keeps the fixture build alive.
 test "source suggestions survive a broken line in a preceding local lemma" {
     const mm0_src =
         \\delimiter $ ( ) $;
@@ -837,6 +839,46 @@ test "source search survives broken statements before the target" {
     // The dropped declarations left no rule behind for the search to cite.
     try std.testing.expect(suggestionStartingWith(suggestions.items, "dup") == null);
     try std.testing.expect(suggestionStartingWith(suggestions.items, "wrong") == null);
+}
+
+// Whatever they prove, the lemma and the theorem before the target are in
+// scope, so the walk leaves both proofs unchecked: neither failure is
+// reported.
+test "the walk to a search point checks no proof before it" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\term Q: wff;
+        \\axiom p: $ P $;
+        \\theorem s: $ Q $;
+        \\theorem t: $ Q $;
+    ;
+    const proof_src =
+        \\lemma wrong: $ Q $
+        \\------------------
+        \\l1: $ Q $ by p
+        \\
+        \\s
+        \\----
+        \\l1: $ Q $ by p
+        \\
+        \\t
+        \\----
+        \\l1: $ Q $ by exact?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var sink = DiagnosticSink.init(mm0_src, proof_src);
+    var compiler = CompilerContext.init(mm0_src, proof_src, .none, &sink);
+    const point = try Analyze.analyzeToSearchPoint(
+        &compiler,
+        arena.allocator(),
+        .{ .theorem = "t" },
+    );
+    try std.testing.expectEqual(@as(usize, 0), sink.primaryDiagnostics().len);
+    try std.testing.expect(point.theory.env.getRuleId("wrong") != null);
+    try std.testing.expect(point.theory.env.getRuleId("s") != null);
 }
 
 // The target itself must be intact: a theorem that names a declaration the

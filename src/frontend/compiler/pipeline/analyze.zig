@@ -81,7 +81,7 @@ const AnalysisState = struct {
     proof: ?ProofAnalysisState = null,
     last_stmt: ?MM0Stmt = null,
     /// Set by `analyzeToSearchPoint`: the walk ends there, and leaves the
-    /// public theorem proofs before it unchecked.
+    /// proofs before it unchecked.
     stop: ?SearchStop = null,
     reached: ?AssertionStmt = null,
 
@@ -134,11 +134,12 @@ pub const SearchPoint = struct {
 };
 
 /// The analysis walk up to `stop`, recovering from broken statements and
-/// local items the same way, but leaving the theorem proofs before `stop`
-/// unchecked: the theory a search at `stop` runs in, and the target's
-/// assertion. Fails with `MissingTheorem` or `MissingProofBlock` when the
-/// walk never reaches `stop`, and with `UnavailableDependency` when the
-/// target theorem names a declaration the walk dropped.
+/// local items the same way, but leaving the proofs before `stop` unchecked:
+/// a theorem or lemma is in scope whatever its proof did. Gives the theory a
+/// search at `stop` runs in, and the target's assertion. Fails with
+/// `MissingTheorem` or `MissingProofBlock` when the walk never reaches
+/// `stop`, and with `UnavailableDependency` when the target theorem names a
+/// declaration the walk dropped.
 pub fn analyzeToSearchPoint(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
@@ -482,7 +483,7 @@ fn analyzeLocalProofItem(
     switch (item) {
         .block => |block| {
             try stopAtLemma(self, allocator, state, block);
-            try analyzeLocalProofBlock(self, allocator, &state.theory, proof, block);
+            try analyzeLocalProofBlock(self, allocator, state, proof, block);
         },
         .def => |def| try analyzeLocalDefItem(
             self,
@@ -540,10 +541,11 @@ fn analyzeLocalNotationItem(
 fn analyzeLocalProofBlock(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
-    theory: *TheoryState,
+    state: *AnalysisState,
     proof: *ProofAnalysisState,
     block: TheoremBlock,
 ) !void {
+    const theory = &state.theory;
     const warnings = WarningSnapshot.capture(self);
     const assertion = Common.parseLemmaAssertion(
         self,
@@ -554,18 +556,20 @@ fn analyzeLocalProofBlock(
         warnings.restore(self);
         return dropLocalProofBlock(self, proof, block, err);
     };
-    analyzeBlock(self, allocator, theory, assertion, block) catch |err| {
-        recordPrimaryProofFailure(
-            self,
-            &proof.invalid_rules,
-            CompilerDiag.theoremDiagnostic(
-                assertion.name,
-                block.header_span,
-                .proof,
-                CompilerDiag.narrowDiagnosticError(err),
-            ),
-        );
-    };
+    if (state.stop == null) {
+        analyzeBlock(self, allocator, theory, assertion, block) catch |err| {
+            recordPrimaryProofFailure(
+                self,
+                &proof.invalid_rules,
+                CompilerDiag.theoremDiagnostic(
+                    assertion.name,
+                    block.header_span,
+                    .proof,
+                    CompilerDiag.narrowDiagnosticError(err),
+                ),
+            );
+        };
+    }
     const snapshot = try AssertionRecoverySnapshot.capture(
         allocator,
         theory,
@@ -815,7 +819,7 @@ fn analyzeAssertionStatement(
             const theorem_warnings = try analyzeTheoremProof(
                 self,
                 allocator,
-                &state.theory,
+                state,
                 proof,
                 assertion,
             );
@@ -916,10 +920,11 @@ fn markAssertionInvalid(
 fn analyzeTheoremProof(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
-    theory: *TheoryState,
+    state: *AnalysisState,
     proof: *ProofAnalysisState,
     assertion: AssertionStmt,
 ) !WarningSnapshot {
+    const theory = &state.theory;
     const theorem_name_span = CompilerDiag.mathSpanToSpan(assertion.name_span);
     if (proof.stream_aborted) {
         return WarningSnapshot.capture(self);
@@ -1016,7 +1021,7 @@ fn analyzeTheoremProof(
             },
             .block => |block| {
                 if (block.kind == .lemma) {
-                    try analyzeLocalProofBlock(self, allocator, theory, proof, block);
+                    try analyzeLocalProofBlock(self, allocator, state, proof, block);
                     continue;
                 }
 

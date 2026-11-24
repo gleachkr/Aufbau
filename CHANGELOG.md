@@ -105,6 +105,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   proof file through for `include` when none is written, and no longer
   parses or sets up a proof whose result it already has. A keystroke in
   the last file of a 126 MB library took 0.75 s and now takes 0.24 s.
+- A rule completion, or the code action on `?`, `auto?`, `exact?` or
+  `conversion?`, no longer checks the lemmas before the cursor again. A
+  rule completion in the last file of a 126 MB library took 25 s after an
+  edit and 21 s without one, and now takes 4.3 s and 0.8 s.
 
 ### Fixed
 

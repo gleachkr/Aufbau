@@ -595,8 +595,8 @@ between trusted parser trees and frontend proof elaboration.
 The drivers maintain the parser, frontend environment, and metadata
 registries. A search prepares its theory with the analysis walk itself:
 `analyzeToSearchPoint` runs it up to the target theorem's statement or the
-target lemma's block, skipping the theorem proofs before it unchecked and
-keeping every declared theorem in scope (`compiler/search/fixture.zig`
+target lemma's block, skipping the proofs before it unchecked and keeping
+every declared theorem and lemma in scope (`compiler/search/fixture.zig`
 calls it). A loop chooses only its error policy and whether to check
 proofs; what a statement step *is* lives in `common.zig` once.
 

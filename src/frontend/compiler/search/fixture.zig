@@ -48,15 +48,12 @@ pub fn fixtureForSourceTarget(
 ) !Fixture {
     var sink = DiagnosticSink.init(mm0_src, proof_src);
     var compiler = CompilerContext.init(mm0_src, proof_src, .none, &sink);
-    // A local lemma before the target may itself hold a placeholder or a
-    // half-typed line; tolerate both the way the LSP analysis does, so the
-    // target's search survives an unfinished sibling.
-    compiler.allow_search_placeholders = true;
     // The analysis walk, which recovers from a broken statement or local
     // item by dropping it, so a broken statement earlier in the file
-    // silences neither the analysis nor the search of a later theorem. Its
-    // proof stream is lenient like `findSearchLine`'s parse, so the target
-    // lemma's span matches.
+    // silences neither the analysis nor the search of a later theorem. It
+    // checks no proof, so an unfinished one before the target is no trouble.
+    // Its proof stream is lenient like `findSearchLine`'s parse, so the
+    // target lemma's span matches.
     const point = try Analyze.analyzeToSearchPoint(
         &compiler,
         allocator,
