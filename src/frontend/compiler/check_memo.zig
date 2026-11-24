@@ -196,13 +196,15 @@ pub const CheckMemo = struct {
         self.feed(.config, &.{@intFromBool(ctx.allow_search_placeholders)});
     }
 
-    pub fn endRun(self: *CheckMemo) void {
+    /// End the run. Only a run that `walked` its whole unit drops what it
+    /// did not use: one stopped early keeps every entry, its own included.
+    pub fn endRun(self: *CheckMemo, walked: bool) void {
         // A run that left the memo inactive used nothing of it, and drops
         // nothing.
         const used_memo = self.active;
         self.active = false;
         self.recording = false;
-        if (used_memo) self.dropUnused();
+        if (used_memo and walked) self.dropUnused();
     }
 
     /// Hash `bytes` into the running fingerprint. The domain tag and the

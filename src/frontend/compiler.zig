@@ -20,6 +20,7 @@ pub const InlineConclusionSink = Context.InlineConclusionSink;
 pub const StatementSink = @import("./statement_sink.zig").StatementSink;
 pub const UnknownValueSink = Context.UnknownValueSink;
 pub const CheckMemo = @import("./compiler/check_memo.zig").CheckMemo;
+pub const AnalysisInterrupt = Context.AnalysisInterrupt;
 
 pub const Compiler = struct {
     pub const InferenceStatsSink = Context.InferenceStatsSink;
@@ -43,6 +44,9 @@ pub const Compiler = struct {
     work_budget: ?ExprModule.WorkBudget = null,
     /// Memo of proof-block check outcomes across analyses (editor hosts).
     check_memo: ?*CheckMemo = null,
+    /// Lets an editor host stop an analysis whose result it no longer
+    /// wants (`AnalysisInterrupt`).
+    interrupt: ?AnalysisInterrupt = null,
 
     const PipelineOutput = Pipeline.Output;
 
@@ -267,6 +271,7 @@ pub const Compiler = struct {
         result.inference_stats_sink = self.inference_stats_sink;
         result.work_budget = self.work_budget;
         result.check_memo = self.check_memo;
+        result.interrupt = self.interrupt;
         return result;
     }
 };

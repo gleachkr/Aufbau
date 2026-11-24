@@ -1376,11 +1376,20 @@ needs none, being keyed by content.
 builder uses lenient proof parsing rather than requiring a successful proof.
 The handler translates byte spans through the negotiated LSP offset encoding.
 
-The native entry uses `lsp_kit`. The freestanding WASM entry reuses the
-handler with the compatibility transport. `web/packages/lsp/` offers a
-directly called server and a browser Web Worker transport. Requests execute
-synchronously inside the worker: the page remains responsive, but an
-in-flight search is not interrupted by a queued cancellation message.
+The native entry uses `lsp_kit`'s server loop over
+`src/bin/compiler/lsp_input.zig`, which reads stdin ahead into a queue. An
+edit only marks its unit pending (`Handler.pending`); the analysis runs once
+nothing is queued, or when a request reads the unit. A running analysis asks
+the queue, after each statement whose proof it had to check, whether to
+stop: between messages it stops for a newer edit, and for a request only
+once the client cancels that request. A stopped run publishes nothing and
+drops no memo entry. A request whose `$/cancelRequest` is already queued is
+answered `RequestCancelled` without running. The freestanding WASM entry
+reuses the handler with the compatibility transport and analyses each edit
+at once. `web/packages/lsp/` offers a directly called server and a browser
+Web Worker transport. Requests execute synchronously inside the worker: the
+page remains responsive, but an in-flight search is not interrupted by a
+queued cancellation message.
 
 The compiler, verifier, and direct LSP packages share one hosting module,
 `web/packages/shared/host.js`, which `build.zig` copies into each package as

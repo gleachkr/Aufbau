@@ -3891,3 +3891,135 @@ test "LSP reports a missing nested include" {
     try std.testing.expect(publishedEmpty(&transport_state, lib_uri));
     try std.testing.expect(publishedEmpty(&transport_state, proof_uri));
 }
+
+const Input = @import("../lsp_input.zig").Input;
+
+const queued_mm0_text =
+    \\provable sort wff;
+    \\term top: wff;
+    \\axiom top_i: $ top $;
+    \\theorem first: $ top $;
+    \\theorem second: $ top $;
+;
+
+fn queuedProofText(comptime second_rule: []const u8) []const u8 {
+    return "first\n-----\n\nl1: $ top $ by top_i []\n\n" ++
+        "second\n------\n\nl1: $ top $ by " ++ second_rule ++ " []\n";
+}
+
+/// Write `message` to `pipe` framed as the client would.
+fn sendQueued(
+    arena: std.mem.Allocator,
+    pipe: std.Io.File,
+    message: anytype,
+) !void {
+    const json = try std.json.Stringify.valueAlloc(arena, message, .{});
+    const framed = try std.fmt.allocPrint(
+        arena,
+        "Content-Length: {d}\r\n\r\n{s}",
+        .{ json.len, json },
+    );
+    try pipe.writeStreamingAll(std.testing.io, framed);
+}
+
+fn didChangeWhole(uri: []const u8, version: i32, text: []const u8) struct {
+    jsonrpc: []const u8 = "2.0",
+    method: []const u8 = "textDocument/didChange",
+    params: struct {
+        textDocument: struct { uri: []const u8, version: i32 },
+        contentChanges: [1]struct { text: []const u8 },
+    },
+} {
+    return .{ .params = .{
+        .textDocument = .{ .uri = uri, .version = version },
+        .contentChanges = .{.{ .text = text }},
+    } };
+}
+
+test "LSP over stdio analyses queued edits once and answers a cancelled request" {
+    const io = std.testing.io;
+    const mm0_uri = "file:///tmp/lsp-queue/main.mm0";
+    const proof_uri = "file:///tmp/lsp-queue/main.auf";
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const out = try tmp.dir.createFile(io, "out", .{ .read = true });
+    defer out.close(io);
+    const fds = try std.Io.Threaded.pipe2(.{});
+    const read_end: std.Io.File = .{ .handle = fds[0], .flags = .{ .nonblocking = false } };
+    const write_end: std.Io.File = .{ .handle = fds[1], .flags = .{ .nonblocking = false } };
+    defer read_end.close(io);
+    // Open until the server is done: a closed pipe would read as the client
+    // gone, which stops every analysis.
+    defer write_end.close(io);
+
+    // Everything is waiting before the server reads its first message, so
+    // each analysis it starts between messages is stopped by the edits
+    // queued behind it, and only the request at the end brings the
+    // diagnostics up to date.
+    const open = "textDocument/didOpen";
+    try sendQueued(arena, write_end, .{ .jsonrpc = "2.0", .method = open, .params = .{
+        .textDocument = .{ .uri = mm0_uri, .languageId = "metamath_zero", .version = 1, .text = queued_mm0_text },
+    } });
+    try sendQueued(arena, write_end, .{ .jsonrpc = "2.0", .method = open, .params = .{
+        .textDocument = .{ .uri = proof_uri, .languageId = "aufbau", .version = 1, .text = queuedProofText("top_i") },
+    } });
+    try sendQueued(arena, write_end, didChangeWhole(proof_uri, 2, queuedProofText("nope")));
+    try sendQueued(arena, write_end, didChangeWhole(proof_uri, 3, queuedProofText("top_i")));
+    const position = .{ .line = 3, .character = 16 };
+    try sendQueued(arena, write_end, .{ .jsonrpc = "2.0", .id = 1, .method = "textDocument/hover", .params = .{
+        .textDocument = .{ .uri = proof_uri },
+        .position = position,
+    } });
+    try sendQueued(arena, write_end, .{ .jsonrpc = "2.0", .method = "$/cancelRequest", .params = .{ .id = 1 } });
+    try sendQueued(arena, write_end, .{ .jsonrpc = "2.0", .id = 2, .method = "textDocument/documentSymbol", .params = .{
+        .textDocument = .{ .uri = proof_uri },
+    } });
+    try sendQueued(arena, write_end, .{ .jsonrpc = "2.0", .id = 3, .method = "shutdown" });
+    try sendQueued(arena, write_end, .{ .jsonrpc = "2.0", .method = "exit" });
+
+    var read_buffer: [4096]u8 = undefined;
+    var input = Input.init(std.testing.allocator, io, &read_buffer, read_end, out);
+    defer input.deinit();
+    var handler = Handler.init(std.testing.allocator, io, &input.transport);
+    defer handler.deinit();
+    input.attach(&handler);
+    try lsp.basic_server.run(io, std.testing.allocator, &input.transport, &handler, null);
+
+    const written = try tmp.dir.readFileAlloc(io, "out", arena, .unlimited);
+    var proof_versions = std.ArrayListUnmanaged(i64).empty;
+    var hover_cancelled = false;
+    var symbols_answered = false;
+    var rest = written;
+    while (std.mem.indexOf(u8, rest, "\r\n\r\n")) |header_end| {
+        const header = rest[0..header_end];
+        const length = try std.fmt.parseInt(usize, std.mem.trim(u8, header["Content-Length:".len..], " "), 10);
+        const body = rest[header_end + 4 ..][0..length];
+        rest = rest[header_end + 4 + length ..];
+        const message = try std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{});
+        const object = message.object;
+        if (object.get("method")) |method| {
+            if (!std.mem.eql(u8, method.string, "textDocument/publishDiagnostics")) continue;
+            const params = object.get("params").?.object;
+            if (!std.mem.eql(u8, params.get("uri").?.string, proof_uri)) continue;
+            try proof_versions.append(arena, params.get("version").?.integer);
+            try std.testing.expectEqual(@as(usize, 0), params.get("diagnostics").?.array.items.len);
+            continue;
+        }
+        const id = object.get("id").?.integer;
+        if (id == 1) {
+            const code = object.get("error").?.object.get("code").?.integer;
+            try std.testing.expectEqual(@as(i64, -32800), code);
+            hover_cancelled = true;
+        }
+        if (id == 2) symbols_answered = object.get("result") != null;
+    }
+    // Neither the opened text nor the broken edit was published: their
+    // analyses were stopped, and the request analysed the latest text.
+    try std.testing.expectEqualSlices(i64, &.{3}, proof_versions.items);
+    try std.testing.expect(hover_cancelled);
+    try std.testing.expect(symbols_answered);
+}

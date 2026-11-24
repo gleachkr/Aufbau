@@ -3,6 +3,7 @@ const build_options = @import("build_options");
 const std = @import("std");
 const lsp = @import("lsp");
 const mm0 = @import("mm0");
+const Input = @import("./lsp_input.zig").Input;
 const ArenaAllocator = mm0.ArenaAllocator;
 
 const types = lsp.types.flat;
@@ -668,6 +669,14 @@ pub const Handler = struct {
     /// runs, so an edit re-checks only what it can affect. It keeps what
     /// each root's last analysis used.
     check_memo: mm0.CheckMemo,
+    /// The documents whose diagnostics are out of date, by the URI whose
+    /// analysis covers them, in the order they changed (owned).
+    pending: std.StringArrayHashMapUnmanaged(void),
+    /// Set by the native server (`lsp_input.zig`): a changed document is
+    /// analysed once no input is waiting, and the analysis stops when this
+    /// says its result is no longer wanted. Null analyses each change as it
+    /// arrives (the browser host, tests).
+    interrupt: ?mm0.AnalysisInterrupt,
     offset_encoding: lsp.offsets.Encoding,
     snippet_support: bool,
     /// Whether the client opens a document at a selection on request
@@ -692,6 +701,8 @@ pub const Handler = struct {
             .units = .empty,
             .analysis_holes = .empty,
             .check_memo = mm0.CheckMemo.init(allocator),
+            .pending = .empty,
+            .interrupt = null,
             .offset_encoding = .@"utf-16",
             .snippet_support = false,
             .show_document_support = false,
@@ -738,6 +749,8 @@ pub const Handler = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.analysis_holes.deinit(self.allocator);
+        for (self.pending.keys()) |uri| self.allocator.free(uri);
+        self.pending.deinit(self.allocator);
         self.check_memo.deinit();
         self.* = undefined;
     }
@@ -863,8 +876,8 @@ pub const Handler = struct {
             params.textDocument.version,
         );
         self.invalidateCachesForUri(arena, params.textDocument.uri);
-        try self.analyzeUri(arena, params.textDocument.uri);
-        try self.analyzeDependents(arena, params.textDocument.uri);
+        try self.analyzeSoon(arena, params.textDocument.uri);
+        try self.analyzeDependentsSoon(arena, params.textDocument.uri);
     }
 
     pub fn @"textDocument/didChange"(
@@ -905,8 +918,8 @@ pub const Handler = struct {
         doc.version = params.textDocument.version;
 
         self.invalidateCachesForUri(arena, params.textDocument.uri);
-        try self.analyzeUri(arena, params.textDocument.uri);
-        try self.analyzeDependents(arena, params.textDocument.uri);
+        try self.analyzeSoon(arena, params.textDocument.uri);
+        try self.analyzeDependentsSoon(arena, params.textDocument.uri);
     }
 
     pub fn @"textDocument/didClose"(
@@ -916,6 +929,7 @@ pub const Handler = struct {
     ) !void {
         const uri = params.textDocument.uri;
         self.invalidateCachesForUri(arena, uri);
+        self.dropPending(uri);
         try self.removeDocument(uri);
         try self.clearDiagnostics(arena, uri, null);
         try self.forgetUnit(arena, uri);
@@ -925,13 +939,13 @@ pub const Handler = struct {
                 .mm0 => if (siblingPathForMm0(arena, path)) |proof_path| {
                     const proof_uri = try pathToUri(arena, proof_path);
                     if (self.docs.contains(proof_uri)) {
-                        try self.analyzeUri(arena, proof_uri);
+                        try self.analyzeSoon(arena, proof_uri);
                     }
                 } else |_| {},
                 .proof => if (siblingPathForProof(arena, path)) |mm0_path| {
                     const mm0_uri = try pathToUri(arena, mm0_path);
                     if (self.docs.contains(mm0_uri)) {
-                        try self.analyzeUri(arena, mm0_uri);
+                        try self.analyzeSoon(arena, mm0_uri);
                     } else {
                         try self.clearDiagnostics(arena, mm0_uri, null);
                     }
@@ -942,7 +956,7 @@ pub const Handler = struct {
 
         // The file may still exist on disk, so roots that import or include
         // it re-analyse against that copy.
-        try self.analyzeDependents(arena, uri);
+        try self.analyzeDependentsSoon(arena, uri);
     }
 
     pub fn @"textDocument/hover"(
@@ -1290,7 +1304,7 @@ pub const Handler = struct {
             else
                 suggestions.status_detail orelse "",
         );
-        try self.analyzeUri(arena, proof_uri);
+        try self.analyzeSoon(arena, proof_uri);
         return stored;
     }
 
@@ -1781,17 +1795,115 @@ pub const Handler = struct {
 
     /// Re-analyse every open root whose last analysis read `uri` (as an
     /// import, an include, or a paired proof file of an import).
-    fn analyzeDependents(
+    fn analyzeDependentsSoon(
         self: *Handler,
         arena: std.mem.Allocator,
         uri: []const u8,
     ) !void {
+        // `uri`'s own analysis is marked by its caller.
+        const own = try self.analysisUri(arena, uri);
         const roots = try self.dependentRoots(arena, uri);
         for (roots) |root| {
-            if (std.mem.eql(u8, root, uri)) continue;
             if (!self.docs.contains(root)) continue;
-            try self.analyzeUri(arena, root);
+            if (std.mem.eql(u8, try self.analysisUri(arena, root), own)) continue;
+            try self.analyzeSoon(arena, root);
         }
+    }
+
+    /// Mark `uri`'s diagnostics out of date. Without an interrupt they are
+    /// brought up to date at once; with one, when no input is waiting
+    /// (`lsp_input.zig`) or a request reads the unit.
+    fn analyzeSoon(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        uri: []const u8,
+    ) !void {
+        const key = try self.analysisUri(arena, uri);
+        if (!self.pending.contains(key)) {
+            const owned = try self.allocator.dupe(u8, key);
+            errdefer self.allocator.free(owned);
+            try self.pending.put(self.allocator, owned, {});
+        }
+        // A proof file's analysis covers its `.mm0`.
+        if (try self.siblingMm0Uri(arena, key)) |mm0_uri| self.dropPending(mm0_uri);
+        if (self.interrupt == null) try self.analyzePending();
+    }
+
+    /// The URI whose analysis covers `uri`: a `.mm0` whose proof file is
+    /// open is analysed through it (`analyzeMm0Document`).
+    fn analysisUri(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        uri: []const u8,
+    ) ![]const u8 {
+        const path = uriToPath(arena, uri) catch return uri;
+        if (documentKind(path) != .mm0) return uri;
+        const proof_path = siblingPathForMm0(arena, path) catch return uri;
+        const proof_uri = try pathToUri(arena, proof_path);
+        return if (self.docs.contains(proof_uri)) proof_uri else uri;
+    }
+
+    /// The `.mm0` beside proof file `uri`; null for any other document.
+    fn siblingMm0Uri(
+        _: *Handler,
+        arena: std.mem.Allocator,
+        uri: []const u8,
+    ) !?[]const u8 {
+        const path = uriToPath(arena, uri) catch return null;
+        if (documentKind(path) != .proof) return null;
+        const mm0_path = siblingPathForProof(arena, path) catch return null;
+        return try pathToUri(arena, mm0_path);
+    }
+
+    pub fn hasPendingAnalysis(self: *const Handler) bool {
+        return self.pending.count() != 0;
+    }
+
+    /// Analyse the pending documents in the order they changed. One the
+    /// interrupt stops stays pending, with those after it.
+    pub fn analyzePending(self: *Handler) !void {
+        while (self.pending.count() != 0) try self.analyzePendingAt(0);
+    }
+
+    /// Bring the unit a request reads up to date first. A request the
+    /// client cancels meanwhile is answered as cancelled.
+    fn analyzePendingFor(self: *Handler, docs: RootDocuments) !void {
+        const uris = [_]?[]const u8{
+            docs.mm0.uri,
+            if (docs.proof) |proof| proof.uri else null,
+        };
+        for (uris) |maybe_uri| {
+            const uri = maybe_uri orelse continue;
+            const index = self.pending.getIndex(uri) orelse continue;
+            self.analyzePendingAt(index) catch |err| return switch (err) {
+                error.AnalysisInterrupted => error.RequestCancelled,
+                else => err,
+            };
+        }
+    }
+
+    fn analyzePendingAt(self: *Handler, index: usize) !void {
+        var arena_state = ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const uri = self.pending.keys()[index];
+        const analyzed = self.analyzeUri(arena_state.allocator(), uri);
+        if (analyzed) |_| {} else |err| {
+            if (err == error.AnalysisInterrupted) return err;
+        }
+        self.pending.orderedRemoveAt(index);
+        self.allocator.free(uri);
+        return analyzed;
+    }
+
+    fn dropPending(self: *Handler, uri: []const u8) void {
+        const removed = self.pending.fetchOrderedRemove(uri) orelse return;
+        self.allocator.free(removed.key);
+    }
+
+    /// Whether the client cancelled the request being answered.
+    fn requestCancelled(self: *Handler) bool {
+        const interrupt = self.interrupt orelse return false;
+        return interrupt.stopRequested();
     }
 
     fn analyzeMm0Document(
@@ -1955,7 +2067,13 @@ pub const Handler = struct {
         defer if (holes_owned) holes.deinit();
         compiler.hole_inference_sink = &holes;
         compiler.check_memo = self.checkMemoFor(mm0_loaded.uri);
+        compiler.interrupt = self.interrupt;
         const analyzed = compiler.analyze();
+        // A stopped analysis saw part of the unit: what it found is neither
+        // published nor kept.
+        if (analyzed) |_| {} else |err| {
+            if (err == error.AnalysisInterrupted) return err;
+        }
         holes_owned = false;
         try self.keepAnalysisHoles(mm0_loaded.uri, states, holes);
         analyzed catch |err| {
@@ -2598,6 +2716,7 @@ pub const Handler = struct {
         request_uri: []const u8,
         docs: RootDocuments,
     ) !?NavigationSnapshot {
+        try self.analyzePendingFor(docs);
         var unit_arena = ArenaAllocator.init(self.allocator);
         var keep_arena = false;
         defer if (!keep_arena) unit_arena.deinit();
@@ -2646,6 +2765,7 @@ pub const Handler = struct {
             break :blk self.nav_cache.getPtr(owned_uri).?;
         };
 
+        if (self.requestCancelled()) return error.RequestCancelled;
         const found = entry.unit.find(request_uri) orelse return null;
         return .{
             .snapshot = &entry.snapshot,
@@ -2836,20 +2956,17 @@ pub const DocumentKind = enum {
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     var read_buffer: [4096]u8 = undefined;
-    var stdio_transport = lsp.Transport.Stdio.init(
-        &read_buffer,
-        .stdin(),
-        .stdout(),
-    );
-    const transport: *lsp.Transport = &stdio_transport.transport;
+    var input = Input.init(allocator, io, &read_buffer, .stdin(), .stdout());
+    defer input.deinit();
 
-    var handler = Handler.init(allocator, io, transport);
+    var handler = Handler.init(allocator, io, &input.transport);
     defer handler.deinit();
+    input.attach(&handler);
 
     try lsp.basic_server.run(
         io,
         allocator,
-        transport,
+        &input.transport,
         &handler,
         std.log.err,
     );

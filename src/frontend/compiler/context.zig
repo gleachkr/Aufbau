@@ -355,6 +355,19 @@ pub const KeepChecking = struct {
     }
 };
 
+/// An editor host's say over a running analysis: asked after each statement
+/// whose proof the check memo could not replay, it answers whether the
+/// result is no longer wanted (newer text arrived, or the request it serves
+/// was cancelled). The analysis then stops with `error.AnalysisInterrupted`.
+pub const AnalysisInterrupt = struct {
+    context: *anyopaque,
+    stopFn: *const fn (context: *anyopaque) bool,
+
+    pub fn stopRequested(self: AnalysisInterrupt) bool {
+        return self.stopFn(self.context);
+    }
+};
+
 pub const CompilerContext = struct {
     source: []const u8,
     proof_source: ?[]const u8,
@@ -384,6 +397,9 @@ pub const CompilerContext = struct {
     /// Memo of block check outcomes for editor re-analysis; null on the
     /// compile path. See `check_memo.zig`.
     check_memo: ?*CheckMemo = null,
+    /// Asked between statements of an analysis that checked a proof; null
+    /// runs to the end. See `AnalysisInterrupt`.
+    interrupt: ?AnalysisInterrupt = null,
     /// The per-theorem arena: a theorem's check and its proof's emission
     /// allocate here, and it is reset once the theorem is done (its MMB
     /// records copied out, or its failure recorded), so a run holds the

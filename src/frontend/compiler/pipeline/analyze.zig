@@ -177,13 +177,17 @@ fn analyzeInternal(
         with_proof,
     );
     if (self.check_memo) |memo| memo.beginRun(self);
-    defer if (self.check_memo) |memo| memo.endRun();
+    // Only a walk that reached the end knows which recorded checks the
+    // unit still uses.
+    var walked = false;
+    defer if (self.check_memo) |memo| memo.endRun(walked);
     // Snapshot pretty-printed statements on every exit path (recovery bails
     // early in several places), while the parser and env are still alive.
     defer if (self.statement_sink) |sink|
         sink.capture(&state.theory.parser, &state.theory.env);
     if (self.unknown_value_sink) |sink| sink.reset();
     try walk(self, allocator, &state, with_proof);
+    walked = true;
 }
 
 fn walk(
@@ -196,7 +200,17 @@ fn walk(
         self.keep_checking = .{ .invalid_rules = &proof.invalid_rules };
     }
     defer self.keep_checking = null;
+    // The memo's miss count when the interrupt was last asked: it is asked
+    // only after a statement that checked a proof, so every run checks at
+    // least the first proof it cannot replay, and replayed ones cost no poll.
+    var polled_misses: usize = if (self.check_memo) |memo| memo.misses else 0;
     parse_loop: while (true) {
+        if (self.interrupt) |interrupt| if (self.check_memo) |memo| {
+            if (memo.misses != polled_misses) {
+                polled_misses = memo.misses;
+                if (interrupt.stopRequested()) return error.AnalysisInterrupted;
+            }
+        };
         Common.prepareNextPublicStatement(
             self,
             &state.theory.parser,

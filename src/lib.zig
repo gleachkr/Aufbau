@@ -8,6 +8,8 @@ pub const StatementSink =
     @import("./frontend/statement_sink.zig").StatementSink;
 pub const UnknownValueSink = @import("./frontend/compiler.zig").UnknownValueSink;
 pub const CheckMemo = @import("./frontend/compiler/check_memo.zig").CheckMemo;
+pub const AnalysisInterrupt =
+    @import("./frontend/compiler/context.zig").AnalysisInterrupt;
 pub const DebugConfig = @import("./frontend/debug.zig").DebugConfig;
 pub const advertised_channel_list =
     @import("./frontend/debug.zig").advertised_channel_list;

@@ -129,6 +129,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   first outline took 295 s and now takes 4 s, and an edit that leaves the
   proofs' results unchanged took 29 s and now takes under a second. Undoing
   an edit that changed a proof's result re-checks the proofs after it.
+- Typing quickly in a large library queued one full check per keystroke,
+  and a code action the editor had already cancelled still ran, so the
+  diagnostics fell further behind with each key. `abc lsp` now checks once
+  the keystrokes pause, stops a check that newer text has made stale, and
+  answers a request the editor has cancelled without running it. Typing ten
+  keys in the last file of a 126 MB library, with a code action requested
+  and cancelled at each key as Neovim does, the diagnostics now arrive
+  1.4 s after the last key instead of 69 s.
 - `auto?` and `exact?` free each step's records when the step returns: one
   Cardano goal fell from 1.1 GiB to 30 MiB.
 - The search budget charges the work of matching large contexts, so a
