@@ -1,7 +1,7 @@
 //! Memo of proof-block check outcomes for editor re-analysis.
 //!
 //! The analyze path (`pipeline/analyze.zig`) walks the statements in order
-//! and calls `Check.checkTheoremBlock` on every theorem and lemma block. On
+//! and checks every theorem and lemma block (`Common.analyzeBlock`). On
 //! a corpus like zermelo that walk costs ~70 ms per keystroke, ~95% of it
 //! in block checks; parsing and registering the theory is a few ms. So an
 //! edit is made incremental by memoizing the checks, not by snapshotting
@@ -42,6 +42,11 @@
 //! displacement; spans outside the block are not relocatable and make the
 //! block unrecordable (it is simply re-checked each run).
 //!
+//! Parsing: a replayed block's lines are not needed, so the memo also
+//! tells the proof parser which bodies it knows (`knownBodies`), and the
+//! parser passes over them. It needs the body's length before any key can
+//! be had, hence the index by header alone (`by_header`).
+//!
 //! The memo is opt-in through `CompilerContext.check_memo`; the compile
 //! path never sets it, so MMB output is untouched.
 
@@ -51,6 +56,7 @@ const CompilerDiag = @import("../diag.zig");
 const Diagnostic = CompilerDiag.Diagnostic;
 const Span = @import("../proof_script.zig").Span;
 const ProofBlock = @import("../proof_script.zig").ProofBlock;
+const KnownBodies = @import("../proof_script.zig").KnownBodies;
 const RuleCatalog = @import("./rule_catalog.zig");
 const Context = @import("./context.zig");
 const CompilerContext = Context.CompilerContext;
@@ -84,6 +90,10 @@ pub const CheckMemo = struct {
         outcome: ?anyerror,
         /// Where the block lay in the proof text when recorded.
         block: Span,
+        /// The hash of the block's header, and its body's length and hash.
+        header: u64,
+        body_len: usize,
+        body: u64,
         primary: []const Diagnostic,
         warnings: []const Diagnostic,
         last_diagnostic: ?Diagnostic,
@@ -147,6 +157,9 @@ pub const CheckMemo = struct {
 
     allocator: std.mem.Allocator,
     entries: std.AutoHashMapUnmanaged(Key, *Entry) = .empty,
+    /// For each header of a self-contained block, the entry last recorded or
+    /// found for a block with it: `knownBodies`.
+    by_header: std.AutoHashMapUnmanaged(u64, *Entry) = .empty,
     /// Bumped per run.
     run: u32 = 0,
     /// The root the next run is for. A host that analyses several units
@@ -175,6 +188,7 @@ pub const CheckMemo = struct {
         var it = self.entries.valueIterator();
         while (it.next()) |entry| self.destroyEntry(entry.*);
         self.entries.deinit(self.allocator);
+        self.by_header.deinit(self.allocator);
         self.latest_runs.deinit(self.allocator);
         self.lookups.deinit(self.allocator);
         self.* = undefined;
@@ -262,27 +276,53 @@ pub const CheckMemo = struct {
         while (mm0_end > self.mm0_cursor and
             std.ascii.isWhitespace(mm0[mm0_end - 1])) mm0_end -= 1;
         self.sync(mm0, mm0_end, proof, block.header_span.end);
-        const body_start = @min(block.header_span.end, proof.len);
-        const body_end = @min(bodyEnd(block), proof.len);
-        const body = proof[body_start..@max(body_start, body_end)];
         const block_end = @min(block.span.end, proof.len);
         if (block_end > self.proof_cursor) self.proof_cursor = block_end;
         return .{
             .fingerprint = self.fingerprint,
-            .body = std.hash.Wyhash.hash(0, body),
+            .body = block.known_body orelse
+                bodyHash(proof[block.header_span.end..block.body_end]),
         };
     }
 
-    fn bodyEnd(block: ProofBlock) usize {
-        if (block.lines.len > 0) return block.lines[block.lines.len - 1].span.end;
-        if (block.underline_span) |underline| return underline.end;
-        return block.header_span.end;
+    fn bodyHash(body: []const u8) u64 {
+        return std.hash.Wyhash.hash(0, body);
     }
 
-    /// The entry for `key` whose recorded catalog lookups still hold.
+    fn headerHash(header: []const u8) u64 {
+        return std.hash.Wyhash.hash(0, header);
+    }
+
+    /// The bodies of the blocks this memo holds, for the parser to pass
+    /// over: an entry found for such a block needs none of its lines.
+    pub fn knownBodies(self: *CheckMemo) KnownBodies {
+        return .{ .ctx = self, .findFn = findKnownBody };
+    }
+
+    fn findKnownBody(
+        ctx: *anyopaque,
+        header: []const u8,
+        rest: []const u8,
+    ) ?KnownBodies.Body {
+        const self: *CheckMemo = @ptrCast(@alignCast(ctx));
+        const entry = self.by_header.get(headerHash(header)) orelse return null;
+        if (entry.body_len > rest.len) return null;
+        const hash = bodyHash(rest[0..entry.body_len]);
+        if (hash != entry.body) return null;
+        return .{ .len = entry.body_len, .hash = hash };
+    }
+
+    /// Without the memory to note it, the block is parsed again next time.
+    fn noteKnownBody(self: *CheckMemo, entry: *Entry) void {
+        self.by_header.put(self.allocator, entry.header, entry) catch {};
+    }
+
+    /// The entry for `key`, `block`'s, whose recorded catalog lookups still
+    /// hold.
     pub fn find(
         self: *CheckMemo,
         key: Key,
+        block: ProofBlock,
         catalog: *RuleCatalog.Catalog,
     ) ?*const Entry {
         const entry = self.entries.get(key) orelse {
@@ -300,6 +340,10 @@ pub const CheckMemo = struct {
             self.misses += 1;
             return null;
         };
+        // The parser did not know the body, though an entry has it.
+        if (block.self_contained and block.known_body == null) {
+            self.noteKnownBody(entry);
+        }
         self.hits += 1;
         return entry;
     }
@@ -340,7 +384,8 @@ pub const CheckMemo = struct {
         recording: Recording,
         key: Key,
         outcome: ?anyerror,
-        block: Span,
+        proof: []const u8,
+        block: ProofBlock,
     ) void {
         self.recording = false;
         if (self.recording_failed) return;
@@ -351,7 +396,7 @@ pub const CheckMemo = struct {
         {
             return;
         }
-        self.record(ctx, recording, key, outcome, block) catch {};
+        self.record(ctx, recording, key, outcome, proof, block) catch {};
     }
 
     fn record(
@@ -360,14 +405,20 @@ pub const CheckMemo = struct {
         recording: Recording,
         key: Key,
         outcome: ?anyerror,
-        block: Span,
+        proof: []const u8,
+        proof_block: ProofBlock,
     ) !void {
+        const block = proof_block.span;
+        const header = proof_block.header_span;
         const mm0_limit = recording.mm0_limit;
         const entry = try self.allocator.create(Entry);
         entry.* = .{
             .arena = ArenaAllocator.init(self.allocator),
             .outcome = outcome,
             .block = block,
+            .header = headerHash(proof[header.start..header.end]),
+            .body_len = proof_block.body_end - header.end,
+            .body = key.body,
             .primary = &.{},
             .warnings = &.{},
             .last_diagnostic = null,
@@ -435,9 +486,13 @@ pub const CheckMemo = struct {
         if (gop.found_existing) self.destroyEntry(gop.value_ptr.*);
         gop.value_ptr.* = entry;
         stored = true;
+        if (proof_block.self_contained) self.noteKnownBody(entry);
     }
 
     fn destroyEntry(self: *CheckMemo, entry: *Entry) void {
+        if (self.by_header.get(entry.header) == entry) {
+            _ = self.by_header.remove(entry.header);
+        }
         entry.arena.deinit();
         self.allocator.destroy(entry);
     }

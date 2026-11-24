@@ -100,9 +100,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   0.23 s now.
 - An edit in a large library costs less to check. The language server no
   longer copies the theory's rewrite and annotation tables before each
-  declaration, and no longer parses every proof again to look for
-  `auto?`, `exact?` and `conversion?` when none is written. A keystroke in
-  the last file of a 126 MB library took 0.75 s and now takes 0.47 s.
+  declaration, no longer parses every proof again to look for `auto?`,
+  `exact?` and `conversion?` when none is written, no longer reads every
+  proof file through for `include` when none is written, and no longer
+  parses or sets up a proof whose result it already has. A keystroke in
+  the last file of a 126 MB library took 0.75 s and now takes 0.24 s.
 
 ### Fixed
 

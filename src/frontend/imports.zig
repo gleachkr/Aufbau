@@ -90,16 +90,33 @@ pub const Scanner = struct {
                 }
                 self.skipStatement();
             },
-            .auf => while (true) {
-                if (self.pos != 0 and self.src[self.pos - 1] != '\n') {
+            .auf => {
+                if (!self.spellsInclude()) return null;
+                while (true) {
+                    if (self.pos != 0 and self.src[self.pos - 1] != '\n') {
+                        self.skipLine();
+                    }
+                    if (self.pos >= self.src.len) return null;
+                    self.skipHorizontalSpace();
+                    if (self.startsInclude()) return try self.parseImport();
                     self.skipLine();
                 }
-                if (self.pos >= self.src.len) return null;
-                self.skipHorizontalSpace();
-                if (self.startsInclude()) return try self.parseImport();
-                self.skipLine();
             },
         }
+    }
+
+    /// Whether the text ahead spells `include "` anywhere. Without it there
+    /// is no include left to look for, which is the usual case: proof files
+    /// are large and seldom include anything. Every include has a `"`, so
+    /// one byte scan for it finds every candidate.
+    fn spellsInclude(self: *const Scanner) bool {
+        var from = self.pos;
+        while (std.mem.indexOfScalarPos(u8, self.src, from, '"')) |quote| {
+            const before = std.mem.trimEnd(u8, self.src[self.pos..quote], " \t");
+            if (std.mem.endsWith(u8, before, "include")) return true;
+            from = quote + 1;
+        }
+        return false;
     }
 
     /// `include` followed by a `"`: a line whose first word is `include`
@@ -1649,6 +1666,8 @@ test "auf scanner finds includes at line starts only" {
     scanner = Scanner.init("include \"a.auf\"\nfoo\n---\n", .auf);
     try std.testing.expectError(error.MalformedImport, scanner.next());
     try std.testing.expect(hasImports(src, .auf));
+    try std.testing.expect(hasImports("-- a \"quoted\" word\ninclude\t\"a.auf\";\n", .auf));
+    try std.testing.expect(!hasImports("-- a \"quoted\" word\n", .auf));
     try std.testing.expect(!hasImports("thm\n---\nl1: $ p $ by include []\n", .auf));
 }
 

@@ -58,64 +58,6 @@ const Apply = @import("./check/apply.zig");
 const Idents = @import("../idents.zig");
 const RuleDecl = @import("../env.zig").RuleDecl;
 
-/// `checkTheoremBlock` behind the context's check memo, when one is
-/// attached (`CompilerContext.check_memo`): a hit replays the recorded
-/// outcome and output instead of checking again. A hit yields no checked
-/// lines, so paths that emit (the compile path) must call
-/// `checkTheoremBlock` directly.
-pub fn checkTheoremBlockMemoized(
-    self: *CompilerContext,
-    allocator: std.mem.Allocator,
-    theory: *TheoryState,
-    assertion: AssertionStmt,
-    block: TheoremBlock,
-    theorem: *TheoremContext,
-    theorem_concl: ExprId,
-) ![]const CheckedLine {
-    const memo = self.check_memo orelse return checkTheoremBlock(
-        self,
-        allocator,
-        theory,
-        assertion,
-        block,
-        theorem,
-        theorem_concl,
-    );
-    if (!memo.active) {
-        return checkTheoremBlock(
-            self,
-            allocator,
-            theory,
-            assertion,
-            block,
-            theorem,
-            theorem_concl,
-        );
-    }
-    const mm0_pos = theory.parser.core.pos;
-    const key = memo.keyForBlock(self.source, mm0_pos, self.proof_source.?, block);
-    if (memo.find(key, &theory.rule_catalog)) |entry| {
-        try entry.replay(self, block.span.start);
-        if (entry.outcome) |err| return err;
-        return &.{};
-    }
-    const recording = memo.beginRecording(self);
-    const checked = checkTheoremBlock(
-        self,
-        allocator,
-        theory,
-        assertion,
-        block,
-        theorem,
-        theorem_concl,
-    ) catch |err| {
-        memo.finishRecording(self, recording, key, err, block.span);
-        return err;
-    };
-    memo.finishRecording(self, recording, key, null, block.span);
-    return checked;
-}
-
 pub fn checkTheoremBlock(
     self: *CompilerContext,
     allocator: std.mem.Allocator,

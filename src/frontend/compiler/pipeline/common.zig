@@ -1169,7 +1169,6 @@ pub fn processAssertion(
             block,
             &theorem,
             theorem_concl,
-            .direct,
         ) catch |err| {
             self.setIfMissing(
                 CompilerDiag.theoremDiagnostic(
@@ -1207,7 +1206,7 @@ pub fn processAssertion(
 
 /// The allocator for one theorem's or lemma's own work: the per-theorem
 /// arena (`CompilerContext.theorem_scratch`), else the run's.
-pub fn theoremAllocator(
+fn theoremAllocator(
     self: *const CompilerContext,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator {
@@ -1218,17 +1217,72 @@ pub fn theoremAllocator(
 /// Forget a theorem's work once its records are out. The arena keeps its
 /// largest chunk for the next theorem, except in a safe build, which gives
 /// the memory back so that a pointer outliving its theorem faults.
-pub fn releaseTheoremScratch(self: *const CompilerContext) void {
+fn releaseTheoremScratch(self: *const CompilerContext) void {
     const arena = self.theorem_scratch orelse return;
     _ = arena.reset(if (std.debug.runtime_safety) .free_all else .retain_capacity);
 }
 
-const CheckMode = enum { direct, memoized };
+/// Check `block` as `assertion`'s proof for the analysis, which wants what
+/// the check reports and not its lines. With an active check memo
+/// (`CompilerContext.check_memo`), a hit replays the recorded outcome and
+/// output, without the theorem being built or the block's lines parsed.
+pub fn analyzeBlock(
+    self: *CompilerContext,
+    allocator: std.mem.Allocator,
+    theory: *TheoryState,
+    assertion: AssertionStmt,
+    block: TheoremBlock,
+) !void {
+    const scratch = theoremAllocator(self, allocator);
+    defer releaseTheoremScratch(self);
+
+    const memo = self.check_memo orelse
+        return checkUnmemoized(self, scratch, theory, assertion, block);
+    if (!memo.active) {
+        return checkUnmemoized(self, scratch, theory, assertion, block);
+    }
+    const proof = self.proof_source.?;
+    const key = memo.keyForBlock(self.source, theory.parser.core.pos, proof, block);
+    if (memo.find(key, block, &theory.rule_catalog)) |entry| {
+        try entry.replay(self, block.span.start);
+        if (entry.outcome) |err| return err;
+        return;
+    }
+    const parsed = try block.withLines(allocator, proof);
+    const recording = memo.beginRecording(self);
+    checkUnmemoized(self, scratch, theory, assertion, parsed) catch |err| {
+        memo.finishRecording(self, recording, key, err, proof, parsed);
+        return err;
+    };
+    memo.finishRecording(self, recording, key, null, proof, parsed);
+}
+
+fn checkUnmemoized(
+    self: *CompilerContext,
+    scratch: std.mem.Allocator,
+    theory: *TheoryState,
+    assertion: AssertionStmt,
+    block: TheoremBlock,
+) !void {
+    var theorem = TheoremContext.init(scratch);
+    defer theorem.deinit();
+    try theorem.seedAssertion(assertion);
+    const theorem_concl = try theorem.internParsedExpr(assertion.concl);
+    _ = try checkBlock(
+        self,
+        scratch,
+        theory,
+        assertion,
+        block,
+        &theorem,
+        theorem_concl,
+    );
+}
 
 /// Check `block` as `assertion`'s proof. With a per-theorem arena the
 /// parser allocates there meanwhile: the proof's math and the theorem's
 /// dummy variables are the theorem's own, and a check parses no statement.
-pub fn checkBlock(
+fn checkBlock(
     self: *CompilerContext,
     scratch: std.mem.Allocator,
     theory: *TheoryState,
@@ -1236,7 +1290,6 @@ pub fn checkBlock(
     block: TheoremBlock,
     theorem: *TheoremContext,
     theorem_concl: ExprId,
-    mode: CheckMode,
 ) ![]const CheckedLine {
     const parser = &theory.parser;
     const parser_allocator = if (self.theorem_scratch != null)
@@ -1246,26 +1299,15 @@ pub fn checkBlock(
     defer if (parser_allocator) |previous| {
         _ = parser.swapAllocator(previous);
     };
-    return switch (mode) {
-        .direct => Check.checkTheoremBlock(
-            self,
-            scratch,
-            theory,
-            assertion,
-            block,
-            theorem,
-            theorem_concl,
-        ),
-        .memoized => Check.checkTheoremBlockMemoized(
-            self,
-            scratch,
-            theory,
-            assertion,
-            block,
-            theorem,
-            theorem_concl,
-        ),
-    };
+    return Check.checkTheoremBlock(
+        self,
+        scratch,
+        theory,
+        assertion,
+        block,
+        theorem,
+        theorem_concl,
+    );
 }
 
 /// Append a checked theorem's MMB records to `out`. Its streams are built
@@ -1507,7 +1549,7 @@ pub fn processLocalProofBlock(
 
 /// Check a lemma's proof against `assertion`, its parsed statement, and
 /// with `emit` write the proof out.
-pub fn checkLocalProofBlock(
+fn checkLocalProofBlock(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
     theory: *TheoryState,
@@ -1522,8 +1564,6 @@ pub fn checkLocalProofBlock(
     try theorem.seedAssertion(assertion);
     const theorem_concl = try theorem.internParsedExpr(assertion.concl);
 
-    // Emission consumes the checked lines, which a memo hit does not
-    // produce; only the analyze path (no emit) goes through the memo.
     const checked = checkBlock(
         self,
         scratch,
@@ -1532,7 +1572,6 @@ pub fn checkLocalProofBlock(
         block,
         &theorem,
         theorem_concl,
-        if (emit == null) .memoized else .direct,
     ) catch |err| {
         self.setIfMissing(
             CompilerDiag.theoremDiagnostic(

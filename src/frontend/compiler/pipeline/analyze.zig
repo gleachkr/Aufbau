@@ -1,5 +1,4 @@
 const std = @import("std");
-const TheoremContext = @import("../../expr.zig").TheoremContext;
 const AssertionStmt = @import("../../parse_recovery.zig").AssertionStmt;
 const SortStmt = @import("../../parse_recovery.zig").SortStmt;
 const TermStmt = @import("../../parse_recovery.zig").TermStmt;
@@ -26,9 +25,7 @@ const TermRecoverySnapshot = Recovery.TermRecoverySnapshot;
 const AssertionRecoverySnapshot = Recovery.AssertionRecoverySnapshot;
 const ProofItemStream = Common.ProofItemStream;
 const anchorMatches = Common.anchorMatches;
-const checkBlock = Common.checkBlock;
-const releaseTheoremScratch = Common.releaseTheoremScratch;
-const theoremAllocator = Common.theoremAllocator;
+const analyzeBlock = Common.analyzeBlock;
 const isLocalProofItem = Common.isLocalProofItem;
 const processAssertion = Common.processAssertion;
 const processLocalDefItem = Common.processLocalDefItem;
@@ -175,7 +172,12 @@ fn analyzeInternal(
         self.proof_source,
         with_proof,
     );
-    if (self.check_memo) |memo| memo.beginRun(self);
+    if (self.check_memo) |memo| {
+        memo.beginRun(self);
+        if (memo.active) if (state.proof) |*proof| {
+            proof.parser.known_bodies = memo.knownBodies();
+        };
+    }
     // Only a walk that reached the end knows which recorded checks the
     // unit still uses.
     var walked = false;
@@ -552,13 +554,14 @@ fn analyzeLocalProofBlock(
         warnings.restore(self);
         return dropLocalProofBlock(self, proof, block, err);
     };
-    Common.checkLocalProofBlock(self, allocator, theory, assertion, block, null) catch |err| {
+    analyzeBlock(self, allocator, theory, assertion, block) catch |err| {
         recordPrimaryProofFailure(
             self,
             &proof.invalid_rules,
-            CompilerDiag.proofBlockDiagnostic(
-                block.name,
+            CompilerDiag.theoremDiagnostic(
+                assertion.name,
                 block.header_span,
+                .proof,
                 CompilerDiag.narrowDiagnosticError(err),
             ),
         );
@@ -1043,25 +1046,7 @@ fn analyzeTheoremProof(
                 }
 
                 const warnings = WarningSnapshot.capture(self);
-                const scratch = theoremAllocator(self, allocator);
-                defer releaseTheoremScratch(self);
-                var theorem = TheoremContext.init(scratch);
-                defer theorem.deinit();
-
-                try theorem.seedAssertion(assertion);
-                const theorem_concl = try theorem.internParsedExpr(
-                    assertion.concl,
-                );
-                _ = checkBlock(
-                    self,
-                    scratch,
-                    theory,
-                    assertion,
-                    block,
-                    &theorem,
-                    theorem_concl,
-                    .memoized,
-                ) catch |err| {
+                analyzeBlock(self, allocator, theory, assertion, block) catch |err| {
                     // The theorem fails, but the warnings its lines raised
                     // (a line citing a failed one, `sorry!`) still stand.
                     recordPrimaryProofFailure(

@@ -578,7 +578,13 @@ between trusted parser trees and frontend proof elaboration.
   text up to the block without the earlier blocks' bodies), keys a check
   by that fingerprint plus the block body, and on a
   hit replays the recorded diagnostics, hole sink entries and error with
-  proof spans relocated to the block's new position. Only runs that
+  proof spans relocated to the block's new position, without building the
+  theorem (`analyzeBlock` in `pipeline/common.zig`). Nor are the block's
+  lines parsed: the memo also tells the proof parser the body it last saw
+  after each header (`ProofScript.KnownBodies`), and the parser passes over
+  one whose text is unchanged and that still ends where it did. Only a
+  body whose lines all parsed is known this way, since a broken line may
+  read into what follows it. Only runs that
   collect holes and no inline conclusions use it, so every entry records
   the same output. Rule-catalog lookups, the one thing a check reads
   beyond that prefix, are recorded and re-verified. `src/tests/check_memo_corpus.zig` is the guard: on

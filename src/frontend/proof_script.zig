@@ -214,6 +214,46 @@ pub const ProofBlock = struct {
     underline_span: ?Span,
     lines: []const ProofLine,
     span: Span,
+    /// Where the body ends. It starts at the header's end and runs through
+    /// the last line, without the trivia before the next item.
+    body_end: usize,
+    /// Whether every line parsed and the body ends a physical line, so that
+    /// its text alone decides its lines (see `KnownBodies`).
+    self_contained: bool,
+    /// The hash of a body the parser passed over (`Parser.known_bodies`).
+    /// `lines` is then empty; `withLines` parses them.
+    known_body: ?u64 = null,
+
+    /// A block whose body was passed over, with its lines. `src` is the text
+    /// the block was parsed from.
+    pub fn withLines(
+        self: ProofBlock,
+        allocator: std.mem.Allocator,
+        src: []const u8,
+    ) ParseError!ProofBlock {
+        if (self.known_body == null) return self;
+        var parser = Parser.initLenient(allocator, src);
+        parser.pos = self.underline_span.?.end;
+        var full = self;
+        full.lines = (try parser.parseProofLines()).lines;
+        full.known_body = null;
+        return full;
+    }
+};
+
+/// Recognises the bodies of blocks parsed before, so that the parser can
+/// pass over them.
+pub const KnownBodies = struct {
+    ctx: *anyopaque,
+    /// The self-contained body (`ProofBlock.self_contained`) that followed a
+    /// header reading `header` and that `rest`, the text after one now,
+    /// starts with.
+    findFn: *const fn (ctx: *anyopaque, header: []const u8, rest: []const u8) ?Body,
+
+    pub const Body = struct {
+        len: usize,
+        hash: u64,
+    };
 };
 
 pub const DefItem = struct {
@@ -286,6 +326,8 @@ pub const Parser = struct {
     /// Keep going after a proof line fails to parse, retaining whatever prefix
     /// of it did parse. See `initLenient`.
     lenient: bool = false,
+    /// Set by a caller that rarely needs a known block's lines.
+    known_bodies: ?KnownBodies = null,
 
     pub fn init(allocator: std.mem.Allocator, src: []const u8) Parser {
         return .{
@@ -433,7 +475,7 @@ pub const Parser = struct {
             .end = self.pos,
         };
         const underline_span = try self.parseRequiredUnderlineLine();
-        const lines = try self.parseProofLines();
+        const body = try self.parseBody(header_span);
         return .{
             .kind = .theorem,
             .name = name,
@@ -444,11 +486,14 @@ pub const Parser = struct {
             .header_span = header_span,
             .annotations = annotations,
             .underline_span = underline_span,
-            .lines = lines,
+            .lines = body.lines,
             .span = .{
                 .start = block_start,
                 .end = self.pos,
             },
+            .body_end = body.end,
+            .self_contained = body.self_contained,
+            .known_body = body.known,
         };
     }
 
@@ -472,7 +517,7 @@ pub const Parser = struct {
             .end = self.pos,
         };
         const underline_span = try self.parseRequiredUnderlineLine();
-        const lines = try self.parseProofLines();
+        const body = try self.parseBody(header_span);
         return .{
             .kind = .lemma,
             .name = name,
@@ -485,11 +530,14 @@ pub const Parser = struct {
             .header_tail_span = tail_span,
             .annotations = annotations,
             .underline_span = underline_span,
-            .lines = lines,
+            .lines = body.lines,
             .span = .{
                 .start = block_start,
                 .end = self.pos,
             },
+            .body_end = body.end,
+            .self_contained = body.self_contained,
+            .known_body = body.known,
         };
     }
 
@@ -644,9 +692,70 @@ pub const Parser = struct {
         return self.recordErrorAtPos(error.ExpectedDefEquals);
     }
 
-    fn parseProofLines(self: *Parser) ![]const ProofLine {
+    const ParsedBody = struct {
+        lines: []const ProofLine,
+        end: usize,
+        self_contained: bool,
+        known: ?u64,
+    };
+
+    /// The proof lines after the underline just read, whose block's header
+    /// is `header`.
+    fn parseBody(self: *Parser, header: Span) !ParsedBody {
+        if (self.known_bodies) |known| {
+            if (known.findFn(
+                known.ctx,
+                self.src[header.start..header.end],
+                self.src[header.end..],
+            )) |body| {
+                const end = header.end + body.len;
+                if (self.bodyEndsAt(end)) {
+                    self.pos = self.skipProofLineTriviaFrom(end);
+                    return .{
+                        .lines = &.{},
+                        .end = end,
+                        .self_contained = true,
+                        .known = body.hash,
+                    };
+                }
+            }
+        }
+        const underline_end = self.pos;
+        const parsed = try self.parseProofLines();
+        const end = if (parsed.lines.len == 0)
+            underline_end
+        else
+            parsed.lines[parsed.lines.len - 1].span.end;
+        return .{
+            .lines = parsed.lines,
+            .end = end,
+            .self_contained = parsed.clean and self.src[end - 1] == '\n',
+            .known = null,
+        };
+    }
+
+    /// Whether a self-contained body that ends at `end` would end there if
+    /// it were parsed. Its lines read no further than their own ends but
+    /// for one token, which could open the last line's bindings or refs.
+    fn bodyEndsAt(self: *Parser, end: usize) bool {
+        const saved = self.pos;
+        defer self.pos = saved;
+        self.pos = end;
+        if (self.nextProofTokenIsApplicationDelimiter()) return false;
+        self.pos = self.skipProofLineTriviaFrom(end);
+        return !self.lineStartsProofLine();
+    }
+
+    const ParsedLines = struct {
+        lines: []const ProofLine,
+        /// No line failed to parse.
+        clean: bool,
+    };
+
+    fn parseProofLines(self: *Parser) !ParsedLines {
         self.pos = self.skipProofLineTriviaFrom(self.pos);
         var lines = std.ArrayListUnmanaged(ProofLine).empty;
+        var clean = true;
         while (true) {
             const line_start = self.skipProofLineTriviaFrom(self.pos);
             self.pos = line_start;
@@ -658,6 +767,7 @@ pub const Parser = struct {
             if (self.lenient) self.last_error_span = null;
             const line = self.parseProofLine() catch |err| {
                 if (!self.lenient or err == error.OutOfMemory) return err;
+                clean = false;
                 const failure = self.last_error_span orelse
                     self.tokenSpanAt(self.pos);
                 self.recoverToNextProofLine(line_start);
@@ -672,7 +782,10 @@ pub const Parser = struct {
             };
             try lines.append(self.allocator, line);
         }
-        return try lines.toOwnedSlice(self.allocator);
+        return .{
+            .lines = try lines.toOwnedSlice(self.allocator),
+            .clean = clean,
+        };
     }
 
     /// Rebuild what a failed proof line still tells us. `parseProofLine` reads

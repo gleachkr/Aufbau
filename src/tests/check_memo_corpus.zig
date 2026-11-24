@@ -288,6 +288,26 @@ fn runFixture(
         if (block.lines.len == 0) continue;
         const last = block.lines[block.lines.len - 1];
 
+        // Text after the last line that the block takes in, so that a body
+        // whose own text is unchanged no longer ends where it did: one more
+        // proof line, and a reference list for a last line without one. The
+        // parser must not pass over the body then.
+        for ([_][]const u8{ "zz_more: $ x $ by zz_no_such_rule []\n", "[#1]\n" }) |more| {
+            try expectSameAnalysis(allocator, memo, stem, .{
+                .name = "extend",
+                .mm0_text = mm0_text,
+                .proof_text = try applyEdit(arena, proof_text, .{
+                    .start = block.body_end,
+                    .end = block.body_end,
+                    .text = more,
+                }),
+            });
+            try expectSameAnalysis(allocator, memo, stem, .{
+                .name = "extend undone",
+                .mm0_text = mm0_text,
+                .proof_text = proof_text,
+            });
+        }
         // Whitespace inside the body (after the last line's application,
         // before its newline): same outcome, later blocks shift. Only the
         // edited block re-checks; the ones after it replay through
@@ -482,6 +502,103 @@ test "check memo keeps what each root's latest run used" {
     allocator.free(other_again);
     try std.testing.expectEqual(hits + 4, memo.hits);
     try std.testing.expectEqual(misses + 1, memo.misses);
+}
+
+/// The blocks of `proof_text`, parsed past the bodies `memo` knows.
+fn knownBlocks(
+    arena: std.mem.Allocator,
+    memo: *CheckMemo,
+    proof_text: []const u8,
+) ![]const ProofScript.ProofBlock {
+    var blocks = std.ArrayListUnmanaged(ProofScript.ProofBlock).empty;
+    var parser = ProofScript.Parser.initLenient(arena, proof_text);
+    parser.known_bodies = memo.knownBodies();
+    while (try parser.nextBlockRecovering()) |block| try blocks.append(arena, block);
+    return blocks.items;
+}
+
+test "the parser passes over the bodies the check memo knows" {
+    const allocator = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var memo = CheckMemo.init(allocator);
+    defer memo.deinit();
+
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom ax_top: $ top $;
+        \\theorem t1: $ top $;
+        \\theorem t2: $ top $;
+        \\theorem t3: $ top $;
+        \\
+    ;
+    const t1 = "t1\n---\np: $ top $ by ax_top []\nq: $ top $ by ax_top\n";
+    const t2 = "t2\n---\np: $ top $ by ax_top []\n";
+    // A line that does not parse may read into whatever follows the body:
+    // here `p`'s bindings run on through `q`, and end in the next `$`.
+    const t3 = "t3\n---\np: $ top $ by ax_top (a := $ x\nq: $ , b := $ by ax_top []\n";
+    const proof_text = t1 ++ "\n-- t2 is next\n" ++ t2 ++ "\n" ++ t3;
+
+    allocator.free(try analyzeDump(allocator, mm0_text, proof_text, &memo, false));
+    const plain = try proofBlocks(arena, proof_text);
+    const known = try knownBlocks(arena, &memo, proof_text);
+    try std.testing.expectEqual(plain.len, known.len);
+    for (plain, known, [_]bool{ true, true, false }) |expected, block, passed| {
+        try std.testing.expectEqual(passed, block.known_body != null);
+        try std.testing.expectEqualDeep(
+            expected,
+            try block.withLines(arena, proof_text),
+        );
+    }
+
+    // The same body is passed over wherever it lies, but not changed, and
+    // not where more text belongs to it.
+    const cases = [_]struct { text: []const u8, passed: bool }{
+        .{ .text = "-- moved\n" ++ t1 ++ "-- | not a doc\n" ++ t2, .passed = true },
+        .{ .text = t1 ++ "--| doc\n" ++ t2, .passed = true },
+        .{ .text = t1, .passed = true },
+        .{ .text = t1 ++ "r: $ top $ by ax_top []\n", .passed = false },
+        .{ .text = t1 ++ "\n-- comment\n  r : $ top $ by ax_top []\n", .passed = false },
+        .{ .text = t1 ++ "\n-- comment\n  []\n", .passed = false },
+        .{ .text = t1 ++ "(a := $ top $) []\n", .passed = false },
+        .{ .text = t1[0 .. t1.len - 1], .passed = false },
+        .{ .text = t3 ++ "$ ) []\n", .passed = false },
+        .{ .text = "t1\n---\np: $ top $ by ax_top []\nq: $ bot $ by ax_top\n", .passed = false },
+    };
+    for (cases) |case| {
+        const expected = (try proofBlocks(arena, case.text))[0];
+        const block = (try knownBlocks(arena, &memo, case.text))[0];
+        try std.testing.expectEqual(case.passed, block.known_body != null);
+        try std.testing.expectEqualDeep(
+            expected,
+            try block.withLines(arena, case.text),
+        );
+    }
+}
+
+test "the parser parses a body that ended the text without a newline" {
+    const allocator = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var memo = CheckMemo.init(allocator);
+    defer memo.deinit();
+
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom ax_top: $ top $;
+        \\theorem t1: $ top $;
+    ;
+    const proof_text = "t1\n---\np: $ top $ by ax_top";
+    allocator.free(try analyzeDump(allocator, mm0_text, proof_text, &memo, false));
+    try std.testing.expectEqual(@as(usize, 1), memo.entries.count());
+    const longer = proof_text ++ "_2\n";
+    const block = (try knownBlocks(arena, &memo, longer))[0];
+    try std.testing.expectEqual(@as(?u64, null), block.known_body);
+    try std.testing.expectEqualStrings("ax_top_2", block.lines[0].application.rule_name);
 }
 
 test "check memo drops a block whose output it cannot record" {
