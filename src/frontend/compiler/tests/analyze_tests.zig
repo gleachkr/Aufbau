@@ -271,6 +271,65 @@ test "compiler analyze with proof collects multiple block diagnostics" {
     try std.testing.expectEqualStrings("bad_two", diags[1].theorem_name.?);
 }
 
+test "compiler analyze keeps a theorem or lemma whose proof fails in scope" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\term bot: wff;
+        \\theorem broken: $ top $;
+        \\theorem uses: $ top $;
+        \\theorem misuses: $ bot $;
+        \\theorem uses_lemma: $ top $;
+        \\theorem misuses_lemma: $ bot $;
+    ;
+    const proof_src =
+        \\broken
+        \\------
+        \\l1: $ top $ by missing []
+        \\
+        \\uses
+        \\----
+        \\l1: $ top $ by broken []
+        \\
+        \\misuses
+        \\-------
+        \\l1: $ bot $ by broken []
+        \\
+        \\lemma helper: $ top $
+        \\--------------------
+        \\l1: $ top $ by missing_helper []
+        \\
+        \\uses_lemma
+        \\----------
+        \\l1: $ top $ by helper []
+        \\
+        \\misuses_lemma
+        \\-------------
+        \\l1: $ bot $ by helper []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try compiler.analyze();
+
+    // Each failed proof reports its own error. A line citing one is
+    // checked against its statement: `uses` and `uses_lemma` pass, and
+    // `misuses` and `misuses_lemma` fail on their own account.
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 4), diags.len);
+    try std.testing.expectEqual(error.UnknownRule, diags[0].err);
+    try std.testing.expectEqualStrings("broken", diags[0].theorem_name.?);
+    try std.testing.expect(diags[1].err != error.UnknownRule);
+    try std.testing.expectEqualStrings("misuses", diags[1].theorem_name.?);
+    try std.testing.expectEqual(error.UnknownRule, diags[2].err);
+    try std.testing.expectEqualStrings("helper", diags[2].theorem_name.?);
+    try std.testing.expect(diags[3].err != error.UnknownRule);
+    try std.testing.expectEqualStrings("misuses_lemma", diags[3].theorem_name.?);
+}
+
 test "compiler analyze with proof recovers after failing lemma blocks" {
     const mm0_src =
         \\provable sort wff;

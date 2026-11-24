@@ -33,7 +33,6 @@ const isLocalProofItem = Common.isLocalProofItem;
 const processAssertion = Common.processAssertion;
 const processLocalDefItem = Common.processLocalDefItem;
 const processLocalNotationItem = Common.processLocalNotationItem;
-const processLocalProofBlock = Common.processLocalProofBlock;
 const rejectLocalTermReferences = Common.rejectLocalTermReferences;
 const validateDefinitionBody = Common.validateDefinitionBody;
 
@@ -531,9 +530,11 @@ fn analyzeLocalNotationItem(
     };
 }
 
-/// A lemma that fails after its annotations were partly processed must not
-/// leave their registry, @fresh or @view entries behind: the failed rule's
-/// id goes to the next rule, which would inherit them.
+/// A lemma stays in scope when its proof fails, like a theorem (see
+/// `analyzeAssertionStatement`). One whose statement fails to parse or
+/// register is dropped, and must not leave registry, @fresh or @view
+/// entries behind: the failed rule's id goes to the next rule, which would
+/// inherit them.
 fn analyzeLocalProofBlock(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
@@ -543,15 +544,15 @@ fn analyzeLocalProofBlock(
 ) !void {
     const warnings = WarningSnapshot.capture(self);
     const snapshot = try AssertionRecoverySnapshot.capture(allocator, theory);
-    processLocalProofBlock(
+    const assertion = Common.parseLemmaAssertion(
         self,
         allocator,
-        theory,
+        &theory.parser,
         block,
-        null,
     ) catch |err| {
-        warnings.restore(self);
-        snapshot.restore(theory);
+        return dropLocalProofBlock(self, theory, proof, block, warnings, snapshot, err);
+    };
+    Common.checkLocalProofBlock(self, allocator, theory, assertion, block, null) catch |err| {
         recordPrimaryProofFailure(
             self,
             &proof.invalid_rules,
@@ -561,9 +562,33 @@ fn analyzeLocalProofBlock(
                 CompilerDiag.narrowDiagnosticError(err),
             ),
         );
-        try proof.invalid_rules.put(block.name, {});
-        return;
     };
+    Common.registerLocalProofBlock(self, allocator, theory, assertion, block) catch |err| {
+        return dropLocalProofBlock(self, theory, proof, block, warnings, snapshot, err);
+    };
+}
+
+fn dropLocalProofBlock(
+    self: *CompilerContext,
+    theory: *TheoryState,
+    proof: *ProofAnalysisState,
+    block: TheoremBlock,
+    warnings: WarningSnapshot,
+    snapshot: AssertionRecoverySnapshot,
+    err: anyerror,
+) !void {
+    warnings.restore(self);
+    snapshot.restore(theory);
+    recordPrimaryProofFailure(
+        self,
+        &proof.invalid_rules,
+        CompilerDiag.proofBlockDiagnostic(
+            block.name,
+            block.header_span,
+            CompilerDiag.narrowDiagnosticError(err),
+        ),
+    );
+    try proof.invalid_rules.put(block.name, {});
 }
 
 fn analyzeLocalDefItem(
@@ -782,19 +807,16 @@ fn analyzeAssertionStatement(
         if (assertion.kind == .theorem and state.stop != null) {
             skipTheoremProof(proof, assertion);
         } else if (assertion.kind == .theorem) {
-            const theorem_result = try analyzeTheoremProof(
+            // A theorem stays in scope whatever its proof did: later proofs
+            // are checked against its statement, so no later check depends
+            // on how this one came out (and the check memo need not know).
+            const theorem_warnings = try analyzeTheoremProof(
                 self,
                 allocator,
                 &state.theory,
                 proof,
                 assertion,
             );
-            if (theorem_result == null) {
-                try markAssertionInvalid(state, assertion.name);
-                self.noteBlockOutcome(assertion.name, false);
-                return;
-            }
-            const theorem_warnings = theorem_result.?.warnings;
 
             Common.registerAssertion(
                 self,
@@ -806,7 +828,6 @@ fn analyzeAssertionStatement(
                 theorem_warnings.restore(self);
                 snapshot.restore(&state.theory);
                 try markAssertionInvalid(state, assertion.name);
-                self.noteBlockOutcome(assertion.name, false);
                 if (!shouldSuppressAssertionMetadataFailure(
                     err,
                     state.theory.parser.last_annotations,
@@ -821,7 +842,6 @@ fn analyzeAssertionStatement(
                 }
                 return;
             };
-            self.noteBlockOutcome(assertion.name, true);
             return;
         }
     }
@@ -879,27 +899,25 @@ fn markAssertionInvalid(
     }
 }
 
-const TheoremProofResult = struct {
-    warnings: WarningSnapshot,
-};
-
+/// Check `assertion`'s proof block, reporting what goes wrong. Returns the
+/// warnings as they stood before the proof's lines were checked.
 fn analyzeTheoremProof(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
     theory: *TheoryState,
     proof: *ProofAnalysisState,
     assertion: AssertionStmt,
-) !?TheoremProofResult {
+) !WarningSnapshot {
     const theorem_name_span = CompilerDiag.mathSpanToSpan(assertion.name_span);
     if (proof.stream_aborted) {
-        return null;
+        return WarningSnapshot.capture(self);
     }
     if (proof.exhausted and proof.pending.items.len == 0) {
         self.addPrimaryDiagnostic(CompilerDiag.missingProofBlockDiagnostic(
             assertion.name,
             theorem_name_span,
         ));
-        return null;
+        return WarningSnapshot.capture(self);
     }
 
     var saw_parse_error = false;
@@ -943,7 +961,7 @@ fn analyzeTheoremProof(
                 } else {
                     proof.stream_aborted = true;
                 }
-                return null;
+                return WarningSnapshot.capture(self);
             }
             continue;
         } orelse {
@@ -960,7 +978,7 @@ fn analyzeTheoremProof(
                     ),
                 );
             }
-            return null;
+            return WarningSnapshot.capture(self);
         };
 
         switch (item) {
@@ -972,7 +990,7 @@ fn analyzeTheoremProof(
                         def.name_span,
                     ),
                 );
-                return null;
+                return WarningSnapshot.capture(self);
             },
             .notation => |notation| {
                 if (stray) |misnamed| reportMisnamedBlock(self, assertion, misnamed);
@@ -982,7 +1000,7 @@ fn analyzeTheoremProof(
                         notation.name_span,
                     ),
                 );
-                return null;
+                return WarningSnapshot.capture(self);
             },
             .block => |block| {
                 if (block.kind == .lemma) {
@@ -1006,7 +1024,7 @@ fn analyzeTheoremProof(
                     if (!saw_parse_error) {
                         reportMisnamedBlock(self, assertion, stray orelse block);
                     }
-                    return null;
+                    return WarningSnapshot.capture(self);
                 }
                 if (stray) |extra| {
                     self.addPrimaryDiagnostic(CompilerDiag.extraProofBlockDiagnostic(
@@ -1047,12 +1065,9 @@ fn analyzeTheoremProof(
                             CompilerDiag.narrowDiagnosticError(err),
                         ),
                     );
-                    return null;
+                    return warnings;
                 };
-
-                return .{
-                    .warnings = warnings,
-                };
+                return warnings;
             },
         }
     }

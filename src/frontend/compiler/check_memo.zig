@@ -10,17 +10,19 @@
 //!
 //! What a check observes is a prefix of the two sources: the `.mm0` text
 //! up to the theory parser's position (less trailing whitespace), and the
-//! `.auf` text up to the block, except that an EARLIER block's proof body influences later
-//! checks only through its outcome (registered, or marked invalid). The
-//! run keeps a running fingerprint of exactly that: theory text and
-//! proof text are hashed lazily up to each check (`sync`), proof bodies
-//! are skipped, and each block's outcome is hashed after it
-//! (`feedOutcome`). Local defs, notation items, filler defs, comments and
-//! parse garbage all lie in the hashed ranges, so they invalidate what
-//! follows, as they should. The memo key is that fingerprint plus a hash of
-//! the block body; the value is everything the check emitted: its
-//! error, the diagnostics and warnings it added, its hole sink entries,
-//! and the `last_diagnostic` it left behind. So a memo-backed run
+//! `.auf` text up to the block, less the earlier blocks' proof bodies. An
+//! earlier proof is invisible to later checks: the analysis keeps its
+//! theorem or lemma in scope whether the proof holds or not, so only its
+//! statement (in the hashed text) matters. The run keeps a running
+//! fingerprint of exactly that: theory text and proof text are hashed
+//! lazily up to each check (`sync`), and proof bodies are skipped. So an
+//! edit inside one proof re-checks that proof alone. Local defs, notation
+//! items, filler defs, comments and parse garbage all lie in the hashed
+//! ranges, so they invalidate what follows, as they should. The memo key
+//! is that fingerprint plus a hash of the block body; the value is
+//! everything the check emitted: its error, the diagnostics and warnings
+//! it added, its hole sink entries, and the `last_diagnostic` it left
+//! behind. So a memo-backed run
 //! collects holes, and only holes: a run without the hole sink, or with
 //! the inline-conclusion or stats sink, checks every block (`beginRun`).
 //!
@@ -141,7 +143,7 @@ pub const CheckMemo = struct {
         assertions: usize,
     };
 
-    const Domain = enum(u8) { config = 1, mm0 = 2, proof = 3, outcome = 4 };
+    const Domain = enum(u8) { config = 1, mm0 = 2, proof = 3 };
 
     allocator: std.mem.Allocator,
     entries: std.AutoHashMapUnmanaged(Key, *Entry) = .empty,
@@ -237,13 +239,6 @@ pub const CheckMemo = struct {
             self.feed(.proof, proof[self.proof_cursor..proof_end]);
             self.proof_cursor = proof_end;
         }
-    }
-
-    /// Record a block's outcome: what later checks may observe of it.
-    pub fn feedOutcome(self: *CheckMemo, name: []const u8, ok: bool) void {
-        if (!self.active) return;
-        self.feed(.outcome, name);
-        self.feed(.outcome, &[_]u8{@intFromBool(ok)});
     }
 
     /// The key of the check about to run on `block`: the fingerprint of

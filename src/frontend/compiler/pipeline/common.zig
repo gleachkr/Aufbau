@@ -1500,28 +1500,21 @@ pub fn processLocalProofBlock(
     block: TheoremBlock,
     emit: ?*Output,
 ) !void {
-    checkAndRegisterLocalProofBlock(
-        self,
-        allocator,
-        theory,
-        block,
-        emit,
-    ) catch |err| {
-        self.noteBlockOutcome(block.name, false);
-        return err;
-    };
-    self.noteBlockOutcome(block.name, true);
+    const assertion = try parseLemmaAssertion(self, allocator, &theory.parser, block);
+    try checkLocalProofBlock(self, allocator, theory, assertion, block, emit);
+    try registerLocalProofBlock(self, allocator, theory, assertion, block);
 }
 
-fn checkAndRegisterLocalProofBlock(
+/// Check a lemma's proof against `assertion`, its parsed statement, and
+/// with `emit` write the proof out.
+pub fn checkLocalProofBlock(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
     theory: *TheoryState,
+    assertion: AssertionStmt,
     block: TheoremBlock,
     emit: ?*Output,
 ) !void {
-    const assertion = try parseLemmaAssertion(self, allocator, &theory.parser, block);
-
     const scratch = theoremAllocator(self, allocator);
     defer releaseTheoremScratch(self);
     var theorem = TheoremContext.init(scratch);
@@ -1564,7 +1557,16 @@ fn checkAndRegisterLocalProofBlock(
         block.header_span,
         .LocalThm,
     );
+}
 
+/// Bring a lemma's statement into scope for what follows.
+pub fn registerLocalProofBlock(
+    self: *CompilerContext,
+    allocator: std.mem.Allocator,
+    theory: *TheoryState,
+    assertion: AssertionStmt,
+    block: TheoremBlock,
+) !void {
     registerAssertion(
         self,
         allocator,

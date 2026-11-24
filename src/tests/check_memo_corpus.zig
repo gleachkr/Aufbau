@@ -215,6 +215,32 @@ fn fixtureStems(allocator: std.mem.Allocator) ![]const []const u8 {
     return try stems.toOwnedSlice(allocator);
 }
 
+/// Fail unless the run just made missed at most the edited block and the
+/// blocks the memo never records.
+fn expectOnlyEditedMissed(
+    allocator: std.mem.Allocator,
+    memo: *const CheckMemo,
+    stem: []const u8,
+    scenario: []const u8,
+    index: usize,
+    block_count: usize,
+    block_name: []const u8,
+    misses_before: usize,
+    unrecordable: usize,
+    mm0_text: []const u8,
+    proof_text: []const u8,
+) !void {
+    const misses = memo.misses - misses_before;
+    if (misses <= unrecordable + 1) return;
+    const dump = try analyzeDump(allocator, mm0_text, proof_text, null, false);
+    defer allocator.free(dump);
+    std.debug.print(
+        "check memo {s} over-miss: {s} block {d}/{d} ({s}): {d} misses, {d} unrecordable\n--- edited analysis ---\n{s}\n--- edited text ---\n{s}\n",
+        .{ scenario, stem, index, block_count, block_name, misses, unrecordable, dump, proof_text },
+    );
+    return error.CheckMemoOverMiss;
+}
+
 fn runFixture(
     allocator: std.mem.Allocator,
     memo: *CheckMemo,
@@ -279,37 +305,33 @@ fn runFixture(
                 .mm0_text = mm0_text,
                 .proof_text = edited,
             });
-            if (memo.misses - misses > unrecordable + 1) {
-                const dump = try analyzeDump(allocator, mm0_text, edited, null, false);
-                defer allocator.free(dump);
-                std.debug.print(
-                    "check memo shift over-miss: {s} block {d}/{d} ({s}): {d} misses, {d} unrecordable\n--- edited analysis ---\n{s}\n--- edited text ---\n{s}\n",
-                    .{ stem, index, blocks.len, block.name, memo.misses - misses, unrecordable, dump, edited },
-                );
-                return error.CheckMemoOverMiss;
-            }
+            try expectOnlyEditedMissed(allocator, memo, stem, "shift", index, blocks.len, block.name, misses, unrecordable, mm0_text, edited);
         }
-        // A bogus rule on the last line: the outcome flips.
-        {
-            const rule_span = last.application.rule_span;
-            const edited = try applyEdit(arena, proof_text, .{
-                .start = rule_span.start,
-                .end = rule_span.end,
-                .text = "zz_no_such_rule",
-            });
-            try expectSameAnalysis(allocator, memo, stem, .{
-                .name = "break",
-                .mm0_text = mm0_text,
-                .proof_text = edited,
-            });
-        }
-        // Fixed again. The break run kept only what it used, so the blocks
-        // after the edited one re-check under the original outcome.
+        // A bogus rule on the last line: the outcome flips. Later proofs
+        // cannot see an earlier one's outcome (its theorem stays in
+        // scope), so again only the edited block re-checks.
+        const rule_span = last.application.rule_span;
+        const broken = try applyEdit(arena, proof_text, .{
+            .start = rule_span.start,
+            .end = rule_span.end,
+            .text = "zz_no_such_rule",
+        });
+        const break_misses = memo.misses;
+        try expectSameAnalysis(allocator, memo, stem, .{
+            .name = "break",
+            .mm0_text = mm0_text,
+            .proof_text = broken,
+        });
+        try expectOnlyEditedMissed(allocator, memo, stem, "break", index, blocks.len, block.name, break_misses, unrecordable, mm0_text, broken);
+        // Fixed again: the break run kept the entries of every block but
+        // the edited one, whose original entry it replaced.
+        const fix_misses = memo.misses;
         try expectSameAnalysis(allocator, memo, stem, .{
             .name = "fix",
             .mm0_text = mm0_text,
             .proof_text = proof_text,
         });
+        try expectOnlyEditedMissed(allocator, memo, stem, "fix", index, blocks.len, block.name, fix_misses, unrecordable, mm0_text, proof_text);
     }
 
     // A comment at the top of the theory shifts every `.mm0` position:

@@ -90,6 +90,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   such member is paired with a member it fits. Before, it was filled by
   position only. A context may still hold only one hole standing for whole
   members.
+- In the editor, and in the report after a failed compile, a theorem or
+  lemma whose proof fails stays in scope: later proofs that cite it are
+  checked against its statement. Before, it was dropped, the lines citing
+  it went unchecked, and every theorem built on it counted as failed. Only
+  a statement that does not parse or register is dropped. So breaking or
+  fixing one proof re-checks that proof alone, and costs what any other
+  keystroke does: near the top of Lean0's `lean-tg`, 3.9 s before and
+  0.23 s now.
 
 ### Fixed
 

@@ -570,9 +570,9 @@ between trusted parser trees and frontend proof elaboration.
   Block checks are ~95% of an analysis, so re-analysis is made
   incremental by memoizing them rather than by snapshotting the compiler
   state: the analyze walk keeps a running fingerprint of what a check
-  can observe (the theory text up to the parser's position, the proof
-  text up to the block, and each earlier block's outcome in place of its
-  body), keys a check by that fingerprint plus the block body, and on a
+  can observe (the theory text up to the parser's position, and the proof
+  text up to the block without the earlier blocks' bodies), keys a check
+  by that fingerprint plus the block body, and on a
   hit replays the recorded diagnostics, hole sink entries and error with
   proof spans relocated to the block's new position. Only runs that
   collect holes and no inline conclusions use it, so every entry records
@@ -601,6 +601,11 @@ failure, in the CLI and the wasm compile alike
 only it saw the failure (emission, a warning promoted to an error). The
 editor admits search placeholders there and lists them itself; `abc
 compile` leaves each one an error.
+
+A theorem or lemma whose proof fails stays in scope, as if proved: later proofs that cite it are checked against its statement. So
+an earlier proof's outcome is invisible to every later check, and an edit
+inside one proof re-checks that proof alone. Only a statement that fails
+to parse or register drops its rule.
 
 The analysis reports a failure once and recovers so that what follows is
 checked on its own: a `@vars` token a later term or notation claims is

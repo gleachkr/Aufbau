@@ -413,13 +413,6 @@ pub const CompilerContext = struct {
     /// (`check/apply.zig`).
     stack_base: ?usize = null,
 
-    /// Tell the check memo how a theorem or lemma block came out: the one
-    /// thing later checks can observe of its proof.
-    pub fn noteBlockOutcome(self: *CompilerContext, name: []const u8, ok: bool) void {
-        const memo = self.check_memo orelse return;
-        memo.feedOutcome(name, ok);
-    }
-
     pub fn recordSolverBranches(self: *CompilerContext, peak_branches: usize) void {
         const sink = self.inference_stats_sink orelse return;
         sink.recordSolver(peak_branches);
