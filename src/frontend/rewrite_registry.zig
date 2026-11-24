@@ -448,13 +448,25 @@ pub const RewriteRegistry = struct {
         while (relations.next()) |bundle| {
             try checkRelationMember(env, bundle, rule);
         }
+        // Every check runs before a unit law is noted, so a rejected rule
+        // leaves the registry as it was: a declaration without directives
+        // is registered without a recovery snapshot.
         var combiners = self.acui_by_head.iterator();
         while (combiners.next()) |entry| {
             const head = entry.key_ptr.*;
             const sort_name = env.terms.items[head].ret_sort_name;
             const rel = self.relationTermIdForSort(env, sort_name) orelse continue;
             try checkAcuiLaw(env, head, entry.value_ptr, rel, rule);
-            try noteUnitLaw(env, head, entry.value_ptr, rel, rule_id);
+            var noted = entry.value_ptr.*;
+            try noteUnitLaw(env, head, &noted, rel, rule_id);
+        }
+        combiners = self.acui_by_head.iterator();
+        while (combiners.next()) |entry| {
+            const head = entry.key_ptr.*;
+            const sort_name = env.terms.items[head].ret_sort_name;
+            const rel = self.relationTermIdForSort(env, sort_name) orelse continue;
+            // The same note succeeded on a copy of these slots just now.
+            noteUnitLaw(env, head, entry.value_ptr, rel, rule_id) catch unreachable;
         }
     }
 

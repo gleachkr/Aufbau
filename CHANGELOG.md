@@ -98,6 +98,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   fixing one proof re-checks that proof alone, and costs what any other
   keystroke does: near the top of Lean0's `lean-tg`, 3.9 s before and
   0.23 s now.
+- An edit in a large library costs less to check. The language server no
+  longer copies the theory's rewrite and annotation tables before each
+  declaration, and no longer parses every proof again to look for
+  `auto?`, `exact?` and `conversion?` when none is written. A keystroke in
+  the last file of a 126 MB library took 0.75 s and now takes 0.47 s.
 
 ### Fixed
 

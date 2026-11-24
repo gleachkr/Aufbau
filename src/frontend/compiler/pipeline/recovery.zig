@@ -7,12 +7,10 @@ const TheoryState = TheoryStateModule.TheoryState;
 const CompilerContext = @import("../context.zig").CompilerContext;
 const CompilerVars = @import("../vars.zig");
 const Containers = @import("../../containers.zig");
+const Metadata = @import("../metadata.zig");
 
 const cloneManagedMap = Containers.cloneManagedMap;
 
-const FreshBindingMap = TheoryStateModule.FreshBindingMap;
-const FreshenBindingMap = TheoryStateModule.FreshenBindingMap;
-const ViewMap = TheoryStateModule.ViewMap;
 const SortVarRegistry = CompilerVars.SortVarRegistry;
 
 pub const WarningSnapshot = struct {
@@ -70,31 +68,26 @@ pub const TermRecoverySnapshot = struct {
     }
 };
 
+/// Taken just before a declaration is registered, to undo what a failed
+/// registration left behind. Its @fresh, @freshen and @view entries are
+/// stored under the new rule's id only, so undoing them is removing that
+/// id. The registry is copied only when the declaration has directives:
+/// without any, registration writes to the registry only once every check
+/// has passed (`RewriteRegistry.checkDeclaredMember`).
 pub const AssertionRecoverySnapshot = struct {
-    registry: RewriteRegistry,
-    fresh_bindings: FreshBindingMap,
-    freshen_bindings: FreshenBindingMap,
-    views: ViewMap,
+    registry: ?RewriteRegistry,
     rule_count: usize,
 
     pub fn capture(
         allocator: std.mem.Allocator,
         state: *const TheoryState,
+        annotations: []const []const u8,
     ) !AssertionRecoverySnapshot {
         return .{
-            .registry = try state.registry.clone(allocator),
-            .fresh_bindings = try cloneManagedMap(
-                allocator,
-                &state.fresh_bindings,
-            ),
-            .freshen_bindings = try cloneManagedMap(
-                allocator,
-                &state.freshen_bindings,
-            ),
-            .views = try cloneManagedMap(
-                allocator,
-                &state.views,
-            ),
+            .registry = if (Metadata.hasDirective(annotations))
+                try state.registry.clone(allocator)
+            else
+                null,
             .rule_count = state.env.rules.items.len,
         };
     }
@@ -103,10 +96,11 @@ pub const AssertionRecoverySnapshot = struct {
         self: AssertionRecoverySnapshot,
         state: *TheoryState,
     ) void {
-        state.registry = self.registry;
-        state.fresh_bindings = self.fresh_bindings;
-        state.freshen_bindings = self.freshen_bindings;
-        state.views = self.views;
+        if (self.registry) |registry| state.registry = registry;
+        const rule_id: u32 = @intCast(self.rule_count);
+        _ = state.fresh_bindings.remove(rule_id);
+        _ = state.freshen_bindings.remove(rule_id);
+        _ = state.views.remove(rule_id);
     }
 
     pub fn rollbackRule(

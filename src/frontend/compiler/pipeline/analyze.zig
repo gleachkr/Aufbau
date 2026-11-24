@@ -543,14 +543,14 @@ fn analyzeLocalProofBlock(
     block: TheoremBlock,
 ) !void {
     const warnings = WarningSnapshot.capture(self);
-    const snapshot = try AssertionRecoverySnapshot.capture(allocator, theory);
     const assertion = Common.parseLemmaAssertion(
         self,
         allocator,
         &theory.parser,
         block,
     ) catch |err| {
-        return dropLocalProofBlock(self, theory, proof, block, warnings, snapshot, err);
+        warnings.restore(self);
+        return dropLocalProofBlock(self, proof, block, err);
     };
     Common.checkLocalProofBlock(self, allocator, theory, assertion, block, null) catch |err| {
         recordPrimaryProofFailure(
@@ -563,22 +563,24 @@ fn analyzeLocalProofBlock(
             ),
         );
     };
+    const snapshot = try AssertionRecoverySnapshot.capture(
+        allocator,
+        theory,
+        block.annotations,
+    );
     Common.registerLocalProofBlock(self, allocator, theory, assertion, block) catch |err| {
-        return dropLocalProofBlock(self, theory, proof, block, warnings, snapshot, err);
+        warnings.restore(self);
+        snapshot.restore(theory);
+        return dropLocalProofBlock(self, proof, block, err);
     };
 }
 
 fn dropLocalProofBlock(
     self: *CompilerContext,
-    theory: *TheoryState,
     proof: *ProofAnalysisState,
     block: TheoremBlock,
-    warnings: WarningSnapshot,
-    snapshot: AssertionRecoverySnapshot,
     err: anyerror,
 ) !void {
-    warnings.restore(self);
-    snapshot.restore(theory);
     recordPrimaryProofFailure(
         self,
         &proof.invalid_rules,
@@ -794,11 +796,8 @@ fn analyzeAssertionStatement(
     assertion: AssertionStmt,
     warnings: WarningSnapshot,
 ) !void {
-    const snapshot = try AssertionRecoverySnapshot.capture(allocator, &state.theory);
-
     if (!Common.assertionDependenciesAvailable(&state.theory.env, assertion)) {
         warnings.restore(self);
-        snapshot.restore(&state.theory);
         try markAssertionInvalid(state, assertion.name);
         return;
     }
@@ -818,6 +817,11 @@ fn analyzeAssertionStatement(
                 assertion,
             );
 
+            const snapshot = try AssertionRecoverySnapshot.capture(
+                allocator,
+                &state.theory,
+                state.theory.parser.last_annotations,
+            );
             Common.registerAssertion(
                 self,
                 allocator,
@@ -846,6 +850,11 @@ fn analyzeAssertionStatement(
         }
     }
 
+    const snapshot = try AssertionRecoverySnapshot.capture(
+        allocator,
+        &state.theory,
+        state.theory.parser.last_annotations,
+    );
     var no_proof_parser: ?ProofItemStream = null;
     processAssertion(
         self,

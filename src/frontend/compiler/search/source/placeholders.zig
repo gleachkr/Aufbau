@@ -70,6 +70,10 @@ pub fn searchPlaceholders(
     allocator: std.mem.Allocator,
     proof_src: []const u8,
 ) ![]SearchPlaceholder {
+    // A placeholder is an application of one of these rule names, so a
+    // source that spells none of them has none, and is not parsed.
+    if (!spellsPlaceholder(proof_src)) return &.{};
+
     var parse_arena = ArenaAllocator.init(allocator);
     defer parse_arena.deinit();
     var out = std.ArrayListUnmanaged(SearchPlaceholder).empty;
@@ -87,6 +91,18 @@ pub fn searchPlaceholders(
         }
     }
     return try out.toOwnedSlice(allocator);
+}
+
+/// Whether `src` spells a placeholder name anywhere. Every name ends in
+/// `?`, so one byte scan for `?` finds every candidate.
+fn spellsPlaceholder(src: []const u8) bool {
+    var pos: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, src, pos, '?')) |mark| : (pos = mark + 1) {
+        for (ProofScript.search_placeholder_names) |name| {
+            if (std.mem.endsWith(u8, src[0 .. mark + 1], name)) return true;
+        }
+    }
+    return false;
 }
 
 /// What every host reports for a search placeholder before a search has

@@ -330,6 +330,45 @@ test "compiler analyze keeps a theorem or lemma whose proof fails in scope" {
     try std.testing.expectEqualStrings("misuses_lemma", diags[3].theorem_name.?);
 }
 
+test "compiler analyze leaves no unit law behind for a rejected declaration" {
+    // `bad` has the shape of `join`'s left unit law but is rejected as
+    // `meet`'s associativity law. It has no directives, so analysis keeps
+    // no registry snapshot for it: had it been noted as `join`'s unit law
+    // before the rejection, `filler` would inherit its rule id and `cunit`
+    // would read as a second unit law for that side.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort ctx;
+        \\term ceq (g h: ctx): wff;
+        \\term emp: ctx;
+        \\--| @relation ctx ceq crefl ctrans csym _
+        \\axiom crefl (g: ctx): $ ceq g g $;
+        \\axiom ctrans (g h i: ctx): $ ceq g h $ > $ ceq h i $ > $ ceq g i $;
+        \\axiom csym (g h: ctx): $ ceq g h $ > $ ceq h g $;
+        \\--| @acui cassoc _ emp
+        \\term join (g h: ctx): ctx;
+        \\--| @acui bad _ emp
+        \\term meet (g h: ctx): ctx;
+        \\axiom cassoc (g h i: ctx):
+        \\  $ ceq (join (join g h) i) (join g (join h i)) $;
+        \\axiom bad (g: ctx): $ ceq (join emp g) g $;
+        \\axiom filler (g: ctx): $ ceq g g $;
+        \\axiom cunit (g: ctx): $ ceq (join emp g) g $;
+    ;
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try compiler.analyze();
+
+    for (compiler.primaryDiagnostics()) |diag| {
+        try std.testing.expect(diag.err != error.AmbiguousStructuralUnitRule);
+    }
+    try std.testing.expectEqual(
+        error.AcuiAssocShape,
+        compiler.primaryDiagnostics()[0].err,
+    );
+}
+
 test "compiler analyze with proof recovers after failing lemma blocks" {
     const mm0_src =
         \\provable sort wff;

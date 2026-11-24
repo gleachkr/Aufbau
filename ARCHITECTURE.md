@@ -564,7 +564,11 @@ between trusted parser trees and frontend proof elaboration.
   (`registerSort` / `registerTerm` / `registerAssertion`: env entry, lints,
   annotations), dependency availability checks, and the local-item
   operations
-- `compiler/pipeline/recovery.zig`: analysis snapshots and rollback
+- `compiler/pipeline/recovery.zig`: analysis snapshots and rollback. A
+  failed assertion's @fresh, @freshen and @view entries are removed by its
+  rule id; the rewrite registry is copied only for a declaration with
+  directives, since without any, registration writes to it only after
+  every check has passed
 - `compiler/check_memo.zig`: the proof-block check memo the editor hosts
   attach (`CompilerContext.check_memo`; the compile path never does).
   Block checks are ~95% of an analysis, so re-analysis is made

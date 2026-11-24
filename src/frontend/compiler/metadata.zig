@@ -300,6 +300,15 @@ fn warnUnknownAnnotations(
     }
 }
 
+/// Whether any of `annotations` is a directive (`@...`) rather than doc
+/// prose: only a directive can register anything.
+pub fn hasDirective(annotations: []const []const u8) bool {
+    for (annotations) |ann| {
+        if (annotationDirective(ann) != null) return true;
+    }
+    return false;
+}
+
 fn annotationDirective(ann: []const u8) ?[]const u8 {
     if (ann.len == 0 or ann[0] != '@') return null;
 
