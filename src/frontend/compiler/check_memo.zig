@@ -23,8 +23,10 @@
 //! and the `last_diagnostic` it left behind. So a memo-backed run
 //! collects holes, and only holes: a run without the hole sink, or with
 //! the inline-conclusion or stats sink, checks every block (`beginRun`).
-//! The editor's diagnostics and navigation passes both collect holes, so
-//! a block is checked once per edit and the second pass replays it.
+//!
+//! The memo keeps what each root's latest run used (`root`): an entry no
+//! later run of its root found is one that root's texts no longer reach,
+//! and the entries of an edit's other roots stay for their next run.
 //!
 //! One thing a check reads outside the hashed prefix is the rule catalog
 //! (`RuleCatalog`), which spans the whole `.mm0` and is consulted for
@@ -54,8 +56,6 @@ const HoleInference = Context.HoleInference;
 const FilledAssertion = Context.FilledAssertion;
 
 pub const CheckMemo = struct {
-    pub const default_max_entries: usize = 4096;
-
     pub const Key = struct {
         fingerprint: u64,
         body: u64,
@@ -67,9 +67,17 @@ pub const CheckMemo = struct {
         entry: ?RuleCatalog.Entry,
     };
 
+    /// A run that found or recorded an entry: the run's number and the root
+    /// it was for.
+    pub const Use = struct {
+        root: u64,
+        run: u32,
+    };
+
     pub const Entry = struct {
         arena: ArenaAllocator,
-        last_used: u32,
+        /// At most one per root, its latest.
+        uses: std.ArrayListUnmanaged(Use) = .empty,
         /// Null when the check succeeded, else the error it returned.
         outcome: ?anyerror,
         /// Where the block lay in the proof text when recorded.
@@ -137,9 +145,15 @@ pub const CheckMemo = struct {
 
     allocator: std.mem.Allocator,
     entries: std.AutoHashMapUnmanaged(Key, *Entry) = .empty,
-    max_entries: usize = default_max_entries,
-    /// Bumped per run; entries remember the last run that used them.
+    /// Bumped per run.
     run: u32 = 0,
+    /// The root the next run is for. A host that analyses several units
+    /// (an editor with several files open) names each by a root of its
+    /// own, so that one unit's run keeps what another's last run used.
+    root: u64 = 0,
+    /// Each root's latest run. An entry is kept while the latest run of
+    /// some root used it: what a run did not use, its root no longer needs.
+    latest_runs: std.AutoHashMapUnmanaged(u64, u32) = .empty,
     active: bool = false,
     fingerprint: u64 = 0,
     mm0_cursor: usize = 0,
@@ -159,6 +173,7 @@ pub const CheckMemo = struct {
         var it = self.entries.valueIterator();
         while (it.next()) |entry| self.destroyEntry(entry.*);
         self.entries.deinit(self.allocator);
+        self.latest_runs.deinit(self.allocator);
         self.lookups.deinit(self.allocator);
         self.* = undefined;
     }
@@ -182,9 +197,12 @@ pub const CheckMemo = struct {
     }
 
     pub fn endRun(self: *CheckMemo) void {
+        // A run that left the memo inactive used nothing of it, and drops
+        // nothing.
+        const used_memo = self.active;
         self.active = false;
         self.recording = false;
-        self.evict();
+        if (used_memo) self.dropUnused();
     }
 
     /// Hash `bytes` into the running fingerprint. The domain tag and the
@@ -280,7 +298,11 @@ pub const CheckMemo = struct {
                 return null;
             }
         }
-        entry.last_used = self.run;
+        // An entry this run cannot mark used would be dropped at its end.
+        self.noteUse(entry) catch {
+            self.misses += 1;
+            return null;
+        };
         self.hits += 1;
         return entry;
     }
@@ -347,7 +369,6 @@ pub const CheckMemo = struct {
         const entry = try self.allocator.create(Entry);
         entry.* = .{
             .arena = ArenaAllocator.init(self.allocator),
-            .last_used = self.run,
             .outcome = outcome,
             .block = block,
             .primary = &.{},
@@ -411,6 +432,7 @@ pub const CheckMemo = struct {
             };
         }
         entry.lookups = lookups;
+        try self.noteUse(entry);
 
         const gop = try self.entries.getOrPut(self.allocator, key);
         if (gop.found_existing) self.destroyEntry(gop.value_ptr.*);
@@ -423,31 +445,42 @@ pub const CheckMemo = struct {
         self.allocator.destroy(entry);
     }
 
-    /// Drop the least recently used entries once the memo outgrows its
-    /// cap, down to three quarters of it.
-    fn evict(self: *CheckMemo) void {
-        if (self.entries.count() <= self.max_entries) return;
-        const Aged = struct {
-            key: Key,
-            last_used: u32,
-            fn olderFirst(_: void, a: @This(), b: @This()) bool {
-                return a.last_used < b.last_used;
+    /// Mark `entry` used by this run, in place of any earlier run of the
+    /// same root.
+    fn noteUse(self: *CheckMemo, entry: *Entry) !void {
+        for (entry.uses.items) |*use| {
+            if (use.root == self.root) {
+                use.run = self.run;
+                return;
             }
-        };
-        var aged = std.ArrayListUnmanaged(Aged).empty;
-        defer aged.deinit(self.allocator);
+        }
+        try entry.uses.append(entry.arena.allocator(), .{
+            .root = self.root,
+            .run = self.run,
+        });
+    }
+
+    /// The run just ended is its root's latest: the root's uses by earlier
+    /// runs lapse, and an entry no root's latest run used is dropped.
+    fn dropUnused(self: *CheckMemo) void {
+        // Without the record of this run, every entry stays.
+        self.latest_runs.put(self.allocator, self.root, self.run) catch return;
+        var unused = std.ArrayListUnmanaged(Key).empty;
+        defer unused.deinit(self.allocator);
         var it = self.entries.iterator();
         while (it.next()) |kv| {
-            aged.append(self.allocator, .{
-                .key = kv.key_ptr.*,
-                .last_used = kv.value_ptr.*.last_used,
-            }) catch return;
+            const uses = &kv.value_ptr.*.uses;
+            var kept: usize = 0;
+            for (uses.items) |use| {
+                if (self.latest_runs.get(use.root) != use.run) continue;
+                uses.items[kept] = use;
+                kept += 1;
+            }
+            uses.shrinkRetainingCapacity(kept);
+            if (kept == 0) unused.append(self.allocator, kv.key_ptr.*) catch return;
         }
-        std.sort.pdq(Aged, aged.items, {}, Aged.olderFirst);
-        const target = self.max_entries - self.max_entries / 4;
-        for (aged.items) |old| {
-            if (self.entries.count() <= target) break;
-            if (self.entries.fetchRemove(old.key)) |removed| {
+        for (unused.items) |key| {
+            if (self.entries.fetchRemove(key)) |removed| {
                 self.destroyEntry(removed.value);
             }
         }

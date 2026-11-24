@@ -117,16 +117,17 @@ pub fn findBinderIn(binders: []const BinderDecl, name: []const u8) ?BinderDecl {
     return null;
 }
 
+/// `stmt` is the assertion's statement in `text`.
 pub fn hypothesesFromMm0Assertion(
     allocator: std.mem.Allocator,
     text: []const u8,
+    stmt: source.SourceSpan,
     assertion: parse.AssertionStmt,
 ) ![]const HypothesisDecl {
-    const math_strings = try source.mathStringsBeforeByteInContainingStatement(
+    const math_strings = try source.mathStringsBeforeByte(
         allocator,
         text,
-        assertion.name_span.start,
-        assertion.name_span.end,
+        stmt,
         '=',
     );
     defer allocator.free(math_strings);

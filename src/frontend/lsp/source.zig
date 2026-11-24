@@ -316,31 +316,13 @@ pub fn findStatementByte(
     return null;
 }
 
-pub fn statementContainingSpan(
-    text: []const u8,
-    span_start: usize,
-    span_end: usize,
-) ?SourceSpan {
-    var iter = StatementIterator.init(text);
-    while (iter.next()) |stmt| {
-        if (span_start >= stmt.start and span_end <= stmt.end) return stmt;
-    }
-    return null;
-}
-
-pub fn mathStringsBeforeByteInContainingStatement(
-    allocator: std.mem.Allocator,
-    text: []const u8,
-    span_start: usize,
-    span_end: usize,
-    stop_byte: u8,
-) ![]const MathStringSpan {
-    const stmt = statementContainingSpan(
-        text,
-        span_start,
-        span_end,
-    ) orelse return try allocator.alloc(MathStringSpan, 0);
-    return mathStringsBeforeByte(allocator, text, stmt, stop_byte);
+/// The body of the definition `stmt`: the math string after its `=`,
+/// without delimiters.
+pub fn definitionBody(text: []const u8, stmt: SourceSpan) ?[]const u8 {
+    const eq = findStatementByte(text, stmt, '=') orelse return null;
+    var pos = eq + 1;
+    const math = nextMathStringIn(text, stmt.end, &pos) orelse return null;
+    return math.text;
 }
 
 pub fn mathStringsBeforeByte(

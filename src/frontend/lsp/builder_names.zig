@@ -232,9 +232,6 @@ fn ruleDeclIndex(self: anytype, name: []const u8) ?usize {
             else => {},
         }
     }
-    var found: ?usize = null;
-    for (self.proof_rules.items) |rule| {
-        if (std.mem.eql(u8, rule.name, name)) found = rule.decl_index;
-    }
-    return found;
+    const index = self.proof_rule_by_name.get(name) orelse return null;
+    return self.proof_rules.items[index].decl_index;
 }

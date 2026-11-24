@@ -418,6 +418,19 @@ const NavigationSnapshot = struct {
 /// What an analysis of one root touched: the other files it read (so the
 /// root is re-analysed when one of them changes) and the closed files it
 /// published diagnostics for (so those are cleared when they drop out).
+/// The holes the last analysis of a unit collected, for its navigation
+/// index.
+const AnalysisHoles = struct {
+    key: UnitKey,
+    holes: mm0.CompilerSupport.Context.HoleInferenceSink,
+
+    fn deinit(self: *AnalysisHoles, allocator: std.mem.Allocator) void {
+        self.key.deinit(allocator);
+        self.holes.deinit();
+        self.* = undefined;
+    }
+};
+
 const UnitRecord = struct {
     deps: []const []const u8,
     published: []const []const u8,
@@ -648,8 +661,12 @@ pub const Handler = struct {
     /// What the last analysis of each root document read and published,
     /// keyed by the analysed URI (owned).
     units: std.StringHashMapUnmanaged(UnitRecord),
+    /// The holes of each root's last analysis, keyed by its `.mm0` URI
+    /// (owned), as the navigation cache is.
+    analysis_holes: std.StringHashMapUnmanaged(AnalysisHoles),
     /// Proof-block check outcomes shared by every analysis this handler
-    /// runs, so an edit re-checks only what it can affect.
+    /// runs, so an edit re-checks only what it can affect. It keeps what
+    /// each root's last analysis used.
     check_memo: mm0.CheckMemo,
     offset_encoding: lsp.offsets.Encoding,
     snippet_support: bool,
@@ -673,6 +690,7 @@ pub const Handler = struct {
             .search_cache = .empty,
             .search_status = .empty,
             .units = .empty,
+            .analysis_holes = .empty,
             .check_memo = mm0.CheckMemo.init(allocator),
             .offset_encoding = .@"utf-16",
             .snippet_support = false,
@@ -713,6 +731,13 @@ pub const Handler = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.units.deinit(self.allocator);
+
+        var holes_it = self.analysis_holes.iterator();
+        while (holes_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.analysis_holes.deinit(self.allocator);
         self.check_memo.deinit();
         self.* = undefined;
     }
@@ -1921,12 +1946,19 @@ pub const Handler = struct {
             unit.proof.?.joined.text,
         );
         compiler.allow_search_placeholders = true;
-        // Collected only so the check memo records each block's holes: the
-        // navigation pass then replays this pass's checks.
-        var holes = mm0.CompilerSupport.Context.HoleInferenceSink{ .allocator = arena };
+        // Kept for the unit's navigation index, which would otherwise run
+        // this analysis again for them.
+        var holes = mm0.CompilerSupport.Context.HoleInferenceSink{
+            .allocator = self.allocator,
+        };
+        var holes_owned = true;
+        defer if (holes_owned) holes.deinit();
         compiler.hole_inference_sink = &holes;
-        compiler.check_memo = &self.check_memo;
-        compiler.analyze() catch |err| {
+        compiler.check_memo = self.checkMemoFor(mm0_loaded.uri);
+        const analyzed = compiler.analyze();
+        holes_owned = false;
+        try self.keepAnalysisHoles(mm0_loaded.uri, states, holes);
+        analyzed catch |err| {
             if (hasDiagnostics(&compiler)) {
                 try self.publishUnitDiagnostics(
                     arena,
@@ -1967,6 +1999,34 @@ pub const Handler = struct {
             compiler.omittedPrimaryDiagnostic(.mm0),
             search_diagnostics,
         );
+    }
+
+    /// The check memo, set for a run over the unit rooted at `mm0_uri`.
+    fn checkMemoFor(self: *Handler, mm0_uri: []const u8) *mm0.CheckMemo {
+        self.check_memo.root = std.hash.Wyhash.hash(0, mm0_uri);
+        return &self.check_memo;
+    }
+
+    /// Keep `holes` (owned from here on) as the last analysis of the unit
+    /// rooted at `mm0_uri` in `states`.
+    fn keepAnalysisHoles(
+        self: *Handler,
+        mm0_uri: []const u8,
+        states: []const NavigationDocumentState,
+        holes: mm0.CompilerSupport.Context.HoleInferenceSink,
+    ) !void {
+        var owned = holes;
+        errdefer owned.deinit();
+        var key = try UnitKey.init(self.allocator, states);
+        errdefer key.deinit(self.allocator);
+        const gop = try self.analysis_holes.getOrPut(self.allocator, mm0_uri);
+        if (gop.found_existing) {
+            gop.value_ptr.deinit(self.allocator);
+        } else {
+            errdefer _ = self.analysis_holes.remove(mm0_uri);
+            gop.key_ptr.* = try self.allocator.dupe(u8, mm0_uri);
+        }
+        gop.value_ptr.* = .{ .key = key, .holes = owned };
     }
 
     fn hasDiagnostics(compiler: *const mm0.Compiler) bool {
@@ -2558,12 +2618,17 @@ pub const Handler = struct {
             }
             self.removeNavigationCacheByMm0Uri(mm0_uri);
 
+            const analysis = self.analysis_holes.getPtr(mm0_uri);
             var snapshot = try LspIndex.Snapshot.build(self.allocator, .{
                 .mm0_uri = mm0_uri,
                 .mm0_text = unit.mm0.joined.text,
                 .proof_uri = if (unit.proof) |proof| proof.rootFile().uri else null,
                 .proof_text = if (unit.proof) |proof| proof.joined.text else null,
-                .check_memo = &self.check_memo,
+                .holes = if (analysis) |found|
+                    if (found.key.eql(states)) &found.holes else null
+                else
+                    null,
+                .check_memo = self.checkMemoFor(mm0_uri),
             });
             errdefer snapshot.deinit();
             var key = try UnitKey.init(self.allocator, states);

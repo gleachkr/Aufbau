@@ -255,17 +255,21 @@ pub const RangeLocator = struct {
 };
 
 pub fn sourceRangesToLocations(
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     locator: RangeLocator,
     ranges: []const LspIndex.SourceRange,
     encoding: lsp.offsets.Encoding,
 ) ![]const types.Location {
+    var converter = RangeConverter{ .arena = arena, .encoding = encoding };
     var locations = std.ArrayListUnmanaged(types.Location).empty;
     for (ranges) |range| {
-        const location = locator.toLocation(range, encoding) orelse continue;
-        try locations.append(allocator, location);
+        const hit = locator.locate(range) orelse continue;
+        try locations.append(arena, .{
+            .uri = hit.uri,
+            .range = try converter.range(hit.text, hit.span),
+        });
     }
-    return try locations.toOwnedSlice(allocator);
+    return try locations.toOwnedSlice(arena);
 }
 
 /// Completion items whose replacement range lies outside the requesting
@@ -334,35 +338,56 @@ pub fn outlineSymbolsToLsp(
     symbols: []const LspIndex.OutlineSymbol,
     encoding: lsp.offsets.Encoding,
 ) ![]const types.DocumentSymbol {
+    var converter = RangeConverter{ .arena = arena, .encoding = encoding };
+    return outlineSymbolsIn(&converter, locator, uri, symbols);
+}
+
+fn outlineSymbolsIn(
+    converter: *RangeConverter,
+    locator: RangeLocator,
+    uri: []const u8,
+    symbols: []const LspIndex.OutlineSymbol,
+) ![]const types.DocumentSymbol {
     var result = try std.ArrayListUnmanaged(types.DocumentSymbol).initCapacity(
-        arena,
+        converter.arena,
         symbols.len,
     );
     for (symbols) |symbol| {
         const hit = locator.locate(symbol.range) orelse continue;
         if (!std.mem.eql(u8, hit.uri, uri)) continue;
-        const selection = locator.toLsp(symbol.selection_range, encoding) orelse
-            continue;
+        const selection = locator.locate(symbol.selection_range) orelse continue;
         result.appendAssumeCapacity(.{
             .name = symbol.name,
             .detail = symbol.kind.label(),
             .kind = declarationSymbolKind(symbol.kind),
-            .range = clampedRange(hit.text, hit.span, encoding),
-            .selectionRange = selection,
+            .range = try converter.range(hit.text, hit.span),
+            .selectionRange = try converter.range(selection.text, selection.span),
             .children = if (symbol.children.len == 0)
                 null
             else
-                try outlineSymbolsToLsp(
-                    arena,
-                    locator,
-                    uri,
-                    symbol.children,
-                    encoding,
-                ),
+                try outlineSymbolsIn(converter, locator, uri, symbol.children),
         });
     }
     return result.items;
 }
+
+/// Converts many spans to LSP ranges, building each document's line table
+/// once, on its first span.
+const RangeConverter = struct {
+    arena: std.mem.Allocator,
+    encoding: lsp.offsets.Encoding,
+    tables: std.AutoHashMapUnmanaged(usize, offsets.LineTable) = .empty,
+
+    fn range(self: *RangeConverter, text: []const u8, span: Span) !types.Range {
+        const gop = try self.tables.getOrPut(self.arena, @intFromPtr(text.ptr));
+        if (!gop.found_existing or gop.value_ptr.text.len != text.len) {
+            gop.value_ptr.* = try offsets.LineTable.init(self.arena, text);
+        }
+        const start = @min(span.start, text.len);
+        const end = @max(start, @min(span.end, text.len));
+        return gop.value_ptr.locToRange(.{ .start = start, .end = end }, self.encoding);
+    }
+};
 
 fn declarationSymbolKind(kind: LspIndex.DeclarationKind) types.SymbolKind {
     return switch (kind) {

@@ -1602,9 +1602,9 @@ test "LSP proof hover accepts UTF-16 positions after non-ASCII text" {
 }
 
 /// Hover `_wff` in a one-line holey proof. With `open`, the proof is
-/// opened first, so the diagnostics pass records every block in the
-/// check memo before the hover builds its snapshot, which then replays
-/// the block instead of checking it again.
+/// opened first, so the hover's snapshot takes the holes the diagnostics
+/// pass collected and checks nothing again; without, the snapshot runs
+/// the analysis itself.
 fn expectProofHoleHover(open: bool) !void {
     const mm0_uri = "file:///tmp/lsp-hole-hover.mm0";
     const proof_uri = "file:///tmp/lsp-hole-hover.auf";
@@ -1672,7 +1672,7 @@ fn expectProofHoleHover(open: bool) !void {
     ));
     if (open) {
         try std.testing.expectEqual(misses_before_hover, handler.check_memo.misses);
-        try std.testing.expectEqual(@as(usize, 1), handler.check_memo.hits);
+        try std.testing.expectEqual(@as(usize, 0), handler.check_memo.hits);
     }
 }
 

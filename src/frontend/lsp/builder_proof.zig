@@ -10,8 +10,6 @@ const support = @import("builder_support.zig");
 
 const Declaration = Types.Declaration;
 
-const ProofRuleDecl = model.ProofRuleDecl;
-const ProofLineDecl = model.ProofLineDecl;
 const RuleResolution = model.RuleResolution;
 
 const completionSortText = completion.completionSortText;
@@ -70,6 +68,11 @@ pub fn addProofBlock(
     const info = self.proof_blocks.items[block_index];
     if (block.kind == .lemma) {
         if (info.decl_index) |decl_index| {
+            try self.proof_rule_by_name.put(
+                self.allocator,
+                block.name,
+                self.proof_rules.items.len,
+            );
             try self.proof_rules.append(self.allocator, .{
                 .name = block.name,
                 .decl_index = decl_index,
@@ -498,16 +501,11 @@ pub fn resolveRule(
     name: []const u8,
     use_start: usize,
 ) ?RuleResolution {
-    var best: ?ProofRuleDecl = null;
-    for (self.proof_rules.items) |rule| {
-        if (!std.mem.eql(u8, rule.name, name)) continue;
-        if (rule.available_start > use_start) continue;
-        if (best == null or rule.available_start > best.?.available_start) {
-            best = rule;
+    if (self.proof_rule_by_name.get(name)) |index| {
+        const rule = self.proof_rules.items[index];
+        if (rule.available_start <= use_start) {
+            return .{ .decl_index = rule.decl_index, .available = true };
         }
-    }
-    if (best) |rule| {
-        return .{ .decl_index = rule.decl_index, .available = true };
     }
     return self.globalRuleResolution(block_index, name);
 }
@@ -557,15 +555,15 @@ pub fn resolveLine(
     label: []const u8,
     line_start: usize,
 ) ?usize {
-    var best: ?ProofLineDecl = null;
-    for (self.proof_lines.items) |line| {
-        if (line.block_index != block_index) continue;
-        if (!std.mem.eql(u8, line.name, label)) continue;
+    // The block being indexed holds the last lines, in source order: the
+    // nearest earlier line with the label is the first one back.
+    var index = self.proof_lines.items.len;
+    while (index > 0) {
+        index -= 1;
+        const line = self.proof_lines.items[index];
+        if (line.block_index != block_index) break;
         if (line.line_start >= line_start) continue;
-        if (best == null or line.line_start > best.?.line_start) {
-            best = line;
-        }
+        if (std.mem.eql(u8, line.name, label)) return line.decl_index;
     }
-    if (best) |line| return line.decl_index;
     return null;
 }

@@ -43,6 +43,20 @@ pub fn indexToPosition(
         nl + 1
     else
         0;
+    return .{
+        .line = @intCast(std.mem.count(u8, text[0..line_start], "\n")),
+        .character = column(text, line_start, target, encoding, round_up),
+    };
+}
+
+/// The column of `target` on the line starting at `line_start`.
+fn column(
+    text: []const u8,
+    line_start: usize,
+    target: usize,
+    encoding: Encoding,
+    round_up: bool,
+) u32 {
     var i = line_start;
     var character: usize = 0;
     while (i < target) {
@@ -51,11 +65,57 @@ pub fn indexToPosition(
         character += char.units;
         i += char.bytes;
     }
-    return .{
-        .line = @intCast(std.mem.count(u8, text[0..line_start], "\n")),
-        .character = @intCast(character),
-    };
+    return @intCast(character);
 }
+
+/// A text's line starts, for converting many offsets into it: each costs
+/// a search and its own line, not a scan from the start of the text.
+pub const LineTable = struct {
+    text: []const u8,
+    /// The offset each line starts at; the first is 0.
+    starts: []const usize,
+
+    pub fn init(allocator: std.mem.Allocator, text: []const u8) !LineTable {
+        var starts = std.ArrayListUnmanaged(usize).empty;
+        try starts.append(allocator, 0);
+        for (text, 0..) |byte, i| {
+            if (byte == '\n') try starts.append(allocator, i + 1);
+        }
+        return .{ .text = text, .starts = try starts.toOwnedSlice(allocator) };
+    }
+
+    pub fn deinit(self: LineTable, allocator: std.mem.Allocator) void {
+        allocator.free(self.starts);
+    }
+
+    /// `indexToPosition` over this table's text.
+    pub fn indexToPosition(
+        self: LineTable,
+        index: usize,
+        encoding: Encoding,
+        round_up: bool,
+    ) types.Position {
+        const target = @min(index, self.text.len);
+        // The last line starting at or before `target`.
+        const line = std.sort.upperBound(usize, self.starts, target, orderUsize) - 1;
+        return .{
+            .line = @intCast(line),
+            .character = column(self.text, self.starts[line], target, encoding, round_up),
+        };
+    }
+
+    /// `locToRange` over this table's text.
+    pub fn locToRange(self: LineTable, loc: Loc, encoding: Encoding) types.Range {
+        return .{
+            .start = self.indexToPosition(loc.start, encoding, false),
+            .end = self.indexToPosition(loc.end, encoding, true),
+        };
+    }
+
+    fn orderUsize(key: usize, item: usize) std.math.Order {
+        return std.math.order(key, item);
+    }
+};
 
 /// The byte index of `position`, clamped to its line and to the text.
 pub fn positionToIndex(

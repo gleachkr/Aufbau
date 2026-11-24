@@ -579,8 +579,8 @@ between trusted parser trees and frontend proof elaboration.
   the same output. Rule-catalog lookups, the one thing a check reads
   beyond that prefix, are recorded and re-verified. `src/tests/check_memo_corpus.zig` is the guard: on
   every fixture, a warm analysis must equal a cold one under body edits
-  that shift or break later blocks and theory edits that shift
-  everything.
+  that shift or break later blocks, their undo, and theory edits that
+  shift everything.
 
 The drivers maintain the parser, frontend environment, and metadata
 registries. A search prepares its theory with the analysis walk itself:
@@ -1366,8 +1366,10 @@ navigation snapshots, search results, placeholder outcomes, and the
 proof-block check memo every analysis it runs shares (`check_memo.zig`),
 so an edit re-checks only the blocks it can affect and a root that imports
 a library replays the library's blocks instead of re-checking them. The
-diagnostics pass collects hole inferences it does not publish, so the
-navigation snapshot's analysis replays every block it checked. Cache
+diagnostics pass keeps the hole inferences it collects for each root
+(`analysis_holes`), and a navigation snapshot of the same file states takes
+them instead of analyzing again. The memo keeps what each root's latest
+run used, so its size follows the open roots, not a cap. Cache
 invalidation is centralized in `Handler.invalidateCachesForUri`; the memo
 needs none, being keyed by content.
 `src/frontend/lsp/index.zig` owns arena-backed navigation snapshots; its

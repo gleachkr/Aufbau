@@ -59,6 +59,9 @@ pub const Builder = struct {
     proof_outline: std.ArrayListUnmanaged(OutlineSymbol) = .empty,
     proof_blocks: std.ArrayListUnmanaged(ProofBlockInfo) = .empty,
     proof_rules: std.ArrayListUnmanaged(ProofRuleDecl) = .empty,
+    /// The latest of `proof_rules` with each name. Lemmas are indexed in
+    /// source order, so it is the one a use further on resolves to.
+    proof_rule_by_name: std.StringHashMapUnmanaged(usize) = .empty,
     proof_lines: std.ArrayListUnmanaged(ProofLineDecl) = .empty,
     proof_applications: std.ArrayListUnmanaged(ProofApplicationInfo) = .empty,
     notations: std.ArrayListUnmanaged(NotationCompletionDecl) = .empty,
@@ -241,6 +244,10 @@ pub const Builder = struct {
         annotations: []const []const u8,
         annotation_spans: []const parse.MathSpan,
     ) !void {
+        const stmt_span: source.SourceSpan = .{
+            .start = statement_range.start,
+            .end = statement_range.end,
+        };
         switch (stmt) {
             .sort => |sort| {
                 try self.sort_names.append(self.allocator, sort.name);
@@ -274,7 +281,7 @@ pub const Builder = struct {
                     .name_range = mathSpanRange(term.name_span),
                     .markdown = try termMarkdown(
                         self.allocator,
-                        text,
+                        if (term.is_def) source.definitionBody(text, stmt_span) else null,
                         term,
                         annotations,
                     ),
@@ -318,6 +325,7 @@ pub const Builder = struct {
                     .markdown = try assertionMarkdown(
                         self.allocator,
                         text,
+                        stmt_span,
                         assertion,
                         self.sortNameForId(assertion.concl.sort()),
                         annotations,
@@ -340,6 +348,7 @@ pub const Builder = struct {
                     .hypotheses = try hypothesesFromMm0Assertion(
                         self.allocator,
                         text,
+                        stmt_span,
                         assertion,
                     ),
                 });
@@ -716,7 +725,7 @@ pub const Builder = struct {
             .name_range = proofSpanRange(def.name_span),
             .markdown = try termMarkdown(
                 self.allocator,
-                text,
+                def.body.text,
                 term,
                 def.annotations,
             ),

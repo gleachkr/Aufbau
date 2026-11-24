@@ -8,8 +8,7 @@ const text_util = @import("../text_util.zig");
 const BinderDecl = Types.BinderDecl;
 const Declaration = Types.Declaration;
 const DeclarationKind = Types.DeclarationKind;
-const findStatementByte = source.findStatementByte;
-const nextMathStringIn = source.nextMathStringIn;
+const SourceSpan = source.SourceSpan;
 const trimMathWhitespace = source.trimMathWhitespace;
 
 /// `partial`: the expression still holds unknowns.
@@ -50,22 +49,23 @@ fn writeSortMarkdown(
     try writeDocComment(writer, annotations);
 }
 
+/// `body` is a definition's body math string, without its delimiters.
 pub fn termMarkdown(
     allocator: std.mem.Allocator,
-    text: []const u8,
+    body: ?[]const u8,
     term: parse.TermStmt,
     annotations: []const []const u8,
 ) ![]const u8 {
     return text_util.allocRender(
         allocator,
         writeTermMarkdown,
-        .{ text, term, annotations },
+        .{ body, term, annotations },
     );
 }
 
 fn writeTermMarkdown(
     writer: *std.Io.Writer,
-    text: []const u8,
+    body_source: ?[]const u8,
     term: parse.TermStmt,
     annotations: []const []const u8,
 ) !void {
@@ -84,7 +84,7 @@ fn writeTermMarkdown(
     try writer.print(": {s}", .{term.ret_sort_name});
     try writeDeps(writer, term.ret_deps, term.arg_names, term.args, term.args.len);
     if (term.is_def) {
-        if (definitionBodySource(text, term.name_span)) |body| {
+        if (body_source) |body| {
             try writer.writeAll(" =\n");
             try writeMathLine(writer, "  ", body);
         } else {
@@ -95,9 +95,11 @@ fn writeTermMarkdown(
     try writeDocComment(writer, annotations);
 }
 
+/// `stmt` is the assertion's statement in `text`.
 pub fn assertionMarkdown(
     allocator: std.mem.Allocator,
     text: []const u8,
+    stmt: SourceSpan,
     assertion: parse.AssertionStmt,
     concl_sort_name: ?[]const u8,
     annotations: []const []const u8,
@@ -105,7 +107,7 @@ pub fn assertionMarkdown(
     return text_util.allocRender(
         allocator,
         writeAssertionMarkdown,
-        .{ allocator, text, assertion, concl_sort_name, annotations },
+        .{ allocator, text, stmt, assertion, concl_sort_name, annotations },
     );
 }
 
@@ -113,6 +115,7 @@ fn writeAssertionMarkdown(
     writer: *std.Io.Writer,
     allocator: std.mem.Allocator,
     text: []const u8,
+    stmt: SourceSpan,
     assertion: parse.AssertionStmt,
     concl_sort_name: ?[]const u8,
     annotations: []const []const u8,
@@ -138,11 +141,10 @@ fn writeAssertionMarkdown(
     try writeCompactArgList(writer, assertion.arg_names, assertion.args);
     try writer.writeAll(":\n");
 
-    const math_strings = try source.mathStringsBeforeByteInContainingStatement(
+    const math_strings = try source.mathStringsBeforeByte(
         allocator,
         text,
-        assertion.name_span.start,
-        assertion.name_span.end,
+        stmt,
         '=',
     );
     defer allocator.free(math_strings);
@@ -471,21 +473,6 @@ fn writeDocComment(
         wrote_any = true;
         pending_break = false;
     }
-}
-
-fn definitionBodySource(
-    text: []const u8,
-    name_span: parse.MathSpan,
-) ?[]const u8 {
-    const stmt = source.statementContainingSpan(
-        text,
-        name_span.start,
-        name_span.end,
-    ) orelse return null;
-    const eq = findStatementByte(text, stmt, '=') orelse return null;
-    var pos = eq + 1;
-    const math = nextMathStringIn(text, stmt.end, &pos) orelse return null;
-    return math.text;
 }
 
 fn writeMathLine(

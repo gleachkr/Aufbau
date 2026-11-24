@@ -123,6 +123,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   action runs, now free each theorem's and lemma's memory as a compile
   does: opening the last file of a 126 MB library ran out of memory at
   40 GB and now peaks at 3.9 GB.
+- In a large library, the language server's first outline, hover or
+  go-to-definition request on a file took minutes, and an edit re-checked
+  most of the proofs again. For the last file of a 126 MB library, the
+  first outline took 295 s and now takes 4 s, and an edit that leaves the
+  proofs' results unchanged took 29 s and now takes under a second. Undoing
+  an edit that changed a proof's result re-checks the proofs after it.
 - `auto?` and `exact?` free each step's records when the step returns: one
   Cardano goal fell from 1.1 GiB to 30 MiB.
 - The search budget charges the work of matching large contexts, so a

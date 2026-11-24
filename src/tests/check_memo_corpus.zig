@@ -3,8 +3,8 @@
 //! must produce exactly what a cold analysis produces — every diagnostic,
 //! span, note, sink entry and error — under the edits an editor makes:
 //! nothing (all hits), a body edit that only shifts later blocks, a body
-//! edit that flips an outcome, and a theory edit that shifts every `.mm0`
-//! position. A run with the inline conclusion sink must bypass the memo.
+//! edit that flips an outcome and its undo, and a theory edit that shifts
+//! every `.mm0` position. A run with the inline conclusion sink must bypass the memo.
 
 const std = @import("std");
 const mm0 = @import("../lib.zig");
@@ -303,6 +303,13 @@ fn runFixture(
                 .proof_text = edited,
             });
         }
+        // Fixed again. The break run kept only what it used, so the blocks
+        // after the edited one re-check under the original outcome.
+        try expectSameAnalysis(allocator, memo, stem, .{
+            .name = "fix",
+            .mm0_text = mm0_text,
+            .proof_text = proof_text,
+        });
     }
 
     // A comment at the top of the theory shifts every `.mm0` position:
@@ -325,15 +332,16 @@ fn runFixture(
         try std.testing.expectEqual(hits, memo.hits);
     }
 
-    // Back to the original: the entries recorded first still serve.
+    // Back to the original: the theory-shift run kept only the entries it
+    // used, so every block re-checks.
     {
-        const misses = memo.misses;
+        const hits = memo.hits;
         try expectSameAnalysis(allocator, memo, stem, .{
             .name = "restore",
             .mm0_text = mm0_text,
             .proof_text = proof_text,
         });
-        try std.testing.expectEqual(unrecordable, memo.misses - misses);
+        try std.testing.expectEqual(hits, memo.hits);
     }
 
     // The memo records no inline conclusions, so a run that collects them
@@ -363,7 +371,6 @@ test "check memo matches cold analysis across the proof-case corpus" {
 
     var memo = CheckMemo.init(allocator);
     defer memo.deinit();
-    memo.max_entries = 1 << 16;
 
     var counts: Counts = .{};
     for (stems) |stem| {
@@ -371,14 +378,12 @@ test "check memo matches cold analysis across the proof-case corpus" {
     }
     try std.testing.expect(counts.blocks > 0);
     try std.testing.expect(counts.hits_seen);
-    try std.testing.expect(memo.hits > memo.misses);
 }
 
-test "check memo evicts least recently used entries past its cap" {
+test "check memo keeps what each root's latest run used" {
     const allocator = std.testing.allocator;
     var memo = CheckMemo.init(allocator);
     defer memo.deinit();
-    memo.max_entries = 4;
 
     const mm0_text =
         \\provable sort wff;
@@ -387,9 +392,6 @@ test "check memo evicts least recently used entries past its cap" {
         \\theorem t1: $ top $;
         \\theorem t2: $ top $;
         \\theorem t3: $ top $;
-        \\theorem t4: $ top $;
-        \\theorem t5: $ top $;
-        \\theorem t6: $ top $;
     ;
     const proof_text =
         \\t1
@@ -403,26 +405,61 @@ test "check memo evicts least recently used entries past its cap" {
         \\t3
         \\---
         \\p: $ top $ by ax_top []
-        \\
-        \\t4
-        \\---
-        \\p: $ top $ by ax_top []
-        \\
-        \\t5
-        \\---
-        \\p: $ top $ by ax_top []
-        \\
-        \\t6
-        \\---
-        \\p: $ top $ by ax_top []
     ;
+    // t3's body changes; its outcome does not.
+    const edited_text =
+        \\t1
+        \\---
+        \\p: $ top $ by ax_top []
+        \\
+        \\t2
+        \\---
+        \\p: $ top $ by ax_top []
+        \\
+        \\t3
+        \\---
+        \\q: $ top $ by ax_top []
+    ;
+    const other_mm0_text =
+        \\provable sort wff;
+        \\term bot: wff;
+        \\axiom ax_bot: $ bot $;
+        \\theorem u1: $ bot $;
+    ;
+    const other_proof_text =
+        \\u1
+        \\---
+        \\p: $ bot $ by ax_bot []
+    ;
+
+    memo.root = 1;
     const first = try analyzeDump(allocator, mm0_text, proof_text, &memo, false);
-    defer allocator.free(first);
-    try std.testing.expect(memo.entries.count() <= 4);
-    const second = try analyzeDump(allocator, mm0_text, proof_text, &memo, false);
-    defer allocator.free(second);
-    try std.testing.expectEqualStrings(first, second);
-    try std.testing.expect(memo.entries.count() <= 4);
+    allocator.free(first);
+    try std.testing.expectEqual(@as(usize, 3), memo.entries.count());
+
+    // Another root's run keeps the first root's entries.
+    memo.root = 2;
+    const other = try analyzeDump(allocator, other_mm0_text, other_proof_text, &memo, false);
+    allocator.free(other);
+    try std.testing.expectEqual(@as(usize, 4), memo.entries.count());
+
+    // The edit replaces t3's entry: the old one is no longer used.
+    memo.root = 1;
+    const misses = memo.misses;
+    const edited = try analyzeDump(allocator, mm0_text, edited_text, &memo, false);
+    allocator.free(edited);
+    try std.testing.expectEqual(misses + 1, memo.misses);
+    try std.testing.expectEqual(@as(usize, 4), memo.entries.count());
+
+    // Both roots replay everything they last used.
+    const hits = memo.hits;
+    const again = try analyzeDump(allocator, mm0_text, edited_text, &memo, false);
+    allocator.free(again);
+    memo.root = 2;
+    const other_again = try analyzeDump(allocator, other_mm0_text, other_proof_text, &memo, false);
+    allocator.free(other_again);
+    try std.testing.expectEqual(hits + 4, memo.hits);
+    try std.testing.expectEqual(misses + 1, memo.misses);
 }
 
 test "check memo drops a block whose output it cannot record" {

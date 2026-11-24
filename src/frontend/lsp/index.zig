@@ -104,7 +104,7 @@ pub const Snapshot = struct {
             try builder.indexProof(text);
         }
         const hole_info: HoleInfo = if (proof_text) |text|
-            try buildHoleInfo(arena, mm0_text, text, input.check_memo)
+            try buildHoleInfo(allocator, arena, mm0_text, text, input)
         else
             .{};
 
@@ -354,12 +354,17 @@ pub const Snapshot = struct {
     }
 };
 
+/// The hole hovers and fills of `input`'s holes, or of an analysis run
+/// here, in `allocator` (which reclaims the analysis's memory as it goes),
+/// when the input has none.
 fn buildHoleInfo(
     allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     mm0_text: []const u8,
     proof_text: []const u8,
-    check_memo: ?*CompilerModule.CheckMemo,
+    input: SnapshotInput,
 ) !HoleInfo {
+    if (input.holes) |holes| return holeInfo(arena, holes);
     if (std.mem.indexOf(u8, mm0_text, "@hole") == null and
         std.mem.indexOf(u8, mm0_text, "@unknown") == null) return .{};
 
@@ -375,11 +380,17 @@ fn buildHoleInfo(
     );
     compiler.allow_search_placeholders = true;
     compiler.hole_inference_sink = &sink;
-    compiler.check_memo = check_memo;
+    compiler.check_memo = input.check_memo;
     compiler.analyze() catch |err| {
         if (err == error.OutOfMemory) return err;
     };
+    return holeInfo(arena, &sink);
+}
 
+fn holeInfo(
+    allocator: std.mem.Allocator,
+    sink: *const CompilerModule.HoleInferenceSink,
+) !HoleInfo {
     var hovers = std.ArrayListUnmanaged(InferredHoleHover).empty;
     for (sink.items.items) |inference| {
         try hovers.append(allocator, .{
