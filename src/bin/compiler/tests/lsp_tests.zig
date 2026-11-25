@@ -3713,6 +3713,91 @@ test "LSP resolves imports from disk and reports on the imported file" {
     try std.testing.expect(publishedEmpty(&transport_state, lib_uri));
 }
 
+test "LSP keeps a closed library's diagnostics up while its root is checked again" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", arena);
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "lib.mm0",
+        .data = "provable sort wff;\nterm top: wff;\naxiom bad: $ nope $;\n",
+    });
+    const lib_uri = try pathToUri(arena, try std.fs.path.join(arena, &.{ dir, "lib.mm0" }));
+    const mm0_uri = try pathToUri(arena, try std.fs.path.join(arena, &.{ dir, "main.mm0" }));
+    const proof_uri = try pathToUri(arena, try std.fs.path.join(arena, &.{ dir, "main.auf" }));
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        std.testing.io,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, lsp_import_main_text, 1);
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = proof_uri,
+        .languageId = .{ .custom_value = "aufbau" },
+        .version = 1,
+        .text = lsp_import_proof_text,
+    } });
+    try std.testing.expect(publishedContains(&transport_state, lib_uri, "nope"));
+
+    transport_state.clearMessages();
+    try handler.@"textDocument/didChange"(arena, .{
+        .textDocument = .{ .uri = proof_uri, .version = 2 },
+        .contentChanges = &.{
+            .{ .text_document_content_change_whole_document = .{ .text = lsp_import_proof_text ++ "\n" } },
+        },
+    });
+    try std.testing.expect(publishedContains(&transport_state, lib_uri, "nope"));
+    try std.testing.expect(!publishedEmpty(&transport_state, lib_uri));
+}
+
+test "LSP proof hole hover shows what the analysis found past a broken statement" {
+    const mm0_uri = "file:///tmp/lsp-hole-broken.mm0";
+    const proof_uri = "file:///tmp/lsp-hole-broken.auf";
+    const mm0_text =
+        \\delimiter $ ( ) $;
+        \\axiom bad (a:: $ a $;
+        \\--| @hole _wff
+        \\provable sort wff;
+        \\term imp (a b: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\axiom mp (a b: wff): $ a -> b $ > $ a $ > $ b $;
+        \\theorem main (p q: wff): $ p -> q $ > $ p $ > $ q $;
+    ;
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ _wff $ by mp [#1, #2]
+    ;
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        std.testing.io,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try handler.putDocument(mm0_uri, mm0_text, 1);
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = proof_uri,
+        .languageId = .{ .custom_value = "aufbau" },
+        .version = 1,
+        .text = proof_text,
+    } });
+    const hover = try handler.@"textDocument/hover"(arena, .{
+        .textDocument = .{ .uri = proof_uri },
+        .position = try testPosition(proof_text, "_wff"),
+    });
+    try std.testing.expect(std.mem.containsAtLeast(u8, try hoverMarkdown(hover), 1, "$ q $"));
+}
+
 test "LSP resolves proof includes against open library files" {
     const mm0_uri = "file:///tmp/lsp-include/main.mm0";
     const lib_uri = "file:///tmp/lsp-include/lemmas.auf";
@@ -3898,132 +3983,357 @@ test "LSP reports a missing nested include" {
 
 const Input = @import("../lsp_input.zig").Input;
 
-const queued_mm0_text =
+const queued_mm0_text = "--| @hole _wff\n" ++
     \\provable sort wff;
     \\term top: wff;
     \\axiom top_i: $ top $;
-    \\theorem first: $ top $;
-    \\theorem second: $ top $;
+    \\term bot: wff;
+    \\axiom bot_i: $ bot $;
+    \\theorem main: $ top $;
 ;
 
-fn queuedProofText(comptime second_rule: []const u8) []const u8 {
-    return "first\n-----\n\nl1: $ top $ by top_i []\n\n" ++
-        "second\n------\n\nl1: $ top $ by " ++ second_rule ++ " []\n";
+/// Three lemmas and the theorem they come before, proved by one holey line
+/// each, the theorem's by `last_rule`.
+fn queuedProofText(comptime last_rule: []const u8) []const u8 {
+    return
+    \\lemma a: $ top $
+    \\----
+    \\l1: $ _wff $ by top_i []
+    \\
+    \\lemma b: $ top $
+    \\----
+    \\l1: $ _wff $ by top_i []
+    \\
+    \\lemma c: $ top $
+    \\----
+    \\l1: $ _wff $ by top_i []
+    \\
+    \\main
+    \\----
+    \\
+    ++ "l1: $ _wff $ by " ++ last_rule ++ " []\n";
 }
 
-/// Write `message` to `pipe` framed as the client would.
-fn sendQueued(
-    arena: std.mem.Allocator,
-    pipe: std.Io.File,
-    message: anytype,
-) !void {
-    const json = try std.json.Stringify.valueAlloc(arena, message, .{});
-    const framed = try std.fmt.allocPrint(
-        arena,
-        "Content-Length: {d}\r\n\r\n{s}",
-        .{ json.len, json },
-    );
-    try pipe.writeStreamingAll(std.testing.io, framed);
-}
+/// The hole on the line of lemma `a`.
+const queued_hole = .{ .line = 2, .character = 7 };
 
-fn didChangeWhole(uri: []const u8, version: i32, text: []const u8) struct {
-    jsonrpc: []const u8 = "2.0",
-    method: []const u8 = "textDocument/didChange",
-    params: struct {
-        textDocument: struct { uri: []const u8, version: i32 },
-        contentChanges: [1]struct { text: []const u8 },
-    },
-} {
-    return .{ .params = .{
-        .textDocument = .{ .uri = uri, .version = version },
-        .contentChanges = .{.{ .text = text }},
-    } };
-}
-
-test "LSP over stdio analyses queued edits once and answers a cancelled request" {
-    const io = std.testing.io;
+/// A client of the server over pipes. The server stops at the first poll
+/// that finds a message, and runs its analyses as soon as it has read one,
+/// so what is sent before `start` decides where each analysis stops.
+const StdioClient = struct {
     const mm0_uri = "file:///tmp/lsp-queue/main.mm0";
     const proof_uri = "file:///tmp/lsp-queue/main.auf";
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
 
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const out = try tmp.dir.createFile(io, "out", .{ .read = true });
-    defer out.close(io);
-    const fds = try std.Io.Threaded.pipe2(.{});
-    const read_end: std.Io.File = .{ .handle = fds[0], .flags = .{ .nonblocking = false } };
-    const write_end: std.Io.File = .{ .handle = fds[1], .flags = .{ .nonblocking = false } };
-    defer read_end.close(io);
-    // Open until the server is done: a closed pipe would read as the client
-    // gone, which stops every analysis.
-    defer write_end.close(io);
+    arena_state: std.heap.ArenaAllocator,
+    to_server: [2]std.Io.File,
+    from_server: [2]std.Io.File,
+    read_buffer: [4096]u8 = undefined,
+    stdio: lsp.Transport.Stdio = undefined,
+    server: ?std.Thread = null,
 
-    // Everything is waiting before the server reads its first message, so
-    // each analysis it starts between messages is stopped by the edits
-    // queued behind it, and only the request at the end brings the
-    // diagnostics up to date.
-    const open = "textDocument/didOpen";
-    try sendQueued(arena, write_end, .{ .jsonrpc = "2.0", .method = open, .params = .{
-        .textDocument = .{ .uri = mm0_uri, .languageId = "metamath_zero", .version = 1, .text = queued_mm0_text },
-    } });
-    try sendQueued(arena, write_end, .{ .jsonrpc = "2.0", .method = open, .params = .{
-        .textDocument = .{ .uri = proof_uri, .languageId = "aufbau", .version = 1, .text = queuedProofText("top_i") },
-    } });
-    try sendQueued(arena, write_end, didChangeWhole(proof_uri, 2, queuedProofText("nope")));
-    try sendQueued(arena, write_end, didChangeWhole(proof_uri, 3, queuedProofText("top_i")));
-    const position = .{ .line = 3, .character = 16 };
-    try sendQueued(arena, write_end, .{ .jsonrpc = "2.0", .id = 1, .method = "textDocument/hover", .params = .{
-        .textDocument = .{ .uri = proof_uri },
-        .position = position,
-    } });
-    try sendQueued(arena, write_end, .{ .jsonrpc = "2.0", .method = "$/cancelRequest", .params = .{ .id = 1 } });
-    try sendQueued(arena, write_end, .{ .jsonrpc = "2.0", .id = 2, .method = "textDocument/documentSymbol", .params = .{
-        .textDocument = .{ .uri = proof_uri },
-    } });
-    try sendQueued(arena, write_end, .{ .jsonrpc = "2.0", .id = 3, .method = "shutdown" });
-    try sendQueued(arena, write_end, .{ .jsonrpc = "2.0", .method = "exit" });
+    fn init(self: *StdioClient) !void {
+        self.* = .{
+            .arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            .to_server = try pipe(),
+            .from_server = try pipe(),
+        };
+        self.stdio = .init(&self.read_buffer, self.from_server[0], self.to_server[1]);
+    }
+
+    fn pipe() ![2]std.Io.File {
+        const fds = try std.Io.Threaded.pipe2(.{});
+        return .{
+            .{ .handle = fds[0], .flags = .{ .nonblocking = false } },
+            .{ .handle = fds[1], .flags = .{ .nonblocking = false } },
+        };
+    }
+
+    /// Ends a server still running: its stdin ends.
+    fn deinit(self: *StdioClient) void {
+        const io = std.testing.io;
+        self.to_server[1].close(io);
+        if (self.server) |thread| thread.join();
+        self.to_server[0].close(io);
+        for (self.from_server) |end| end.close(io);
+        self.arena_state.deinit();
+    }
+
+    fn start(self: *StdioClient) !void {
+        self.server = try std.Thread.spawn(
+            .{},
+            serve,
+            .{ self.to_server[0], self.from_server[1] },
+        );
+    }
+
+    fn serve(read_from: std.Io.File, write_to: std.Io.File) void {
+        const allocator = std.testing.allocator;
+        const io = std.testing.io;
+        var read_buffer: [4096]u8 = undefined;
+        var input = Input.init(allocator, io, &read_buffer, read_from, write_to);
+        defer input.deinit();
+        var handler = Handler.init(allocator, io, &input.transport);
+        defer handler.deinit();
+        input.attach(&handler);
+        lsp.basic_server.run(io, allocator, &input.transport, &handler, null) catch {};
+    }
+
+    fn send(self: *StdioClient, message: anytype) !void {
+        try self.write(try self.frame(message));
+    }
+
+    /// `message` as it goes over the pipe.
+    fn frame(self: *StdioClient, message: anytype) ![]const u8 {
+        const arena = self.arena_state.allocator();
+        const json = try std.json.Stringify.valueAlloc(arena, message, .{});
+        return std.fmt.allocPrint(
+            arena,
+            "Content-Length: {d}\r\n\r\n{s}",
+            .{ json.len, json },
+        );
+    }
+
+    fn write(self: *StdioClient, bytes: []const u8) !void {
+        try self.to_server[1].writeStreamingAll(std.testing.io, bytes);
+    }
+
+    fn open(self: *StdioClient, uri: []const u8, text: []const u8) !void {
+        try self.send(.{ .jsonrpc = "2.0", .method = "textDocument/didOpen", .params = .{
+            .textDocument = .{ .uri = uri, .languageId = "aufbau", .version = 1, .text = text },
+        } });
+    }
+
+    fn openBoth(self: *StdioClient) !void {
+        try self.open(mm0_uri, queued_mm0_text);
+        try self.open(proof_uri, queuedProofText("top_i"));
+    }
+
+    fn change(self: *StdioClient, version: i32, text: []const u8) !void {
+        try self.write(try self.changeFrame(version, text));
+    }
+
+    fn changeFrame(self: *StdioClient, version: i32, text: []const u8) ![]const u8 {
+        return self.frame(.{ .jsonrpc = "2.0", .method = "textDocument/didChange", .params = .{
+            .textDocument = .{ .uri = proof_uri, .version = version },
+            .contentChanges = .{.{ .text = text }},
+        } });
+    }
+
+    fn hoverHole(self: *StdioClient, id: i64) !void {
+        try self.write(try self.hoverFrame(id, proof_uri));
+    }
+
+    fn hoverFrame(self: *StdioClient, id: i64, uri: []const u8) ![]const u8 {
+        return self.frame(.{ .jsonrpc = "2.0", .id = id, .method = "textDocument/hover", .params = .{
+            .textDocument = .{ .uri = uri },
+            .position = queued_hole,
+        } });
+    }
+
+    fn outline(self: *StdioClient, id: i64) !void {
+        try self.send(.{
+            .jsonrpc = "2.0",
+            .id = id,
+            .method = "textDocument/documentSymbol",
+            .params = .{ .textDocument = .{ .uri = proof_uri } },
+        });
+    }
+
+    fn cancel(self: *StdioClient, id: i64) !void {
+        try self.send(.{
+            .jsonrpc = "2.0",
+            .method = "$/cancelRequest",
+            .params = .{ .id = id },
+        });
+    }
+
+    const Event = union(enum) {
+        /// The proof file's diagnostics: how many, for which version.
+        published: struct { version: i64, count: usize },
+        /// A request answered, with the value of a hole hover.
+        answered: struct { id: i64, value: ?[]const u8 = null },
+        failed: struct { id: i64, code: i64 },
+    };
+
+    /// The next message about the proof file.
+    fn next(self: *StdioClient) !Event {
+        const arena = self.arena_state.allocator();
+        while (true) {
+            if (self.stdio.reader.bufferedLen() == 0) {
+                var fds = [_]std.posix.pollfd{.{
+                    .fd = self.from_server[0].handle,
+                    .events = std.posix.POLL.IN,
+                    .revents = 0,
+                }};
+                if (try std.posix.poll(&fds, 20_000) == 0) return error.ServerIsQuiet;
+            }
+            const json = try self.stdio.transport.readJsonMessage(std.testing.io, arena);
+            const message = try std.json.parseFromSliceLeaky(std.json.Value, arena, json, .{});
+            const object = message.object;
+            if (object.get("method")) |method| {
+                if (!std.mem.eql(u8, method.string, "textDocument/publishDiagnostics")) continue;
+                const params = object.get("params").?.object;
+                if (!std.mem.eql(u8, params.get("uri").?.string, proof_uri)) continue;
+                return .{ .published = .{
+                    .version = params.get("version").?.integer,
+                    .count = params.get("diagnostics").?.array.items.len,
+                } };
+            }
+            const id = object.get("id").?.integer;
+            if (object.get("error")) |failure| {
+                return .{ .failed = .{ .id = id, .code = failure.object.get("code").?.integer } };
+            }
+            const result = object.get("result").?;
+            if (result != .object) return .{ .answered = .{ .id = id } };
+            const contents = result.object.get("contents") orelse
+                return .{ .answered = .{ .id = id } };
+            return .{ .answered = .{
+                .id = id,
+                .value = contents.object.get("value").?.string,
+            } };
+        }
+    }
+
+    fn expect(self: *StdioClient, expected: []const Event) !void {
+        for (expected) |event| try std.testing.expectEqualDeep(event, try self.next());
+    }
+
+    /// Expect no further message about the proof file.
+    fn expectEnd(self: *StdioClient) !void {
+        try self.send(.{ .jsonrpc = "2.0", .id = 99, .method = "shutdown" });
+        try self.expect(&.{.{ .answered = .{ .id = 99 } }});
+    }
+};
+
+const queued_hole_value = "Inferred expression:\n\n```mm0\n$ top $\n```";
+
+test "LSP over stdio analyses queued edits once" {
+    var client: StdioClient = undefined;
+    try client.init();
+    defer client.deinit();
+    try client.openBoth();
+    try client.change(2, queuedProofText("nope"));
+    try client.change(3, queuedProofText("top_i"));
+    try client.start();
+    // Neither the opened text nor the broken edit is published: their
+    // analyses were stopped.
+    try client.expect(&.{.{ .published = .{ .version = 3, .count = 0 } }});
+    try client.change(4, queuedProofText("nope"));
+    try client.expect(&.{.{ .published = .{ .version = 4, .count = 1 } }});
+    try client.expectEnd();
+}
+
+test "LSP over stdio answers requests before an analysis ends" {
+    var client: StdioClient = undefined;
+    try client.init();
+    defer client.deinit();
+    try client.openBoth();
+    try client.hoverHole(1);
+    try client.cancel(1);
+    try client.outline(2);
+    try client.start();
+    try client.expect(&.{
+        .{ .failed = .{ .id = 1, .code = -32800 } },
+        .{ .answered = .{ .id = 2 } },
+        .{ .published = .{ .version = 1, .count = 0 } },
+    });
+    try client.expectEnd();
+}
+
+test "LSP over stdio shows a hole's value before the analysis ends" {
+    var client: StdioClient = undefined;
+    try client.init();
+    defer client.deinit();
+    try client.openBoth();
+    try client.hoverHole(1);
+    try client.change(2, queuedProofText("nope"));
+    try client.start();
+    try client.expect(&.{
+        .{ .answered = .{ .id = 1, .value = queued_hole_value } },
+        .{ .published = .{ .version = 2, .count = 1 } },
+    });
+    try client.hoverHole(2);
+    try client.expect(&.{.{ .answered = .{ .id = 2, .value = queued_hole_value } }});
+    try client.expectEnd();
+}
+
+test "LSP over stdio shows the hole values of the text a hover is about" {
+    var client: StdioClient = undefined;
+    try client.init();
+    defer client.deinit();
+    try client.openBoth();
+    try client.start();
+    try client.expect(&.{.{ .published = .{ .version = 1, .count = 0 } }});
+    // In one write, so that the hover is there when the analysis of the edit
+    // first looks: the value then known is the old text's.
+    const edited = try std.mem.replaceOwned(
+        u8,
+        client.arena_state.allocator(),
+        queuedProofText("top_i"),
+        "lemma a: $ top $\n----\nl1: $ _wff $ by top_i",
+        "lemma a: $ bot $\n----\nl1: $ _wff $ by bot_i",
+    );
+    try client.write(try std.mem.concat(client.arena_state.allocator(), u8, &.{
+        try client.changeFrame(2, edited),
+        try client.hoverFrame(1, StdioClient.proof_uri),
+    }));
+    try client.expect(&.{
+        .{ .answered = .{ .id = 1, .value = "Inferred expression:\n\n```mm0\n$ bot $\n```" } },
+        .{ .published = .{ .version = 2, .count = 0 } },
+    });
+    try client.expectEnd();
+}
+
+test "LSP over stdio answers about a library file while its root is checked" {
+    var client: StdioClient = undefined;
+    try client.init();
+    defer client.deinit();
+    const lib_uri = "file:///tmp/lsp-queue/lib.auf";
+    try client.open(lib_uri,
+        \\lemma z: $ top $
+        \\----
+        \\l1: $ _wff $ by top_i []
+        \\
+    );
+    try client.open(StdioClient.mm0_uri, queued_mm0_text);
+    try client.open(StdioClient.proof_uri, "include \"lib.auf\";\n" ++ comptime queuedProofText("top_i"));
+    try client.write(try client.hoverFrame(1, lib_uri));
+    try client.start();
+    try client.expect(&.{
+        .{ .answered = .{ .id = 1, .value = queued_hole_value } },
+        .{ .published = .{ .version = 1, .count = 0 } },
+    });
+    try client.expectEnd();
+}
+
+test "LSP input stops an analysis for a request, but not for a cancelled one" {
+    var client: StdioClient = undefined;
+    try client.init();
+    defer client.deinit();
 
     var read_buffer: [4096]u8 = undefined;
-    var input = Input.init(std.testing.allocator, io, &read_buffer, read_end, out);
+    var input = Input.init(
+        std.testing.allocator,
+        std.testing.io,
+        &read_buffer,
+        client.to_server[0],
+        client.from_server[1],
+    );
     defer input.deinit();
-    var handler = Handler.init(std.testing.allocator, io, &input.transport);
+    var handler = Handler.init(std.testing.allocator, std.testing.io, &input.transport);
     defer handler.deinit();
     input.attach(&handler);
-    try lsp.basic_server.run(io, std.testing.allocator, &input.transport, &handler, null);
+    const interrupt = handler.interrupt.?;
 
-    const written = try tmp.dir.readFileAlloc(io, "out", arena, .unlimited);
-    var proof_versions = std.ArrayListUnmanaged(i64).empty;
-    var hover_cancelled = false;
-    var symbols_answered = false;
-    var rest = written;
-    while (std.mem.indexOf(u8, rest, "\r\n\r\n")) |header_end| {
-        const header = rest[0..header_end];
-        const length = try std.fmt.parseInt(usize, std.mem.trim(u8, header["Content-Length:".len..], " "), 10);
-        const body = rest[header_end + 4 ..][0..length];
-        rest = rest[header_end + 4 + length ..];
-        const message = try std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{});
-        const object = message.object;
-        if (object.get("method")) |method| {
-            if (!std.mem.eql(u8, method.string, "textDocument/publishDiagnostics")) continue;
-            const params = object.get("params").?.object;
-            if (!std.mem.eql(u8, params.get("uri").?.string, proof_uri)) continue;
-            try proof_versions.append(arena, params.get("version").?.integer);
-            try std.testing.expectEqual(@as(usize, 0), params.get("diagnostics").?.array.items.len);
-            continue;
-        }
-        const id = object.get("id").?.integer;
-        if (id == 1) {
-            const code = object.get("error").?.object.get("code").?.integer;
-            try std.testing.expectEqual(@as(i64, -32800), code);
-            hover_cancelled = true;
-        }
-        if (id == 2) symbols_answered = object.get("result") != null;
-    }
-    // Neither the opened text nor the broken edit was published: their
-    // analyses were stopped, and the request analysed the latest text.
-    try std.testing.expectEqualSlices(i64, &.{3}, proof_versions.items);
-    try std.testing.expect(hover_cancelled);
-    try std.testing.expect(symbols_answered);
+    try std.testing.expect(!interrupt.stopRequested());
+    try client.hoverHole(1);
+    try client.cancel(1);
+    try std.testing.expect(!interrupt.stopRequested());
+    try client.hoverHole(2);
+    try std.testing.expect(interrupt.stopRequested());
+    // While the server loop handles a request, only its cancellation counts.
+    input.current = .{ .number = 3 };
+    try std.testing.expect(!interrupt.stopRequested());
+    try client.cancel(3);
+    try std.testing.expect(interrupt.stopRequested());
 }

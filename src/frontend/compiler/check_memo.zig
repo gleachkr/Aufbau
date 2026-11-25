@@ -169,8 +169,9 @@ pub const CheckMemo = struct {
     /// (an editor with several files open) names each by a root of its
     /// own, so that one unit's run keeps what another's last run used.
     root: u64 = 0,
-    /// Each root's latest run. An entry is kept while the latest run of
-    /// some root used it: what a run did not use, its root no longer needs.
+    /// Each root's latest run to walk its whole unit. An entry is kept while
+    /// that run of some root, or a later one, used it: what a run did not
+    /// use, its root no longer needs.
     latest_runs: std.AutoHashMapUnmanaged(u64, u32) = .empty,
     active: bool = false,
     fingerprint: u64 = 0,
@@ -520,7 +521,8 @@ pub const CheckMemo = struct {
     }
 
     /// The run just ended is its root's latest: the root's uses by earlier
-    /// runs lapse, and an entry no root's latest run used is dropped.
+    /// runs lapse, and an entry is dropped once every use has. A use by a
+    /// later run, one stopped early, stands until its root's next run ends.
     fn dropUnused(self: *CheckMemo) void {
         // Without the record of this run, every entry stays.
         self.latest_runs.put(self.allocator, self.root, self.run) catch return;
@@ -531,7 +533,7 @@ pub const CheckMemo = struct {
             const uses = &kv.value_ptr.*.uses;
             var kept: usize = 0;
             for (uses.items) |use| {
-                if (self.latest_runs.get(use.root) != use.run) continue;
+                if ((self.latest_runs.get(use.root) orelse 0) > use.run) continue;
                 uses.items[kept] = use;
                 kept += 1;
             }

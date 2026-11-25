@@ -2,14 +2,14 @@ const std = @import("std");
 const ArenaAllocator = @import("../arena_allocator.zig").ArenaAllocator;
 
 const completion = @import("completion.zig");
-const CompilerModule = @import("../compiler.zig");
 const Builder = @import("builder.zig").Builder;
+pub const holes = @import("holes.zig");
 const indexBody = @import("builder_body.zig").indexBody;
-const markdown = @import("markdown.zig");
 const model = @import("model.zig");
 const notation = @import("notation.zig");
 const references = @import("references.zig");
 const rename = @import("rename.zig");
+const source = @import("source.zig");
 const Types = @import("types.zig");
 
 pub const DocumentId = Types.DocumentId;
@@ -38,26 +38,6 @@ const NotationCompletionDecl = notation.NotationCompletionDecl;
 const ProofBlock = @import("../proof_script.zig").ProofBlock;
 const proofSpanRange = @import("builder_support.zig").proofSpanRange;
 
-const InferredHoleHover = struct {
-    range: SourceRange,
-    markdown: []const u8,
-};
-
-/// A holey proof line's assertion with its holes filled in.
-pub const HoleFill = struct {
-    /// The whole proof line.
-    line: SourceRange,
-    /// The assertion's math string, `$` delimiters included.
-    assertion: SourceRange,
-    /// The math string to put in its place, delimiters included.
-    replacement: []const u8,
-};
-
-const HoleInfo = struct {
-    hovers: []const InferredHoleHover = &.{},
-    fills: []const HoleFill = &.{},
-};
-
 /// The index of one unit: its `.mm0` text and proof headers, plus the proof
 /// body last asked about. A proof's bodies are nearly all of its text, and
 /// most requests look into one.
@@ -77,14 +57,13 @@ pub const Snapshot = struct {
     sort_var_by_token: std.StringHashMapUnmanaged(usize),
     /// The symbols outside proof bodies.
     symbols: []const NavigationSymbol,
-    inferred_hole_hovers: []const InferredHoleHover,
-    hole_fills: []const HoleFill,
     mm0_outline: []const OutlineSymbol,
     proof_outline: []const OutlineSymbol,
     proof_blocks: []const ProofBlockInfo,
     proof_rules: []const ProofRuleDecl,
     notations: []const NotationCompletionDecl,
     hole_tokens: []const []const u8,
+    unknown_prefixes: []const []const u8,
     /// Whether every statement, proof item and line parsed.
     complete: bool,
     left_delims: [256]bool,
@@ -113,10 +92,6 @@ pub const Snapshot = struct {
                 if (input.check_memo) |memo| memo.knownBodies() else null,
             );
         }
-        const hole_info: HoleInfo = if (input.proof_text) |text|
-            try buildHoleInfo(allocator, arena, input.mm0_text, text, input)
-        else
-            .{};
 
         // Copy the arena last: the slices below can add buffers to it.
         var snapshot: Snapshot = .{
@@ -132,14 +107,13 @@ pub const Snapshot = struct {
             .proof_rule_by_name = builder.proof_rule_by_name,
             .sort_var_by_token = builder.sort_var_by_token,
             .symbols = try builder.symbols.toOwnedSlice(arena),
-            .inferred_hole_hovers = hole_info.hovers,
-            .hole_fills = hole_info.fills,
             .mm0_outline = try builder.mm0_outline.toOwnedSlice(arena),
             .proof_outline = try builder.proof_outline.toOwnedSlice(arena),
             .proof_blocks = try builder.proof_blocks.toOwnedSlice(arena),
             .proof_rules = try builder.proof_rules.toOwnedSlice(arena),
             .notations = try builder.notations.toOwnedSlice(arena),
             .hole_tokens = try builder.hole_tokens.toOwnedSlice(arena),
+            .unknown_prefixes = try builder.unknown_prefixes.toOwnedSlice(arena),
             .complete = builder.complete,
             .left_delims = builder.left_delims,
             .right_delims = builder.right_delims,
@@ -159,16 +133,6 @@ pub const Snapshot = struct {
         document: DocumentId,
         offset: usize,
     ) !?HoverResult {
-        if (document == .proof) {
-            for (self.inferred_hole_hovers) |hover| {
-                if (hover.range.contains(document, offset)) {
-                    return .{
-                        .range = hover.range,
-                        .markdown = hover.markdown,
-                    };
-                }
-            }
-        }
         const hit = try self.lookupAt(document, offset) orelse return null;
         return .{
             .range = hit.source_range,
@@ -176,21 +140,57 @@ pub const Snapshot = struct {
         };
     }
 
-    /// The fill for the holey proof line containing `offset`, if its
-    /// filled assertion can be written in the proof. A line's range ends
-    /// past its newline, so only a line ending the text also takes the
-    /// offset just past its end.
-    pub fn holeFillAt(self: *const Snapshot, offset: usize) ?HoleFill {
-        const text_len = if (self.proof_text) |text| text.len else 0;
-        for (self.hole_fills) |fill| {
-            if (offset < fill.line.start) continue;
-            if (offset < fill.line.end or
-                (offset == fill.line.end and offset == text_len))
-            {
-                return fill;
+    pub fn mathTokens(self: *const Snapshot, math: []const u8) source.MathTokenCursor {
+        return .{
+            .src = math,
+            .left_delims = self.left_delims,
+            .right_delims = self.right_delims,
+        };
+    }
+
+    /// Whether a math token is a hole or a named unknown.
+    fn isHole(self: *const Snapshot, token: []const u8) bool {
+        for (self.hole_tokens) |hole| {
+            if (std.mem.eql(u8, token, hole)) return true;
+        }
+        var named = false;
+        for (self.unknown_prefixes) |prefix| {
+            if (std.mem.eql(u8, token, prefix)) return false;
+            if (std.mem.startsWith(u8, token, prefix)) named = true;
+        }
+        return named;
+    }
+
+    /// Whether the token at `offset` of the proof text is a hole or a named
+    /// unknown, if it is math.
+    pub fn isHoleAt(self: *const Snapshot, offset: usize) bool {
+        const text = self.proof_text.?;
+        var start = @min(offset, text.len);
+        while (start > 0 and !endsMath(text[start - 1])) start -= 1;
+        var end = start;
+        while (end < text.len and !endsMath(text[end])) end += 1;
+        var tokens = self.mathTokens(text[start..end]);
+        while (tokens.next()) |token| {
+            if (offset < start + token.end) return self.isHole(token.text);
+        }
+        return false;
+    }
+
+    fn endsMath(char: u8) bool {
+        return char == '$' or source.isMathWhitespace(char);
+    }
+
+    /// Whether the line of `block` that takes `offset` has holes in its
+    /// assertion.
+    pub fn holeyLineAt(self: *const Snapshot, block: ProofBlock, offset: usize) bool {
+        for (block.lines) |line| {
+            if (!holes.lineTakes(line.span, offset, self.proof_text.?)) continue;
+            var tokens = self.mathTokens(line.assertion.text);
+            while (tokens.next()) |token| {
+                if (self.isHole(token.text)) return true;
             }
         }
-        return null;
+        return false;
     }
 
     pub fn definitionAt(
@@ -444,81 +444,3 @@ pub const Snapshot = struct {
         return null;
     }
 };
-
-/// The hole hovers and fills of `input`'s holes, or of an analysis run
-/// here, in `allocator` (which reclaims the analysis's memory as it goes),
-/// when the input has none.
-fn buildHoleInfo(
-    allocator: std.mem.Allocator,
-    arena: std.mem.Allocator,
-    mm0_text: []const u8,
-    proof_text: []const u8,
-    input: SnapshotInput,
-) !HoleInfo {
-    if (input.holes) |holes| return holeInfo(arena, holes);
-    if (std.mem.indexOf(u8, mm0_text, "@hole") == null and
-        std.mem.indexOf(u8, mm0_text, "@unknown") == null) return .{};
-
-    var sink = CompilerModule.HoleInferenceSink{
-        .allocator = allocator,
-    };
-    defer sink.deinit();
-
-    var compiler = CompilerModule.Compiler.initWithProof(
-        allocator,
-        mm0_text,
-        proof_text,
-    );
-    compiler.allow_search_placeholders = true;
-    compiler.hole_inference_sink = &sink;
-    compiler.check_memo = input.check_memo;
-    compiler.analyze() catch |err| {
-        if (err == error.OutOfMemory) return err;
-    };
-    return holeInfo(arena, &sink);
-}
-
-fn holeInfo(
-    allocator: std.mem.Allocator,
-    sink: *const CompilerModule.HoleInferenceSink,
-) !HoleInfo {
-    var hovers = std.ArrayListUnmanaged(InferredHoleHover).empty;
-    for (sink.items.items) |inference| {
-        try hovers.append(allocator, .{
-            .range = .{
-                .document = .proof,
-                .start = inference.span.start,
-                .end = inference.span.end,
-            },
-            .markdown = try markdown.inferredHoleMarkdown(
-                allocator,
-                inference.expression,
-                inference.partial,
-            ),
-        });
-    }
-    const fills = try allocator.alloc(HoleFill, sink.assertions.items.len);
-    for (sink.assertions.items, fills) |filled, *fill| {
-        fill.* = .{
-            .line = .{
-                .document = .proof,
-                .start = filled.line.start,
-                .end = filled.line.end,
-            },
-            .assertion = .{
-                .document = .proof,
-                .start = filled.assertion.start,
-                .end = filled.assertion.end,
-            },
-            .replacement = try std.fmt.allocPrint(
-                allocator,
-                "$ {s} $",
-                .{filled.text},
-            ),
-        };
-    }
-    return .{
-        .hovers = try hovers.toOwnedSlice(allocator),
-        .fills = fills,
-    };
-}

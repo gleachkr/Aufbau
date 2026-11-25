@@ -90,11 +90,7 @@ const BodyBuilder = struct {
     }
 
     pub fn mathTokens(self: *const BodyBuilder, math: []const u8) source.MathTokenCursor {
-        return .{
-            .src = math,
-            .left_delims = self.index.left_delims,
-            .right_delims = self.index.right_delims,
-        };
+        return self.index.mathTokens(math);
     }
 
     pub fn addSymbol(self: *BodyBuilder, symbol: NavigationSymbol) !void {

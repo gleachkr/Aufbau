@@ -8,6 +8,7 @@ const ArenaAllocator = mm0.ArenaAllocator;
 
 const types = lsp.types.flat;
 const LspIndex = mm0.Frontend.LspIndex;
+const HoleInferenceSink = mm0.CompilerSupport.Context.HoleInferenceSink;
 const Search = mm0.CompilerSupport.Search;
 const Unpack = mm0.CompilerSupport.Unpack;
 const Imports = mm0.Imports;
@@ -435,14 +436,10 @@ const NavigationSnapshot = struct {
     }
 };
 
-/// What an analysis of one root touched: the other files it read (so the
-/// root is re-analysed when one of them changes) and the closed files it
-/// published diagnostics for (so those are cleared when they drop out).
-/// The holes the last analysis of a unit collected, for its navigation
-/// index.
+/// The holes found by an analysis of a unit in the states `key` names.
 const AnalysisHoles = struct {
     key: UnitKey,
-    holes: mm0.CompilerSupport.Context.HoleInferenceSink,
+    holes: HoleInferenceSink,
 
     fn deinit(self: *AnalysisHoles, allocator: std.mem.Allocator) void {
         self.key.deinit(allocator);
@@ -451,6 +448,9 @@ const AnalysisHoles = struct {
     }
 };
 
+/// What an analysis of one root touched: the other files it read (so the
+/// root is re-analysed when one of them changes) and the closed files it
+/// published diagnostics for (so those are cleared when they drop out).
 const UnitRecord = struct {
     deps: []const []const u8,
     published: []const []const u8,
@@ -695,8 +695,8 @@ pub const Handler = struct {
     pending: std.StringArrayHashMapUnmanaged(void),
     /// Set by the native server (`lsp_input.zig`): a changed document is
     /// analysed once no input is waiting, and the analysis stops when this
-    /// says its result is no longer wanted. Null analyses each change as it
-    /// arrives (the browser host, tests).
+    /// says so. Null analyses each change as it arrives (the browser host,
+    /// tests).
     interrupt: ?mm0.AnalysisInterrupt,
     offset_encoding: lsp.offsets.Encoding,
     snippet_support: bool,
@@ -993,7 +993,9 @@ pub const Handler = struct {
             params.position,
             self.offset_encoding,
         ) orelse return null;
-        const hover = try nav.snapshot.hoverAt(nav.document, offset) orelse return null;
+        const hover = try self.holeHover(arena, nav, offset) orelse
+            try nav.snapshot.hoverAt(nav.document, offset) orelse
+            return null;
         return .{
             .contents = .{
                 .markup_content = .{
@@ -1006,6 +1008,22 @@ pub const Handler = struct {
                 self.offset_encoding,
             ),
         };
+    }
+
+    /// The value of the hole at `offset`.
+    fn holeHover(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        nav: NavigationSnapshot,
+        offset: usize,
+    ) !?LspIndex.HoverResult {
+        if (nav.document != .proof) return null;
+        const found = try self.analysisHoles(arena, nav) orelse checked: {
+            if (!nav.snapshot.isHoleAt(offset)) return null;
+            const block = try nav.snapshot.blockTouching(arena, offset) orelse return null;
+            break :checked try blockHoles(arena, nav, block);
+        };
+        return try LspIndex.holes.hoverAt(arena, found, offset);
     }
 
     pub fn @"textDocument/completion"(
@@ -1073,23 +1091,22 @@ pub const Handler = struct {
             self.offset_encoding,
         ) orelse return null;
 
+        const block = try nav.snapshot.blockTouching(arena, offset) orelse return null;
         var actions = std.ArrayListUnmanaged(CodeActionItem).empty;
-        if (try nav.snapshot.blockTouching(arena, offset)) |block| {
-            if (try self.suggestionsForUnit(arena, nav, block, offset)) |suggestions| {
-                for (suggestions) |suggestion| {
-                    const action = try self.searchCodeAction(
-                        arena,
-                        nav,
-                        suggestion,
-                    ) orelse continue;
-                    try actions.append(arena, .{ .code_action = action });
-                }
-            }
-            if (try self.unpackCodeAction(arena, nav, block, offset)) |action| {
+        if (try self.suggestionsForUnit(arena, nav, block, offset)) |suggestions| {
+            for (suggestions) |suggestion| {
+                const action = try self.searchCodeAction(
+                    arena,
+                    nav,
+                    suggestion,
+                ) orelse continue;
                 try actions.append(arena, .{ .code_action = action });
             }
         }
-        if (try self.fillHolesCodeAction(arena, nav, offset)) |action| {
+        if (try self.unpackCodeAction(arena, nav, block, offset)) |action| {
+            try actions.append(arena, .{ .code_action = action });
+        }
+        if (try self.fillHolesCodeAction(arena, nav, block, offset)) |action| {
             try actions.append(arena, .{ .code_action = action });
         }
         if (actions.items.len == 0) return null;
@@ -1132,15 +1149,25 @@ pub const Handler = struct {
         self: *Handler,
         arena: std.mem.Allocator,
         nav: NavigationSnapshot,
+        block: ProofBlock,
         offset: usize,
     ) !?types.CodeAction {
-        const fill = nav.snapshot.holeFillAt(offset) orelse return null;
+        const found = try self.analysisHoles(arena, nav) orelse checked: {
+            if (!nav.snapshot.holeyLineAt(block, offset)) return null;
+            break :checked try blockHoles(arena, nav, block);
+        };
+        const fill = try LspIndex.holes.fillAt(
+            arena,
+            found,
+            nav.side().joined.text,
+            offset,
+        ) orelse return null;
         return try self.replacementCodeAction(
             arena,
             nav.side().*,
             "Fill in the holes",
             .@"refactor.rewrite",
-            .{ .start = fill.assertion.start, .end = fill.assertion.end },
+            fill.assertion,
             fill.replacement,
             null,
         );
@@ -1829,7 +1856,7 @@ pub const Handler = struct {
 
     /// Mark `uri`'s diagnostics out of date. Without an interrupt they are
     /// brought up to date at once; with one, when no input is waiting
-    /// (`lsp_input.zig`) or a request reads the unit.
+    /// (`lsp_input.zig`).
     fn analyzeSoon(
         self: *Handler,
         arena: std.mem.Allocator,
@@ -1879,37 +1906,49 @@ pub const Handler = struct {
     /// Analyse the pending documents in the order they changed. One the
     /// interrupt stops stays pending, with those after it.
     pub fn analyzePending(self: *Handler) !void {
-        while (self.pending.count() != 0) try self.analyzePendingAt(0);
+        while (self.pending.count() != 0) try self.analyzeFirstPending();
     }
 
-    /// Bring the unit a request reads up to date first. A request the
-    /// client cancels meanwhile is answered as cancelled.
-    fn analyzePendingFor(self: *Handler, docs: RootDocuments) !void {
-        const uris = [_]?[]const u8{
-            docs.mm0.uri,
-            if (docs.proof) |proof| proof.uri else null,
-        };
-        for (uris) |maybe_uri| {
-            const uri = maybe_uri orelse continue;
-            const index = self.pending.getIndex(uri) orelse continue;
-            self.analyzePendingAt(index) catch |err| return switch (err) {
-                error.AnalysisInterrupted => error.RequestCancelled,
-                else => err,
-            };
-        }
-    }
-
-    fn analyzePendingAt(self: *Handler, index: usize) !void {
+    fn analyzeFirstPending(self: *Handler) !void {
         var arena_state = ArenaAllocator.init(self.allocator);
         defer arena_state.deinit();
-        const uri = self.pending.keys()[index];
+        const uri = self.pending.keys()[0];
         const analyzed = self.analyzeUri(arena_state.allocator(), uri);
         if (analyzed) |_| {} else |err| {
             if (err == error.AnalysisInterrupted) return err;
         }
-        self.pending.orderedRemoveAt(index);
+        self.pending.orderedRemoveAt(0);
         self.allocator.free(uri);
         return analyzed;
+    }
+
+    /// The holes the last analysis of `nav`'s unit found, if it saw these
+    /// texts.
+    fn analysisHoles(
+        self: *const Handler,
+        arena: std.mem.Allocator,
+        nav: NavigationSnapshot,
+    ) !?*const HoleInferenceSink {
+        const kept = self.analysis_holes.getPtr(nav.unit.mm0.rootFile().uri) orelse
+            return null;
+        if (!kept.key.eql(try nav.unit.states(arena))) return null;
+        return &kept.holes;
+    }
+
+    /// The holes of `block`, a proof of `nav`'s unit, by a check of it alone.
+    fn blockHoles(
+        arena: std.mem.Allocator,
+        nav: NavigationSnapshot,
+        block: ProofBlock,
+    ) !*const HoleInferenceSink {
+        const found = try arena.create(HoleInferenceSink);
+        found.* = try LspIndex.holes.ofBlock(
+            arena,
+            nav.unit.mm0.joined.text,
+            nav.side().joined.text,
+            block,
+        );
+        return found;
     }
 
     fn dropPending(self: *Handler, uri: []const u8) void {
@@ -2054,6 +2093,7 @@ pub const Handler = struct {
             proof_path,
         );
         const states = try unit.states(arena);
+        try self.recordUnitFiles(arena, proof_uri, &unit);
 
         // One status diagnostic per search placeholder (warning until searched,
         // then info/error from the recorded outcome), published together with
@@ -2075,9 +2115,7 @@ pub const Handler = struct {
             unit.proof.?.joined.text,
         );
         compiler.allow_search_placeholders = true;
-        // Kept for the unit's navigation index, which would otherwise run
-        // this analysis again for them.
-        var holes = mm0.CompilerSupport.Context.HoleInferenceSink{
+        var holes = HoleInferenceSink{
             .allocator = self.allocator,
         };
         var holes_owned = true;
@@ -2148,7 +2186,7 @@ pub const Handler = struct {
         self: *Handler,
         mm0_uri: []const u8,
         states: []const NavigationDocumentState,
-        holes: mm0.CompilerSupport.Context.HoleInferenceSink,
+        holes: HoleInferenceSink,
     ) !void {
         var owned = holes;
         errdefer owned.deinit();
@@ -2530,34 +2568,9 @@ pub const Handler = struct {
         }
         try all.appendSlice(arena, extra_located);
 
-        // Proof root first, then the theory root, then everything else.
-        var targets = std.ArrayListUnmanaged(UnitFile).empty;
-        if (unit.proof) |proof| try targets.append(arena, proof.rootFile());
-        try targets.append(arena, unit.mm0.rootFile());
-        for (unit.mm0.files, 0..) |file, index| {
-            if (index != unit.mm0.root) try targets.append(arena, file);
-        }
-        if (unit.proof) |proof| {
-            for (proof.files, 0..) |file, index| {
-                if (index != proof.root) try targets.append(arena, file);
-            }
-        }
-        // A failed join leaves the failing file out of the degraded unit.
-        for (unit.failures) |failure| try targets.append(arena, failure.file);
-
-        var deps = std.ArrayListUnmanaged([]const u8).empty;
         var published = std.ArrayListUnmanaged([]const u8).empty;
-        for (targets.items, 0..) |target, position| {
-            // A file reached twice (a proof file both paired and included)
-            // publishes once.
-            var seen = false;
-            for (targets.items[0..position]) |earlier| {
-                if (std.mem.eql(u8, earlier.uri, target.uri)) seen = true;
-            }
-            if (seen) continue;
-
+        for (try unitFiles(arena, unit)) |target| {
             const is_root = unit.isRootUri(target.uri);
-            if (!is_root) try deps.append(arena, target.uri);
             var diagnostics = std.ArrayListUnmanaged(types.Diagnostic).empty;
             for (all.items) |located| {
                 if (!std.mem.eql(u8, located.uri, target.uri)) continue;
@@ -2588,7 +2601,58 @@ pub const Handler = struct {
             try published.append(arena, target.uri);
         }
 
-        try self.storeUnitRecord(arena, record_uri, deps.items, published.items);
+        try self.storeUnitRecord(
+            arena,
+            record_uri,
+            try unitDeps(arena, unit),
+            published.items,
+        );
+    }
+
+    /// The files of `unit`, each once: the proof root, the theory root, then
+    /// the rest.
+    fn unitFiles(arena: std.mem.Allocator, unit: *const Unit) ![]const UnitFile {
+        var files = std.StringArrayHashMapUnmanaged(UnitFile).empty;
+        if (unit.proof) |proof| try addUnitFile(arena, &files, proof.rootFile());
+        try addUnitFile(arena, &files, unit.mm0.rootFile());
+        for (unit.mm0.files) |file| try addUnitFile(arena, &files, file);
+        if (unit.proof) |proof| {
+            for (proof.files) |file| try addUnitFile(arena, &files, file);
+        }
+        // A failed join leaves the failing file out of the degraded unit.
+        for (unit.failures) |failure| try addUnitFile(arena, &files, failure.file);
+        return files.values();
+    }
+
+    fn addUnitFile(
+        arena: std.mem.Allocator,
+        files: *std.StringArrayHashMapUnmanaged(UnitFile),
+        file: UnitFile,
+    ) !void {
+        const gop = try files.getOrPut(arena, file.uri);
+        if (!gop.found_existing) gop.value_ptr.* = file;
+    }
+
+    /// The files of `unit` besides its roots.
+    fn unitDeps(arena: std.mem.Allocator, unit: *const Unit) ![]const []const u8 {
+        var deps = std.ArrayListUnmanaged([]const u8).empty;
+        for (try unitFiles(arena, unit)) |file| {
+            if (!unit.isRootUri(file.uri)) try deps.append(arena, file.uri);
+        }
+        return deps.items;
+    }
+
+    /// Record the files the analysis of `root_uri` is about to check, so
+    /// that a request about one finds the unit meanwhile.
+    fn recordUnitFiles(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        root_uri: []const u8,
+        unit: *const Unit,
+    ) !void {
+        const published: []const []const u8 =
+            if (self.units.get(root_uri)) |record| record.published else &.{};
+        try self.storeUnitRecord(arena, root_uri, try unitDeps(arena, unit), published);
     }
 
     /// Replace the record for `root_uri`, clearing diagnostics on files the
@@ -2733,7 +2797,6 @@ pub const Handler = struct {
         request_uri: []const u8,
         docs: RootDocuments,
     ) !?NavigationSnapshot {
-        try self.analyzePendingFor(docs);
         var unit_arena = ArenaAllocator.init(self.allocator);
         var keep_arena = false;
         defer if (!keep_arena) unit_arena.deinit();
@@ -2754,16 +2817,11 @@ pub const Handler = struct {
             }
             self.removeNavigationCacheByMm0Uri(mm0_uri);
 
-            const analysis = self.analysis_holes.getPtr(mm0_uri);
             var snapshot = try LspIndex.Snapshot.build(self.allocator, .{
                 .mm0_uri = mm0_uri,
                 .mm0_text = unit.mm0.joined.text,
                 .proof_uri = if (unit.proof) |proof| proof.rootFile().uri else null,
                 .proof_text = if (unit.proof) |proof| proof.joined.text else null,
-                .holes = if (analysis) |found|
-                    if (found.key.eql(states)) &found.holes else null
-                else
-                    null,
                 .check_memo = self.checkMemoFor(mm0_uri),
             });
             errdefer snapshot.deinit();

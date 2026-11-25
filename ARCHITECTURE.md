@@ -1391,8 +1391,9 @@ roots share the blocks up to where their joined texts differ in something a
 check can see: roots that import the same files in another order share only
 those before the first difference. The
 diagnostics pass keeps the hole inferences it collects for each root
-(`analysis_holes`), and a navigation snapshot of the same file states takes
-them instead of analyzing again. The memo keeps what each root's latest
+(`analysis_holes`). A hover on a hole and the fill-holes action read them,
+or, when they are of other texts, check only the proof under the cursor
+(`lsp/holes.zig`). The memo keeps what each root's latest
 run used, so its size follows the open roots, not a cap. Cache
 invalidation is centralized in `Handler.invalidateCachesForUri`; the memo
 needs none, being keyed by content.
@@ -1409,12 +1410,12 @@ The handler translates byte spans through the negotiated LSP offset encoding.
 The native entry uses `lsp_kit`'s server loop over
 `src/bin/compiler/lsp_input.zig`, which reads stdin ahead into a queue. An
 edit only marks its unit pending (`Handler.pending`); the analysis runs once
-nothing is queued, or when a request reads the unit. A running analysis asks
-the queue, after each statement whose proof it had to check, whether to
-stop: between messages it stops for a newer edit, and for a request only
-once the client cancels that request. A stopped run publishes nothing and
-drops no memo entry. A request whose `$/cancelRequest` is already queued is
-answered `RequestCancelled` without running. The freestanding WASM entry
+nothing is queued. No request waits for it. A running analysis asks the
+queue, after each proof it had to check, whether to stop: for an edit or for
+a request. A stopped run publishes nothing and drops no memo entry, and the
+next one replays what it checked. A request whose `$/cancelRequest` is
+already queued is answered `RequestCancelled` without running. The
+freestanding WASM entry
 reuses the handler with the compatibility transport and analyses each edit
 at once. `web/packages/lsp/` offers a directly called server and a browser
 Web Worker transport. Requests execute synchronously inside the worker: the

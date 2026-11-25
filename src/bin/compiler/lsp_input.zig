@@ -7,13 +7,12 @@
 //! already been taken off the queue; when the queue is empty and the handler
 //! has analyses pending, the read runs them before it blocks on stdin. While
 //! an analysis runs, its `AnalysisInterrupt` drains whatever stdin holds
-//! into the queue and stops it when:
+//! into the queue and stops it when the queue holds a message that changes a
+//! document or ends the session, or a request to answer. The document stays
+//! pending, and the next analysis replays what this one checked.
 //!
-//! - it runs between messages and the queue holds a message that changes a
-//!   document or ends the session: the text it analyses is out of date, and
-//!   the document stays pending;
-//! - it runs for a request (whose answer reads the unit) and the client has
-//!   cancelled that request: the handler answers `RequestCancelled`.
+//! The handler asks the same of the queue while it answers a request: there
+//! it means that the client has cancelled that request.
 //!
 //! A request whose `$/cancelRequest` is queued when it is read off the queue
 //! is answered `RequestCancelled` here and never reaches the handler.
@@ -34,8 +33,6 @@ pub const Input = struct {
     handler: ?*Handler = null,
     /// Messages read and not yet handed to the server loop, oldest first.
     queue: std.ArrayListUnmanaged(Queued) = .empty,
-    /// How many messages in `queue` change a document or end the session.
-    queued_changes: usize = 0,
     /// The request the server loop is handling: set when it is read off
     /// the queue, cleared by the next read (owned).
     current: ?Id = null,
@@ -99,7 +96,6 @@ pub const Input = struct {
         while (true) {
             while (self.queue.items.len != 0) {
                 const item = self.queue.orderedRemove(0);
-                if (item.changes) self.queued_changes -= 1;
                 if (item.cancels) |id| self.freeId(id);
                 if (item.request) |id| {
                     if (self.isCancelled(id)) {
@@ -132,13 +128,17 @@ pub const Input = struct {
         return self.stdio.transport.writeJsonMessage(io, json_message);
     }
 
-    /// The `AnalysisInterrupt` the handler's analyses poll.
+    /// The `AnalysisInterrupt` the handler polls.
     fn stopRequested(context: *anyopaque) bool {
         const self: *Input = @ptrCast(@alignCast(context));
         self.readWaiting();
         if (self.read_error != null) return true;
         if (self.current) |id| return self.isCancelled(id);
-        return self.queued_changes != 0;
+        for (self.queue.items) |item| {
+            if (item.changes) return true;
+            if (item.request) |id| if (!self.isCancelled(id)) return true;
+        }
+        return false;
     }
 
     /// Queue every message stdin already holds, without waiting for more.
@@ -177,7 +177,6 @@ pub const Input = struct {
         errdefer self.freeQueued(item);
         try self.classify(&item);
         try self.queue.append(self.allocator, item);
-        if (item.changes) self.queued_changes += 1;
     }
 
     const Head = struct {

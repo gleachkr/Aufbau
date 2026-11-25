@@ -1,5 +1,4 @@
 const CheckMemo = @import("../compiler/check_memo.zig").CheckMemo;
-const HoleInferenceSink = @import("../compiler/context.zig").HoleInferenceSink;
 
 pub const DocumentId = enum {
     mm0,
@@ -12,9 +11,6 @@ pub const SnapshotInput = struct {
     mm0_text: []const u8,
     proof_uri: ?[]const u8 = null,
     proof_text: ?[]const u8 = null,
-    /// The holes an analysis of these texts collected. Null runs one,
-    /// with `check_memo` when given.
-    holes: ?*const HoleInferenceSink = null,
     /// What earlier analyses of the unit found (`compiler/check_memo.zig`).
     /// The proof parse passes over the bodies it knows.
     check_memo: ?*CheckMemo = null,

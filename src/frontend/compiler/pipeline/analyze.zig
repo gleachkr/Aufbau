@@ -208,17 +208,7 @@ fn walk(
         self.keep_checking = .{ .invalid_rules = &proof.invalid_rules };
     }
     defer self.keep_checking = null;
-    // The memo's miss count when the interrupt was last asked: it is asked
-    // only after a statement that checked a proof, so every run checks at
-    // least the first proof it cannot replay, and replayed ones cost no poll.
-    var polled_misses: usize = if (self.check_memo) |memo| memo.misses else 0;
     parse_loop: while (true) {
-        if (self.interrupt) |interrupt| if (self.check_memo) |memo| {
-            if (memo.misses != polled_misses) {
-                polled_misses = memo.misses;
-                if (interrupt.stopRequested()) return error.AnalysisInterrupted;
-            }
-        };
         Common.prepareNextPublicStatement(
             self,
             &state.theory.parser,
@@ -561,6 +551,7 @@ fn analyzeLocalProofBlock(
     };
     if (state.stop == null) {
         analyzeBlock(self, allocator, theory, assertion, block) catch |err| {
+            if (err == error.AnalysisInterrupted) return err;
             recordPrimaryProofFailure(
                 self,
                 &proof.invalid_rules,
@@ -1055,6 +1046,7 @@ fn analyzeTheoremProof(
 
                 const warnings = WarningSnapshot.capture(self);
                 analyzeBlock(self, allocator, theory, assertion, block) catch |err| {
+                    if (err == error.AnalysisInterrupted) return err;
                     // The theorem fails, but the warnings its lines raised
                     // (a line citing a failed one, `sorry!`) still stand.
                     recordPrimaryProofFailure(

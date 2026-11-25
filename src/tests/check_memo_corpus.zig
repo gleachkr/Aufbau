@@ -12,6 +12,8 @@ const mm0 = @import("../lib.zig");
 
 const Compiler = mm0.Compiler;
 const CheckMemo = mm0.CheckMemo;
+const Context = mm0.CompilerSupport.Context;
+const HoleInferenceSink = Context.HoleInferenceSink;
 const ProofScript = mm0.ProofScript;
 const scanToStatementEnd = @import("../trusted/parse.zig").scanToStatementEnd;
 
@@ -22,6 +24,17 @@ fn analyzeDump(
     proof_text: []const u8,
     memo: ?*CheckMemo,
     unknowns_sink: bool,
+) ![]u8 {
+    return analyzeDumpStopping(allocator, mm0_text, proof_text, memo, unknowns_sink, null);
+}
+
+fn analyzeDumpStopping(
+    allocator: std.mem.Allocator,
+    mm0_text: []const u8,
+    proof_text: []const u8,
+    memo: ?*CheckMemo,
+    unknowns_sink: bool,
+    interrupt: ?mm0.AnalysisInterrupt,
 ) ![]u8 {
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
@@ -34,12 +47,14 @@ fn analyzeDump(
     compiler.hole_inference_sink = &holes;
     if (unknowns_sink) compiler.unknown_value_sink = &unknowns;
     compiler.check_memo = memo;
+    compiler.interrupt = interrupt;
 
     var out: std.Io.Writer.Allocating = .init(arena);
     const writer = &out.writer;
     if (compiler.analyze()) |_| {
         try writer.writeAll("result: ok\n");
     } else |err| {
+        if (err == error.AnalysisInterrupted) return err;
         try writer.print("result: {s}\n", .{@errorName(err)});
     }
     for (compiler.primaryDiagnostics()) |diag| {
@@ -451,6 +466,250 @@ test "check memo matches cold analysis across the proof-case corpus" {
     }
     try std.testing.expect(counts.blocks > 0);
     try std.testing.expect(counts.hits_seen);
+}
+
+/// Stops an analysis at each proof the memo newly recorded.
+const StopAtNew = struct {
+    memo: *const CheckMemo,
+    recorded: usize = 0,
+
+    fn stopRequested(context: *anyopaque) bool {
+        const self: *StopAtNew = @ptrCast(@alignCast(context));
+        const recorded = self.memo.entries.count();
+        defer self.recorded = recorded;
+        return recorded != self.recorded;
+    }
+};
+
+test "an analysis stopped at every proof ends as one that ran through" {
+    const allocator = std.testing.allocator;
+    const stems = try fixtureStems(allocator);
+    defer {
+        for (stems) |stem| allocator.free(stem);
+        allocator.free(stems);
+    }
+    var all_stops: usize = 0;
+    for (stems) |stem| {
+        var arena_state = std.heap.ArenaAllocator.init(allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        const mm0_path = try std.fmt.allocPrint(arena, "tests/proof_cases/{s}.mm0", .{stem});
+        const proof_path = try std.fmt.allocPrint(arena, "tests/proof_cases/{s}.auf", .{stem});
+        var failure: ?mm0.Imports.LoadFailure = null;
+        const pair = mm0.Imports.loadPair(std.testing.io, arena, mm0_path, proof_path, &failure) catch continue;
+        const proof_text = (pair.proof orelse continue).text;
+
+        const through = try analyzeDump(arena, pair.mm0.text, proof_text, null, false);
+        var memo = CheckMemo.init(allocator);
+        defer memo.deinit();
+        var stopping: StopAtNew = .{ .memo = &memo };
+        var stops: usize = 0;
+        const stopped = while (true) {
+            break analyzeDumpStopping(arena, pair.mm0.text, proof_text, &memo, false, .{
+                .context = &stopping,
+                .stopFn = StopAtNew.stopRequested,
+            }) catch |err| {
+                if (err != error.AnalysisInterrupted) return err;
+                stops += 1;
+                continue;
+            };
+        };
+        try std.testing.expectEqualStrings(through, stopped);
+        // One stop for each proof, and no stopped run dropped one.
+        try std.testing.expectEqual(memo.entries.count(), stops);
+        all_stops += stops;
+    }
+    try std.testing.expect(all_stops > 1000);
+}
+
+fn alwaysStop(_: *anyopaque) bool {
+    return true;
+}
+
+test "a proof checked alone has the holes an analysis finds in it" {
+    const allocator = std.testing.allocator;
+    const stems = try fixtureStems(allocator);
+    defer {
+        for (stems) |stem| allocator.free(stem);
+        allocator.free(stems);
+    }
+    var blocks: usize = 0;
+    for (stems) |stem| {
+        var arena_state = std.heap.ArenaAllocator.init(allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        const mm0_path = try std.fmt.allocPrint(arena, "tests/proof_cases/{s}.mm0", .{stem});
+        const proof_path = try std.fmt.allocPrint(arena, "tests/proof_cases/{s}.auf", .{stem});
+        var failure: ?mm0.Imports.LoadFailure = null;
+        const pair = mm0.Imports.loadPair(std.testing.io, arena, mm0_path, proof_path, &failure) catch continue;
+        const proof_text = (pair.proof orelse continue).text;
+
+        var found = HoleInferenceSink{ .allocator = arena };
+        var compiler = Compiler.initWithProof(allocator, pair.mm0.text, proof_text);
+        compiler.allow_search_placeholders = true;
+        compiler.hole_inference_sink = &found;
+        compiler.analyze() catch {};
+        if (found.items.items.len + found.assertions.items.len == 0) continue;
+
+        var items: []const Context.HoleInference = found.items.items;
+        var assertions: []const Context.FilledAssertion = found.assertions.items;
+        var parser = ProofScript.Parser.initLenient(arena, proof_text);
+        while (try parser.nextBlockRecovering()) |block| {
+            var item_count: usize = 0;
+            while (item_count < items.len and
+                items[item_count].span.end <= block.span.end) item_count += 1;
+            var fill_count: usize = 0;
+            while (fill_count < assertions.len and
+                assertions[fill_count].line.end <= block.span.end) fill_count += 1;
+            if (item_count + fill_count == 0) continue;
+            const alone = try mm0.Frontend.LspIndex.holes.ofBlock(
+                arena,
+                pair.mm0.text,
+                proof_text,
+                block,
+            );
+            try std.testing.expectEqualDeep(items[0..item_count], alone.items.items);
+            try std.testing.expectEqualDeep(assertions[0..fill_count], alone.assertions.items);
+            items = items[item_count..];
+            assertions = assertions[fill_count..];
+            blocks += 1;
+        }
+        try std.testing.expectEqual(0, items.len + assertions.len);
+    }
+    try std.testing.expect(blocks > 100);
+}
+
+test "an analysis that is always stopped checks one proof a run" {
+    const allocator = std.testing.allocator;
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\theorem first: $ top $;
+        \\theorem second: $ top $;
+    ;
+    const proof_text =
+        \\lemma before: $ top $
+        \\----
+        \\l1: $ top $ by top_i []
+        \\
+        \\first
+        \\----
+        \\l1: $ top $ by no_such_rule []
+        \\
+        \\second
+        \\----
+        \\l1: $ top $ by top_i []
+        \\
+    ;
+    var memo = CheckMemo.init(allocator);
+    defer memo.deinit();
+    for (1..4) |proofs| {
+        try std.testing.expectError(error.AnalysisInterrupted, analyzeDumpStopping(
+            allocator,
+            mm0_text,
+            proof_text,
+            &memo,
+            false,
+            .{ .context = &memo, .stopFn = alwaysStop },
+        ));
+        try std.testing.expectEqual(proofs, memo.entries.count());
+    }
+    const stopped = try analyzeDumpStopping(allocator, mm0_text, proof_text, &memo, false, .{
+        .context = &memo,
+        .stopFn = alwaysStop,
+    });
+    defer allocator.free(stopped);
+    const through = try analyzeDump(allocator, mm0_text, proof_text, null, false);
+    defer allocator.free(through);
+    try std.testing.expectEqualStrings(through, stopped);
+}
+
+test "check memo keeps what a stopped run checked while another root's run ends" {
+    const allocator = std.testing.allocator;
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\theorem first: $ top $;
+        \\theorem second: $ top $;
+    ;
+    const proof_text =
+        \\first
+        \\-----
+        \\l1: $ top $ by top_i []
+        \\
+        \\second
+        \\------
+        \\l1: $ top $ by top_i []
+        \\
+    ;
+    const edited_text =
+        \\first
+        \\-----
+        \\l2: $ top $ by top_i []
+        \\
+        \\second
+        \\------
+        \\l1: $ top $ by top_i []
+        \\
+    ;
+    const other_mm0_text =
+        \\provable sort wff;
+        \\term bot: wff;
+        \\axiom bot_i: $ bot $;
+        \\theorem main: $ bot $;
+    ;
+    const other_proof_text =
+        \\main
+        \\----
+        \\l1: $ bot $ by bot_i []
+        \\
+    ;
+    var memo = CheckMemo.init(allocator);
+    defer memo.deinit();
+    const always: mm0.AnalysisInterrupt = .{ .context = &memo, .stopFn = alwaysStop };
+    const runOther = struct {
+        fn run(m: *CheckMemo) !void {
+            m.root = 2;
+            allocator.free(try analyzeDump(allocator, other_mm0_text, other_proof_text, m, false));
+            m.root = 1;
+        }
+    }.run;
+
+    // The first run is stopped, then one that replays the first proof.
+    memo.root = 1;
+    for (1..3) |proofs| {
+        try std.testing.expectError(error.AnalysisInterrupted, analyzeDumpStopping(
+            allocator,
+            mm0_text,
+            proof_text,
+            &memo,
+            false,
+            always,
+        ));
+        try runOther(&memo);
+        try std.testing.expectEqual(proofs + 1, memo.entries.count());
+    }
+    allocator.free(try analyzeDump(allocator, mm0_text, proof_text, &memo, false));
+    try std.testing.expectEqual(3, memo.entries.count());
+
+    // Stopped after an edit, it keeps the edited proof and the old one, which
+    // goes when a run ends.
+    try std.testing.expectError(error.AnalysisInterrupted, analyzeDumpStopping(
+        allocator,
+        mm0_text,
+        edited_text,
+        &memo,
+        false,
+        always,
+    ));
+    try runOther(&memo);
+    try std.testing.expectEqual(4, memo.entries.count());
+    const misses = memo.misses;
+    allocator.free(try analyzeDump(allocator, mm0_text, edited_text, &memo, false));
+    try std.testing.expectEqual(misses, memo.misses);
+    try std.testing.expectEqual(3, memo.entries.count());
 }
 
 test "check memo keeps what each root's latest run used" {

@@ -1225,7 +1225,9 @@ fn releaseTheoremScratch(self: *const CompilerContext) void {
 /// Check `block` as `assertion`'s proof for the analysis, which wants what
 /// the check reports and not its lines. With an active check memo
 /// (`CompilerContext.check_memo`), a hit replays the recorded outcome and
-/// output, without the theorem being built or the block's lines parsed.
+/// output, without the theorem being built or the block's lines parsed; a
+/// check that ran is followed by a look at the interrupt, whose
+/// `AnalysisInterrupted` is the run's, not the block's.
 pub fn analyzeBlock(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
@@ -1251,11 +1253,13 @@ pub fn analyzeBlock(
     }
     const parsed = try block.withLines(allocator, proof);
     const recording = memo.beginRecording(self);
-    checkUnmemoized(self, scratch, theory, assertion, parsed) catch |err| {
-        memo.finishRecording(self, recording, key, err, proof, parsed);
-        return err;
-    };
-    memo.finishRecording(self, recording, key, null, proof, parsed);
+    const outcome: ?anyerror =
+        if (checkUnmemoized(self, scratch, theory, assertion, parsed)) null else |err| err;
+    memo.finishRecording(self, recording, key, outcome, proof, parsed);
+    if (self.interrupt) |interrupt| {
+        if (interrupt.stopRequested()) return error.AnalysisInterrupted;
+    }
+    if (outcome) |err| return err;
 }
 
 fn checkUnmemoized(
