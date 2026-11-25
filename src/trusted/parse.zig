@@ -2617,7 +2617,7 @@ fn scanSortHeader(src: []const u8, start: usize) ?PublicStmtHeader {
 }
 
 /// How the statement `scanToStatementEnd` walked over ends.
-const StatementEnd = struct {
+pub const StatementEnd = struct {
     /// The first byte on the way that MM0 does not allow: a NUL anywhere,
     /// or a tab or carriage return outside a comment.
     illegal: ?usize = null,
@@ -2630,7 +2630,7 @@ const StatementEnd = struct {
 /// Advances `pos` past the `;` that ends the statement at `pos`, or to the
 /// end of `src`. Inside a `$...$` math string, a `"..."` string or a `--`
 /// comment, `;` ends nothing.
-fn scanToStatementEnd(src: []const u8, pos: *usize) StatementEnd {
+pub fn scanToStatementEnd(src: []const u8, pos: *usize) StatementEnd {
     var end: StatementEnd = .{};
     var quote: ?u8 = null;
     var quote_start: usize = 0;

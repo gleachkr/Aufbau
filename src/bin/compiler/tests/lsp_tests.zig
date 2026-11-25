@@ -3498,11 +3498,14 @@ test "LSP check memo replays library blocks across roots" {
     const main_mm0_uri = "file:///tmp/lsp-memo/main.mm0";
     const main_auf_uri = "file:///tmp/lsp-memo/main.auf";
     const lib_mm0_text =
+        \\-- A library.
         \\provable sort wff;
         \\term top: wff;
         \\axiom ax_top: $ top $;
         \\theorem lib_thm: $ top $;
-        \\
+        \\term bot: wff;
+        \\prefix bot: $_|_$ prec max;
+        \\-- the end
     ;
     const lib_auf_text =
         \\lib_thm
@@ -3511,6 +3514,7 @@ test "LSP check memo replays library blocks across roots" {
         \\
     ;
     const main_mm0_text =
+        \\-- Each file starts with a comment of its own.
         \\import "lib.mm0";
         \\theorem main_thm: $ top $;
         \\

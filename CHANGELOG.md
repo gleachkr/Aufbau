@@ -122,6 +122,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   to find what to act on, not the whole proof text. A code action in the
   last file of a 126 MB library took 0.6 s after an edit and 0.3 s without
   one, and now takes 0.3 s and 0.05 s.
+- The language server checks a library's proofs once for all the open files
+  whose imports begin the same way. Before, a comment ahead of a file's
+  imports was enough to check every imported proof again for that file.
+  Opening eleven files of a 126 MB library took about 235 s and now takes
+  48 s, 34 s of it one file's first check. Nor does editing a comment between
+  the statements of a `.mm0` file check any proof again.
 - The unpack code action checks only the proof it rewrites, not every proof
   of the file and its imports twice, and is offered whether or not another
   proof or statement has an error. In the last file of a 126 MB library it

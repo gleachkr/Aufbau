@@ -576,9 +576,10 @@ between trusted parser trees and frontend proof elaboration.
   Block checks are ~95% of an analysis, so re-analysis is made
   incremental by memoizing them rather than by snapshotting the compiler
   state: the analyze walk keeps a running fingerprint of what a check
-  can observe (the theory text up to the parser's position, and the proof
-  text up to the block without the earlier blocks' bodies), keys a check
-  by that fingerprint plus the block body, and on a
+  can observe (the theory's statements and directives up to the parser's
+  position, without the comments and whitespace between statements, and the
+  proof text up to the block without the earlier blocks' bodies), keys a
+  check by that fingerprint plus the block body, and on a
   hit replays the recorded diagnostics, hole sink entries and error with
   proof spans relocated to the block's new position, without building the
   theorem (`analyzeBlock` in `pipeline/common.zig`). Nor are the block's
@@ -592,8 +593,8 @@ between trusted parser trees and frontend proof elaboration.
   check reads beyond that prefix, are recorded and re-verified.
   `src/tests/check_memo_corpus.zig` is the guard: on
   every fixture, a warm analysis must equal a cold one under body edits
-  that shift or break later blocks, their undo, and theory edits that
-  shift everything.
+  that shift or break later blocks, their undo, comments that shift the
+  whole theory, and a theory edit every check can see.
 
 The drivers maintain the parser, frontend environment, and metadata
 registries. A search prepares its theory with the analysis walk itself:
@@ -1385,7 +1386,10 @@ The important lifetimes are:
 navigation snapshots, search results, placeholder outcomes, and the
 proof-block check memo every analysis it runs shares (`check_memo.zig`),
 so an edit re-checks only the blocks it can affect and a root that imports
-a library replays the library's blocks instead of re-checking them. The
+a library replays the library's blocks instead of re-checking them. Two
+roots share the blocks up to where their joined texts differ in something a
+check can see: roots that import the same files in another order share only
+those before the first difference. The
 diagnostics pass keeps the hole inferences it collects for each root
 (`analysis_holes`), and a navigation snapshot of the same file states takes
 them instead of analyzing again. The memo keeps what each root's latest

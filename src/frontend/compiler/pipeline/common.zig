@@ -1242,8 +1242,9 @@ pub fn analyzeBlock(
         return checkUnmemoized(self, scratch, theory, assertion, block);
     }
     const proof = self.proof_source.?;
-    const key = memo.keyForBlock(self.source, theory.parser.core.pos, proof, block);
-    if (memo.find(key, block, &theory.rule_catalog)) |entry| {
+    const mm0_pos = theory.parser.core.pos;
+    const key = memo.keyForBlock(self.source, mm0_pos, proof, block);
+    if (memo.find(key, block, &theory.rule_catalog, mm0_pos)) |entry| {
         try entry.replay(self, block.span.start);
         if (entry.outcome) |err| return err;
         return;

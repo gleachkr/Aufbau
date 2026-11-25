@@ -9,10 +9,6 @@ pub const Entry = struct {
     /// whose parser has not passed it cites a rule declared later.
     end: usize,
     name_span: Span,
-
-    pub fn declaredBefore(self: Entry, parser_pos: usize) bool {
-        return self.end < parser_pos;
-    }
 };
 
 const EntryMap = std.StringHashMap(Entry);
@@ -30,12 +26,14 @@ pub const Catalog = struct {
         return .{ .allocator = allocator, .src = src };
     }
 
-    pub fn get(self: *Catalog, name: []const u8) ?Entry {
+    /// The rule `name` if it is declared later than `parser_pos`.
+    pub fn declaredLater(self: *Catalog, name: []const u8, parser_pos: usize) ?Entry {
         if (self.entries == null) {
             self.entries = EntryMap.init(self.allocator);
             build(self.allocator, self.src, &self.entries.?) catch {};
         }
-        return self.entries.?.get(name);
+        const entry = self.entries.?.get(name) orelse return null;
+        return if (entry.end < parser_pos) null else entry;
     }
 };
 

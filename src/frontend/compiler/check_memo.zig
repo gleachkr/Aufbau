@@ -8,23 +8,26 @@
 //! the compiler state: a run re-checks a block only when something the
 //! check can observe has changed.
 //!
-//! What a check observes is a prefix of the two sources: the `.mm0` text
-//! up to the theory parser's position (less trailing whitespace), and the
-//! `.auf` text up to the block, less the earlier blocks' proof bodies. An
-//! earlier proof is invisible to later checks: the analysis keeps its
-//! theorem or lemma in scope whether the proof holds or not, so only its
-//! statement (in the hashed text) matters. The run keeps a running
-//! fingerprint of exactly that: theory text and proof text are hashed
-//! lazily up to each check (`sync`), and proof bodies are skipped. So an
-//! edit inside one proof re-checks that proof alone. Local defs, notation
-//! items, filler defs, comments and parse garbage all lie in the hashed
+//! What a check observes is a prefix of the two sources: the `.mm0`
+//! statements up to the theory parser's position, with their directives,
+//! and the `.auf` text up to the block, less the earlier blocks' proof
+//! bodies. An earlier proof is invisible to later checks: the analysis
+//! keeps its theorem or lemma in scope whether the proof holds or not, so
+//! only its statement (in the hashed text) matters. Comments and
+//! whitespace between two `.mm0` statements are invisible too, so a
+//! comment edit re-checks nothing, and a library's blocks are shared by
+//! the files that import it, whatever comments those start with. The run
+//! keeps a running fingerprint of exactly that: theory and proof text are
+//! hashed lazily up to each check (`keyForBlock`). So an edit inside one
+//! proof re-checks that proof alone. Local defs, notation items, filler
+//! defs, proof-side comments and parse garbage all lie in the hashed
 //! ranges, so they invalidate what follows, as they should. The memo key
 //! is that fingerprint plus a hash of the block body; the value is
 //! everything the check emitted: its error, the diagnostics and warnings
 //! it added, its hole sink entries, and the `last_diagnostic` it left
-//! behind. So a memo-backed run
-//! collects holes, and only holes: a run without the hole sink, or with
-//! the unknown-value or stats sink, checks every block (`beginRun`).
+//! behind. So a memo-backed run collects holes, and only holes: a run
+//! without the hole sink, or with the unknown-value or stats sink, checks
+//! every block (`beginRun`).
 //!
 //! The memo keeps what each root's latest run used (`root`): an entry no
 //! later run of its root found is one that root's texts no longer reach,
@@ -32,15 +35,15 @@
 //!
 //! One thing a check reads outside the hashed prefix is the rule catalog
 //! (`RuleCatalog`), which spans the whole `.mm0` and is consulted for
-//! "rule declared later" diagnostics. Those lookups are recorded per
-//! entry and re-verified on a hit.
+//! "rule declared later" diagnostics. What those lookups found is recorded
+//! per entry and re-verified on a hit.
 //!
-//! Positions: identical hashed theory text means identical theory
-//! offsets, so `.mm0` spans replay unchanged (the record refuses spans
-//! past the hashed prefix). Proof offsets shift when an earlier body
-//! changes length, so `.auf` spans are relocated by the block's
-//! displacement; spans outside the block are not relocatable and make the
-//! block unrecordable (it is simply re-checked each run).
+//! Positions: proof offsets shift when an earlier body changes length, so
+//! an entry's spans are relocated by the block's displacement. A span
+//! outside the block is not relocatable, be it in the `.auf` or the `.mm0`
+//! text, and makes the block unrecordable (it is simply re-checked each
+//! run). The only `.mm0` span a check reports is the declaration of a rule
+//! declared later.
 //!
 //! Parsing: a replayed block's lines are not needed, so the memo also
 //! tells the proof parser which bodies it knows (`knownBodies`), and the
@@ -57,6 +60,8 @@ const Diagnostic = CompilerDiag.Diagnostic;
 const Span = @import("../proof_script.zig").Span;
 const ProofBlock = @import("../proof_script.zig").ProofBlock;
 const KnownBodies = @import("../proof_script.zig").KnownBodies;
+const scanToStatementEnd = @import("../../trusted/parse.zig").scanToStatementEnd;
+const Metadata = @import("./metadata.zig");
 const RuleCatalog = @import("./rule_catalog.zig");
 const Context = @import("./context.zig");
 const CompilerContext = Context.CompilerContext;
@@ -69,10 +74,11 @@ pub const CheckMemo = struct {
         body: u64,
     };
 
-    /// One rule-catalog lookup a check made, with what it saw.
+    /// One rule-catalog lookup a check made, with what it saw: whether the
+    /// `.mm0` declares the rule later.
     pub const CatalogLookup = struct {
         name: []const u8,
-        entry: ?RuleCatalog.Entry,
+        later: bool,
     };
 
     /// A run that found or recorded an entry: the run's number and the root
@@ -142,9 +148,6 @@ pub const CheckMemo = struct {
     /// Sink positions at the start of a check, so its output can be
     /// cut out afterwards.
     pub const Recording = struct {
-        /// The theory position the fingerprint covers; `.mm0` spans past
-        /// it are not recordable.
-        mm0_limit: usize,
         primary_count: usize,
         warning_count: usize,
         dropped_primary: usize,
@@ -222,8 +225,7 @@ pub const CheckMemo = struct {
     }
 
     /// Hash `bytes` into the running fingerprint. The domain tag and the
-    /// length keep differently split feeds of the same bytes distinct, so
-    /// an equal fingerprint means equal theory text up to the cursor.
+    /// length keep differently split feeds of the same bytes distinct.
     fn feed(self: *CheckMemo, domain: Domain, bytes: []const u8) void {
         var hasher = std.hash.Wyhash.init(self.fingerprint);
         hasher.update(&[_]u8{@backingInt(domain)});
@@ -233,24 +235,38 @@ pub const CheckMemo = struct {
         self.fingerprint = hasher.final();
     }
 
-    /// Hash the text between the cursors and the given positions.
-    fn sync(
-        self: *CheckMemo,
-        mm0: []const u8,
-        mm0_pos: usize,
-        proof: []const u8,
-        proof_pos: usize,
-    ) void {
-        const mm0_end = @min(mm0_pos, mm0.len);
-        if (mm0_end > self.mm0_cursor) {
-            self.feed(.mm0, mm0[self.mm0_cursor..mm0_end]);
-            self.mm0_cursor = mm0_end;
+    /// Hash the theory text from the cursor to `end`, a position the parser
+    /// stops at: each statement, and what a check can see of the text
+    /// between statements. The parser finds its statements' ends where
+    /// `scanToStatementEnd` does (`MM0Parser.checkWhitechars`), so `end`
+    /// lies between statements. The scan never stops inside a statement or
+    /// a comment, so equal text is fed alike wherever the checks lie.
+    fn syncTheory(self: *CheckMemo, mm0: []const u8, end: usize) void {
+        while (self.mm0_cursor < end) {
+            const start = self.mm0_cursor;
+            if (std.mem.startsWith(u8, mm0[start..], "--")) {
+                self.mm0_cursor = std.mem.findScalarPos(u8, mm0, start, '\n') orelse mm0.len;
+                if (!seesComment(mm0[start..self.mm0_cursor])) continue;
+            } else switch (mm0[start]) {
+                ' ', '\n' => {
+                    self.mm0_cursor += 1;
+                    continue;
+                },
+                // The parser rejects the statement that follows.
+                '\t', '\r' => self.mm0_cursor += 1,
+                else => _ = scanToStatementEnd(mm0, &self.mm0_cursor),
+            }
+            self.feed(.mm0, mm0[start..self.mm0_cursor]);
         }
-        const proof_end = @min(proof_pos, proof.len);
-        if (proof_end > self.proof_cursor) {
-            self.feed(.proof, proof[self.proof_cursor..proof_end]);
-            self.proof_cursor = proof_end;
-        }
+    }
+
+    /// Whether a check can see `comment` (`--...`), written between two
+    /// `.mm0` statements: a directive (`--| @...`) sets up the theory, and
+    /// the parser rejects the statement after a NUL. Doc prose is for hover.
+    fn seesComment(comment: []const u8) bool {
+        if (std.mem.findScalar(u8, comment, 0) != null) return true;
+        if (!std.mem.startsWith(u8, comment, "--|")) return false;
+        return Metadata.hasDirective(&.{std.mem.trimStart(u8, comment[3..], " \t")});
     }
 
     /// The key of the check about to run on `block`: the fingerprint of
@@ -267,13 +283,12 @@ pub const CheckMemo = struct {
         proof: []const u8,
         block: ProofBlock,
     ) Key {
-        // The parser's position after a statement runs over the whitespace
-        // that follows it, which is one newline more when another file is
-        // joined behind a library's last statement; a check cannot see it.
-        var mm0_end = @min(mm0_pos, mm0.len);
-        while (mm0_end > self.mm0_cursor and
-            std.ascii.isWhitespace(mm0[mm0_end - 1])) mm0_end -= 1;
-        self.sync(mm0, mm0_end, proof, block.header_span.end);
+        self.syncTheory(mm0, @min(mm0_pos, mm0.len));
+        const header_end = @min(block.header_span.end, proof.len);
+        if (header_end > self.proof_cursor) {
+            self.feed(.proof, proof[self.proof_cursor..header_end]);
+            self.proof_cursor = header_end;
+        }
         const block_end = @min(block.span.end, proof.len);
         if (block_end > self.proof_cursor) self.proof_cursor = block_end;
         return .{
@@ -316,19 +331,21 @@ pub const CheckMemo = struct {
     }
 
     /// The entry for `key`, `block`'s, whose recorded catalog lookups still
-    /// hold.
+    /// hold with the parser at `mm0_pos`.
     pub fn find(
         self: *CheckMemo,
         key: Key,
         block: ProofBlock,
         catalog: *RuleCatalog.Catalog,
+        mm0_pos: usize,
     ) ?*const Entry {
         const entry = self.entries.get(key) orelse {
             self.misses += 1;
             return null;
         };
         for (entry.lookups) |lookup| {
-            if (!catalogEntryEql(lookup.entry, catalog.get(lookup.name))) {
+            const later = catalog.declaredLater(lookup.name, mm0_pos) != null;
+            if (lookup.later != later) {
                 self.misses += 1;
                 return null;
             }
@@ -351,7 +368,6 @@ pub const CheckMemo = struct {
         self.recording = true;
         self.recording_failed = false;
         return .{
-            .mm0_limit = self.mm0_cursor,
             .primary_count = ctx.diagnostics.primary_diagnostic_count,
             .warning_count = ctx.diagnostics.warning_count,
             .dropped_primary = ctx.diagnostics.dropped_primary_diagnostic_count,
@@ -362,20 +378,16 @@ pub const CheckMemo = struct {
     }
 
     /// Called at the catalog lookup site while a check is being recorded.
-    pub fn noteCatalogLookup(
-        self: *CheckMemo,
-        name: []const u8,
-        entry: ?RuleCatalog.Entry,
-    ) void {
+    pub fn noteCatalogLookup(self: *CheckMemo, name: []const u8, later: bool) void {
         if (!self.recording) return;
-        self.lookups.append(self.allocator, .{ .name = name, .entry = entry }) catch {
+        self.lookups.append(self.allocator, .{ .name = name, .later = later }) catch {
             self.recording_failed = true;
         };
     }
 
     /// Store what the check emitted since `recording`. Skipped when the
     /// output cannot be replayed faithfully: an out-of-memory outcome, a
-    /// sink that overflowed, or a span outside the relocatable ranges.
+    /// sink that overflowed, or a span outside the block.
     pub fn finishRecording(
         self: *CheckMemo,
         ctx: *const CompilerContext,
@@ -408,7 +420,6 @@ pub const CheckMemo = struct {
     ) !void {
         const block = proof_block.span;
         const header = proof_block.header_span;
-        const mm0_limit = recording.mm0_limit;
         const entry = try self.allocator.create(Entry);
         entry.* = .{
             .arena = ArenaAllocator.init(self.allocator),
@@ -435,16 +446,14 @@ pub const CheckMemo = struct {
             arena,
             sink.primaryDiagnostics()[recording.primary_count..],
             block,
-            mm0_limit,
         ) orelse return;
         entry.warnings = try dupeDiagnostics(
             arena,
             sink.warningDiagnostics()[recording.warning_count..],
             block,
-            mm0_limit,
         ) orelse return;
         if (sink.last_diagnostic) |diag| {
-            if (!spansRecordable(diag, block, mm0_limit)) return;
+            if (!spansRecordable(diag, block)) return;
             entry.last_diagnostic = try dupeDiagnostic(arena, diag);
         }
         const holes = ctx.hole_inference_sink.?;
@@ -474,7 +483,7 @@ pub const CheckMemo = struct {
         for (self.lookups.items, lookups) |lookup, *copy| {
             copy.* = .{
                 .name = try arena.dupe(u8, lookup.name),
-                .entry = lookup.entry,
+                .later = lookup.later,
             };
         }
         entry.lookups = lookups;
@@ -537,42 +546,23 @@ pub const CheckMemo = struct {
     }
 };
 
-fn catalogEntryEql(a: ?RuleCatalog.Entry, b: ?RuleCatalog.Entry) bool {
-    if (a == null or b == null) return a == null and b == null;
-    return a.?.end == b.?.end and
-        a.?.name_span.start == b.?.name_span.start and
-        a.?.name_span.end == b.?.name_span.end;
-}
-
 fn spanWithin(span: Span, block: Span) bool {
     return span.start >= block.start and span.end <= block.end and
         span.start <= span.end;
 }
 
-fn spanRecordable(
-    source: CompilerDiag.DiagnosticSource,
-    span: ?Span,
-    block: Span,
-    mm0_limit: usize,
-) bool {
+fn spanRecordable(source: CompilerDiag.DiagnosticSource, span: ?Span, block: Span) bool {
     const actual = span orelse return true;
-    return switch (source) {
-        .proof => spanWithin(actual, block),
-        .mm0 => actual.end <= mm0_limit,
-    };
+    return source == .proof and spanWithin(actual, block);
 }
 
-fn spansRecordable(diag: Diagnostic, block: Span, mm0_limit: usize) bool {
-    if (!spanRecordable(diag.source, diag.span, block, mm0_limit)) return false;
+fn spansRecordable(diag: Diagnostic, block: Span) bool {
+    if (!spanRecordable(diag.source, diag.span, block)) return false;
     for (diag.noteSlice()) |note| {
-        if (!spanRecordable(note.source, note.span, block, mm0_limit)) {
-            return false;
-        }
+        if (!spanRecordable(note.source, note.span, block)) return false;
     }
     for (diag.relatedSlice()) |related| {
-        if (!spanRecordable(related.source, related.span, block, mm0_limit)) {
-            return false;
-        }
+        if (!spanRecordable(related.source, related.span, block)) return false;
     }
     return true;
 }
@@ -588,14 +578,15 @@ fn shiftOptionalSpan(span: ?Span, delta: i64) ?Span {
     return shiftSpan(span orelse return null, delta);
 }
 
+/// Every span of a recorded diagnostic lies in the block.
 fn relocateDiagnostic(diag: Diagnostic, delta: i64) Diagnostic {
     var out = diag;
-    if (out.source == .proof) out.span = shiftOptionalSpan(out.span, delta);
+    out.span = shiftOptionalSpan(out.span, delta);
     for (out.notes[0..out.note_count]) |*note| {
-        if (note.source == .proof) note.span = shiftOptionalSpan(note.span, delta);
+        note.span = shiftOptionalSpan(note.span, delta);
     }
     for (out.related[0..out.related_count]) |*related| {
-        if (related.source == .proof) related.span = shiftSpan(related.span, delta);
+        related.span = shiftSpan(related.span, delta);
     }
     return out;
 }
@@ -605,11 +596,10 @@ fn dupeDiagnostics(
     arena: std.mem.Allocator,
     diagnostics: []const Diagnostic,
     block: Span,
-    mm0_limit: usize,
 ) !?[]const Diagnostic {
     const copies = try arena.alloc(Diagnostic, diagnostics.len);
     for (diagnostics, copies) |diag, *copy| {
-        if (!spansRecordable(diag, block, mm0_limit)) return null;
+        if (!spansRecordable(diag, block)) return null;
         copy.* = try dupeDiagnostic(arena, diag);
     }
     return copies;
@@ -683,18 +673,20 @@ fn holdsPointer(comptime T: type) bool {
     };
 }
 
-test "relocation shifts proof spans only" {
+test "relocation shifts every span" {
     var diag: Diagnostic = .{
         .kind = .unknown_rule,
         .err = error.UnknownRule,
         .source = .proof,
         .span = .{ .start = 10, .end = 14 },
     };
-    CompilerDiag.addNote(&diag, .rule_declared_later, .mm0, .{ .start = 3, .end = 5 });
+    CompilerDiag.addNote(&diag, .rule_declared_later, .proof, .{ .start = 3, .end = 5 });
+    CompilerDiag.addNote(&diag, .rule_declared_later, .mm0, null);
     CompilerDiag.addRelated(&diag, .rule_declaration_here, .proof, .{ .start = 2, .end = 4 });
     const moved = relocateDiagnostic(diag, 5);
     try std.testing.expectEqual(@as(usize, 15), moved.span.?.start);
-    try std.testing.expectEqual(@as(usize, 3), moved.notes[0].span.?.start);
+    try std.testing.expectEqual(@as(usize, 8), moved.notes[0].span.?.start);
+    try std.testing.expectEqual(null, moved.notes[1].span);
     try std.testing.expectEqual(@as(usize, 7), moved.related[0].span.start);
     const back = relocateDiagnostic(moved, -5);
     try std.testing.expectEqual(@as(usize, 10), back.span.?.start);
@@ -702,22 +694,66 @@ test "relocation shifts proof spans only" {
 
 test "spans outside the block are not recordable" {
     const block: Span = .{ .start = 100, .end = 200 };
-    var inside: Diagnostic = .{
+    const inside: Diagnostic = .{
         .kind = .unknown_rule,
         .err = error.UnknownRule,
         .source = .proof,
         .span = .{ .start = 100, .end = 200 },
     };
-    try std.testing.expect(spansRecordable(inside, block, 50));
-    CompilerDiag.addRelated(&inside, .rule_declaration_here, .mm0, .{ .start = 40, .end = 60 });
-    try std.testing.expect(!spansRecordable(inside, block, 50));
-    const earlier: Diagnostic = .{
-        .kind = .unknown_rule,
-        .err = error.UnknownRule,
-        .source = .proof,
-        .span = .{ .start = 90, .end = 110 },
+    try std.testing.expect(spansRecordable(inside, block));
+    // A span of the theory text, wherever it lies.
+    var theory = inside;
+    CompilerDiag.addRelated(&theory, .rule_declaration_here, .mm0, .{ .start = 100, .end = 120 });
+    try std.testing.expect(!spansRecordable(theory, block));
+    var earlier = inside;
+    earlier.span = .{ .start = 90, .end = 110 };
+    try std.testing.expect(!spansRecordable(earlier, block));
+}
+
+/// The fingerprint of a theory's text up to each position in `stops`.
+fn theoryFingerprint(mm0: []const u8, stops: []const usize) u64 {
+    var memo = CheckMemo.init(std.testing.allocator);
+    defer memo.deinit();
+    for (stops) |stop| memo.syncTheory(mm0, stop);
+    memo.syncTheory(mm0, mm0.len);
+    return memo.fingerprint;
+}
+
+test "the fingerprint covers what a check can see of the theory" {
+    const base = "sort s;\n--| @vars x\nterm c: s; -- $ ; $\nterm d: s;";
+    const same = [_][]const u8{
+        "-- head; $ \n\nsort s;\n--| @vars x\nterm c: s; -- $ ; $\nterm d: s;",
+        "sort s;--| @vars x\nterm c: s;\n--| prose\n--|\n\nterm d: s;\n  -- end",
+        "--\tno tab\r\nsort s;\n --| @vars x\nterm c: s;--\nterm d: s; ",
     };
-    try std.testing.expect(!spansRecordable(earlier, block, 50));
+    const other = [_][]const u8{
+        // A statement's own text, its comments included.
+        "sort s;\n--| @vars x\nterm c: s; -- $ ; $\nterm d:  s;",
+        "sort s;\n--| @vars x\nterm c: s; -- $ ; $\nterm -- d\n d: s;",
+        // Directives, and where they stand.
+        "sort s;\nterm c: s; -- $ ; $\nterm d: s;",
+        "sort s;\n--| @vars y\nterm c: s; -- $ ; $\nterm d: s;",
+        "--| @vars x\nsort s;\nterm c: s; -- $ ; $\nterm d: s;",
+        "sort s;\n--|@vars x\n--| \t @auto\nterm c: s; -- $ ; $\nterm d: s;",
+        // Bytes the parser rejects.
+        "sort s;\n--| @vars x\n\tterm c: s; -- $ ; $\nterm d: s;",
+        "sort s;\n--| @vars x\n\rterm c: s; -- $ ; $\nterm d: s;",
+        "sort s;\n--| @vars x\nterm c: s; -- \x00\nterm d: s;",
+        "sort s;\n--| @vars x\n\x00term c: s; -- $ ; $\nterm d: s;",
+    };
+    const expected = theoryFingerprint(base, &.{});
+    for (same) |text| try std.testing.expectEqual(expected, theoryFingerprint(text, &.{}));
+    for (other, 0..) |text, i| {
+        const actual = theoryFingerprint(text, &.{});
+        try std.testing.expect(actual != expected);
+        for (other[0..i]) |earlier| {
+            try std.testing.expect(actual != theoryFingerprint(earlier, &.{}));
+        }
+    }
+    // Wherever the checks lie.
+    for (0..base.len + 1) |stop| {
+        try std.testing.expectEqual(expected, theoryFingerprint(base, &.{stop}));
+    }
 }
 
 test "dupeDiagnostic copies every string payload" {

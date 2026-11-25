@@ -3,9 +3,9 @@
 //! must produce exactly what a cold analysis produces — every diagnostic,
 //! span, note, sink entry and error — under the edits an editor makes:
 //! nothing (all hits), a body edit that only shifts later blocks, a body
-//! edit that flips an outcome and its undo, and a theory edit that shifts
-//! every `.mm0` position. A run with the unknown-value sink must bypass the
-//! memo.
+//! edit that flips an outcome and its undo, comments that shift every
+//! `.mm0` position (all hits), and a theory edit every check can see (no
+//! hits). A run with the unknown-value sink must bypass the memo.
 
 const std = @import("std");
 const mm0 = @import("../lib.zig");
@@ -13,6 +13,7 @@ const mm0 = @import("../lib.zig");
 const Compiler = mm0.Compiler;
 const CheckMemo = mm0.CheckMemo;
 const ProofScript = mm0.ProofScript;
+const scanToStatementEnd = @import("../trusted/parse.zig").scanToStatementEnd;
 
 /// Everything an analysis reports, rendered canonically.
 fn analyzeDump(
@@ -141,6 +142,21 @@ fn applyEdit(allocator: std.mem.Allocator, source: []const u8, edit: Edit) ![]u8
     try out.appendSlice(allocator, source[0..edit.start]);
     try out.appendSlice(allocator, edit.text);
     try out.appendSlice(allocator, source[edit.end..]);
+    return try out.toOwnedSlice(allocator);
+}
+
+/// `mm0_text` with comments and blank lines before its first statement and
+/// after each one.
+fn spaceOut(allocator: std.mem.Allocator, mm0_text: []const u8) ![]u8 {
+    var out = std.ArrayListUnmanaged(u8).empty;
+    try out.appendSlice(allocator, "-- a comment; with $\n\n");
+    var pos: usize = 0;
+    while (pos < mm0_text.len) {
+        const start = pos;
+        _ = scanToStatementEnd(mm0_text, &pos);
+        try out.appendSlice(allocator, mm0_text[start..pos]);
+        try out.appendSlice(allocator, "\n-- \"more; of them\n--| and prose\n  ");
+    }
     return try out.toOwnedSlice(allocator);
 }
 
@@ -356,27 +372,40 @@ fn runFixture(
         try expectOnlyEditedMissed(allocator, memo, stem, "fix", index, blocks.len, block.name, fix_misses, unrecordable, mm0_text, proof_text);
     }
 
-    // A comment at the top of the theory shifts every `.mm0` position:
-    // the theory prefix differs for every block, so all re-check. (The
-    // memo is shared across fixtures, so the comment names this one:
-    // two fixtures with the same theory and proof prefix would otherwise
-    // legitimately share entries.)
+    // Comments and blank lines between the statements shift every `.mm0`
+    // position, and nothing a check sees: no block re-checks.
     {
-        const edited = try applyEdit(arena, mm0_text, .{
-            .start = 0,
-            .end = 0,
-            .text = try std.fmt.allocPrint(arena, "-- check memo corpus test {s}\n", .{stem}),
-        });
-        const hits = memo.hits;
+        const misses = memo.misses;
+        const edited = try spaceOut(arena, mm0_text);
         try expectSameAnalysis(allocator, memo, stem, .{
             .name = "theory shift",
             .mm0_text = edited,
             .proof_text = proof_text,
         });
+        if (memo.misses - misses > unrecordable) {
+            std.debug.print(
+                "check memo theory shift: {s}: {d} misses, {d} unrecordable\n{s}\n",
+                .{ stem, memo.misses - misses, unrecordable, edited },
+            );
+            return error.CheckMemoOverMiss;
+        }
+    }
+
+    // Every check sees a statement before its own, so all re-check. (The
+    // memo is shared across fixtures, so the statement names this one: two
+    // fixtures with the same theory and proof prefix would otherwise
+    // legitimately share entries.)
+    {
+        const hits = memo.hits;
+        try expectSameAnalysis(allocator, memo, stem, .{
+            .name = "theory edit",
+            .mm0_text = try std.fmt.allocPrint(arena, "sort zz_{s};\n{s}", .{ stem, mm0_text }),
+            .proof_text = proof_text,
+        });
         try std.testing.expectEqual(hits, memo.hits);
     }
 
-    // Back to the original: the theory-shift run kept only the entries it
+    // Back to the original: the theory-edit run kept only the entries it
     // used, so every block re-checks.
     {
         const hits = memo.hits;
@@ -608,8 +637,8 @@ test "check memo drops a block whose output it cannot record" {
     var memo = CheckMemo.init(allocator);
     defer memo.deinit();
 
-    // The rule is declared after the theorem, so the diagnostic points past
-    // the theorem's place in the .mm0 text and cannot be replayed.
+    // The rule is declared after the theorem, so the diagnostic points into
+    // the .mm0 text and cannot be replayed.
     const mm0_text =
         \\provable sort wff;
         \\term top: wff;
@@ -628,4 +657,41 @@ test "check memo drops a block whose output it cannot record" {
     defer allocator.free(second);
     try std.testing.expectEqualStrings(first, second);
     try std.testing.expectEqual(@as(usize, 0), memo.entries.count());
+}
+
+test "check memo asks again whether a rule is declared later" {
+    const allocator = std.testing.allocator;
+    var memo = CheckMemo.init(allocator);
+    defer memo.deinit();
+
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\theorem t1: $ top $;
+    ;
+    const proof_text =
+        \\t1
+        \\---
+        \\p: $ top $ by ax_top []
+    ;
+    try expectSameAnalysis(allocator, &memo, "later", .{
+        .name = "unknown rule",
+        .mm0_text = mm0_text,
+        .proof_text = proof_text,
+    });
+    try std.testing.expectEqual(@as(usize, 1), memo.entries.count());
+    // The rule is still unknown when the theory text moves.
+    try expectSameAnalysis(allocator, &memo, "later", .{
+        .name = "moved",
+        .mm0_text = "-- moved\n" ++ mm0_text ++ "\naxiom ax_bot: $ top $;",
+        .proof_text = proof_text,
+    });
+    try std.testing.expectEqual(@as(usize, 1), memo.hits);
+    // Nothing the fingerprint covers differs here.
+    try expectSameAnalysis(allocator, &memo, "later", .{
+        .name = "declared later",
+        .mm0_text = mm0_text ++ "\naxiom ax_top: $ top $;",
+        .proof_text = proof_text,
+    });
+    try std.testing.expectEqual(@as(usize, 1), memo.hits);
 }

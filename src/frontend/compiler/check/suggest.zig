@@ -162,33 +162,31 @@ pub fn lookupRuleApplicationId(
 ) !u32 {
     if (env.getRuleId(application.rule_name)) |rule_id| return rule_id;
 
-    const catalog_entry = rule_catalog.get(application.rule_name);
+    const declared_later = rule_catalog.declaredLater(application.rule_name, mm0_pos);
     // The catalog spans the whole `.mm0`, beyond what the check memo's
     // fingerprint covers; the memo re-verifies this lookup on a hit.
     if (self.check_memo) |memo| {
-        memo.noteCatalogLookup(application.rule_name, catalog_entry);
+        memo.noteCatalogLookup(application.rule_name, declared_later != null);
     }
-    if (catalog_entry) |entry| {
-        if (!entry.declaredBefore(mm0_pos)) {
-            var diag: Diagnostic = .{
-                .kind = .rule_not_yet_available,
-                .err = error.RuleNotYetAvailable,
-                .theorem_name = diag_context.theorem_name,
-                .line_label = diag_context.line_label,
-                .rule_name = application.rule_name,
-                .span = application.rule_span,
-            };
-            CompilerDiag.setPhase(&diag, .theorem_application);
-            CompilerDiag.addNote(&diag, .rule_declared_later, .mm0, null);
-            CompilerDiag.addRelated(
-                &diag,
-                .rule_declaration_here,
-                .mm0,
-                entry.name_span,
-            );
-            self.setProof(diag);
-            return error.RuleNotYetAvailable;
-        }
+    if (declared_later) |entry| {
+        var diag: Diagnostic = .{
+            .kind = .rule_not_yet_available,
+            .err = error.RuleNotYetAvailable,
+            .theorem_name = diag_context.theorem_name,
+            .line_label = diag_context.line_label,
+            .rule_name = application.rule_name,
+            .span = application.rule_span,
+        };
+        CompilerDiag.setPhase(&diag, .theorem_application);
+        CompilerDiag.addNote(&diag, .rule_declared_later, .mm0, null);
+        CompilerDiag.addRelated(
+            &diag,
+            .rule_declaration_here,
+            .mm0,
+            entry.name_span,
+        );
+        self.setProof(diag);
+        return error.RuleNotYetAvailable;
     }
 
     var diag = CompilerDiag.withPhase(.{
