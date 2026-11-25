@@ -2384,8 +2384,8 @@ pub noinline fn reportUnknownLabel(
 /// declared notation and source binder names, for presentation features (the
 /// `unpack` code action). Fallback retries re-record the same span; the last
 /// entry wins, and entries from candidates that were rolled back are
-/// harmless because consumers only read the sink out of documents that
-/// analyzed cleanly. No-op (and free) when no sink is configured.
+/// harmless because consumers only read the sink after a proof that
+/// checked. No-op (and free) when no sink is configured.
 /// Out of line, like the other helpers on the inline recursion path (see
 /// `checkStackGuard`), so its frame is not part of every level's.
 noinline fn recordInlineConclusion(

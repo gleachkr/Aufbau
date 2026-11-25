@@ -1228,7 +1228,7 @@ test "subtractMembers: multiset order, duplicates, set semantics, strictness" {
     }
 }
 
-test "compiler analyze keeps no inline conclusion from an aborted fallback attempt" {
+test "a check keeps no inline conclusion from an aborted fallback attempt" {
     const mm0_src =
         \\provable sort wff;
         \\term top: wff;
@@ -1251,18 +1251,25 @@ test "compiler analyze keeps no inline conclusion from an aborted fallback attem
         .allocator = std.testing.allocator,
     };
     defer sink.deinit();
-    var compiler = Compiler.initWithProof(
-        arena_state.allocator(),
+    var diagnostics = mm0.CompilerSupport.DiagnosticSink.DiagnosticSink.init(
         mm0_src,
         proof_src,
     );
-    compiler.inline_conclusion_sink = &sink;
-    try compiler.analyze();
-    try std.testing.expectEqual(@as(usize, 0), compiler.primaryDiagnostics().len);
+    var context = mm0.CompilerSupport.Context.CompilerContext.init(
+        mm0_src,
+        proof_src,
+        .none,
+        &diagnostics,
+    );
+    const arena = arena_state.allocator();
+    const inline_start = std.mem.indexOf(u8, proof_src, "top_i []").?;
+    const block = (try mm0.ProofScript.blockTouching(arena, proof_src, inline_start)).?;
+    var point = try mm0.CompilerSupport.Analyze.analyzeToBlock(&context, arena, block);
+    context.inline_conclusion_sink = &sink;
+    try point.check(&context, arena, block);
 
     // `outer_bad` elaborates the inline `top_i []` before its hypothesis
     // mismatch aborts it; only the `outer_good` fallback's entry survives.
-    const inline_start = std.mem.indexOf(u8, proof_src, "top_i []").?;
     var count: usize = 0;
     for (sink.items.items) |item| {
         if (item.span.start == inline_start) count += 1;

@@ -6,6 +6,7 @@ const acui = helpers.acui;
 const ExprId = helpers.ExprId;
 const Canonicalizer = @import("../../../normalizer.zig").Canonicalizer;
 const Analyze = @import("../../pipeline/analyze.zig");
+const ProofScript = @import("../../../proof_script.zig");
 const CompilerContext = @import("../../context.zig").CompilerContext;
 const DiagnosticSink = @import("../../diagnostic_sink.zig").DiagnosticSink;
 const TheoremContext = helpers.TheoremContext;
@@ -881,7 +882,7 @@ test "source search survives broken statements before the target" {
 // Whatever they prove, the lemma and the theorem before the target are in
 // scope, so the walk leaves both proofs unchecked: neither failure is
 // reported.
-test "the walk to a search point checks no proof before it" {
+test "the walk to a block checks no proof before it" {
     const mm0_src =
         \\delimiter $ ( ) $;
         \\provable sort wff;
@@ -908,11 +909,12 @@ test "the walk to a search point checks no proof before it" {
     defer arena.deinit();
     var sink = DiagnosticSink.init(mm0_src, proof_src);
     var compiler = CompilerContext.init(mm0_src, proof_src, .none, &sink);
-    const point = try Analyze.analyzeToSearchPoint(
-        &compiler,
+    const block = try ProofScript.blockTouching(
         arena.allocator(),
-        .{ .theorem = "t" },
+        proof_src,
+        std.mem.indexOf(u8, proof_src, "exact?").?,
     );
+    const point = try Analyze.analyzeToBlock(&compiler, arena.allocator(), block.?);
     try std.testing.expectEqual(@as(usize, 0), sink.primaryDiagnostics().len);
     try std.testing.expect(point.theory.env.getRuleId("wrong") != null);
     try std.testing.expect(point.theory.env.getRuleId("s") != null);

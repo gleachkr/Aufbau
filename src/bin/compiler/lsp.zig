@@ -1107,16 +1107,13 @@ pub const Handler = struct {
         offset: usize,
     ) !?types.CodeAction {
         const proof_side = nav.side();
-        const suggestion = Unpack.unpackAtSourceOffset(
+        const suggestion = try Unpack.unpackAtSourceOffset(
             arena,
-            self.allocator,
             nav.unit.mm0.joined.text,
             proof_side.joined.text,
             block,
             offset,
-        ) catch |err| switch (err) {
-            error.OutOfMemory => return err,
-        } orelse return null;
+        ) orelse return null;
 
         return try self.replacementCodeAction(
             arena,

@@ -51,6 +51,7 @@ pub const Frontend = struct {
 };
 
 pub const CompilerSupport = struct {
+    pub const Analyze = @import("./frontend/compiler/pipeline/analyze.zig");
     pub const CheckedIr = @import("./frontend/checked_ir.zig");
     pub const Context = @import("./frontend/compiler/context.zig");
     pub const DiagnosticSink =

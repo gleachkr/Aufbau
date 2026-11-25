@@ -24,7 +24,7 @@
 //! it added, its hole sink entries, and the `last_diagnostic` it left
 //! behind. So a memo-backed run
 //! collects holes, and only holes: a run without the hole sink, or with
-//! the inline-conclusion or stats sink, checks every block (`beginRun`).
+//! the unknown-value or stats sink, checks every block (`beginRun`).
 //!
 //! The memo keeps what each root's latest run used (`root`): an entry no
 //! later run of its root found is one that root's texts no longer reach,
@@ -196,13 +196,11 @@ pub const CheckMemo = struct {
 
     /// Start a run over `ctx`'s sources. The memo stays inactive, and every
     /// block is checked, unless the run collects exactly what an entry
-    /// records: hole inferences, and neither inline conclusions, named
-    /// unknowns' values nor solver stats (whose running maximum cannot be
-    /// replayed).
+    /// records: hole inferences, and neither named unknowns' values nor
+    /// solver stats (whose running maximum cannot be replayed).
     pub fn beginRun(self: *CheckMemo, ctx: *const CompilerContext) void {
         self.run +%= 1;
         self.active = ctx.hole_inference_sink != null and
-            ctx.inline_conclusion_sink == null and
             ctx.unknown_value_sink == null and
             ctx.inference_stats_sink == null;
         self.fingerprint = 0;

@@ -587,20 +587,23 @@ between trusted parser trees and frontend proof elaboration.
   one whose text is unchanged and that still ends where it did. Only a
   body whose lines all parsed is known this way, since a broken line may
   read into what follows it. Only runs that
-  collect holes and no inline conclusions use it, so every entry records
-  the same output. Rule-catalog lookups, the one thing a check reads
-  beyond that prefix, are recorded and re-verified. `src/tests/check_memo_corpus.zig` is the guard: on
+  collect holes, and nothing an entry does not record, use it, so every
+  entry records the same output. Rule-catalog lookups, the one thing a
+  check reads beyond that prefix, are recorded and re-verified.
+  `src/tests/check_memo_corpus.zig` is the guard: on
   every fixture, a warm analysis must equal a cold one under body edits
   that shift or break later blocks, their undo, and theory edits that
   shift everything.
 
 The drivers maintain the parser, frontend environment, and metadata
 registries. A search prepares its theory with the analysis walk itself:
-`analyzeToSearchPoint` runs it up to the target theorem's statement or the
+`analyzeToBlock` runs it up to the target theorem's statement or the
 target lemma's block, skipping the proofs before it unchecked and keeping
 every declared theorem and lemma in scope (`compiler/search/fixture.zig`
-calls it). A loop chooses only its error policy and whether to check
-proofs; what a statement step *is* lives in `common.zig` once.
+calls it). `unpack.zig` walks the same way, then checks only the target's
+proof, before and after its rewrite. A loop chooses only its error policy
+and whether to check proofs; what a statement step *is* lives in
+`common.zig` once.
 
 The analysis also checks a theorem past a failed line
 (`CompilerContext.keep_checking`): `LineWalk.step` reports the failure and

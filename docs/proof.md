@@ -487,8 +487,8 @@ be referenced later.
 The language server offers an `unpack` code action on such lines: it
 rewrites the line into separate labeled lines, one per inline
 application, with each new line's assertion filled in from the checked
-conclusion. The action is offered only when the document checks cleanly
-and the rewritten document does too.
+conclusion. The action is offered only when the proof checks, and the
+rewritten proof does too; errors in other proofs do not matter.
 
 Inline applications may be nested and may use explicit bindings,
 omitted-binder inference, theorem-hypothesis refs, prior line refs, and

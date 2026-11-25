@@ -122,6 +122,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   to find what to act on, not the whole proof text. A code action in the
   last file of a 126 MB library took 0.6 s after an edit and 0.3 s without
   one, and now takes 0.3 s and 0.05 s.
+- The unpack code action checks only the proof it rewrites, not every proof
+  of the file and its imports twice, and is offered whether or not another
+  proof or statement has an error. In the last file of a 126 MB library it
+  took 59 s and now takes 0.6 s.
 
 ### Fixed
 
@@ -151,10 +155,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   theorem's and lemma's memory as a compile does.
 - The language server kept every proof's memory while it checked a file,
   so opening a file at the end of a large library could exhaust memory
-  before any diagnostics appeared. Its checks, and the two the unpack code
-  action runs, now free each theorem's and lemma's memory as a compile
-  does: opening the last file of a 126 MB library ran out of memory at
-  40 GB and now peaks at 3.9 GB.
+  before any diagnostics appeared. Its checks now free each theorem's and
+  lemma's memory as a compile does: opening the last file of a 126 MB
+  library ran out of memory at 40 GB and now peaks at 3.9 GB.
 - In a large library, the language server's first outline, hover or
   go-to-definition request on a file took minutes, and an edit re-checked
   most of the proofs again. For the last file of a 126 MB library, the

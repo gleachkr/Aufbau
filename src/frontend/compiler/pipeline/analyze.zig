@@ -80,9 +80,9 @@ const AnalysisState = struct {
     invalid_terms: InvalidRuleSet,
     proof: ?ProofAnalysisState = null,
     last_stmt: ?MM0Stmt = null,
-    /// Set by `analyzeToSearchPoint`: the walk ends there, and leaves the
-    /// proofs before it unchecked.
-    stop: ?SearchStop = null,
+    /// Set by `analyzeToBlock`: the walk ends there, and leaves the proofs
+    /// before it unchecked.
+    stop: ?TheoremBlock = null,
     reached: ?AssertionStmt = null,
 
     fn init(
@@ -120,43 +120,49 @@ pub fn analyzeMm0(
     try analyzeInternal(self, allocator, false);
 }
 
-/// Where a search's walk stops.
-pub const SearchStop = union(enum) {
-    /// Before the statement of the theorem with this name.
-    theorem: []const u8,
-    /// At the lemma block with this span, after the items before it.
-    lemma: Span,
-};
-
-pub const SearchPoint = struct {
+/// Where `analyzeToBlock` stops: the theory a block's proof is checked in,
+/// and the statement it proves.
+pub const BlockPoint = struct {
     theory: TheoryState,
     assertion: AssertionStmt,
+
+    /// Check `block` as the statement's proof, which need not be the block
+    /// the walk stopped at. Fails at its first error.
+    pub fn check(
+        self: *BlockPoint,
+        context: *CompilerContext,
+        allocator: std.mem.Allocator,
+        block: TheoremBlock,
+    ) !void {
+        try analyzeBlock(context, allocator, &self.theory, self.assertion, block);
+    }
 };
 
-/// The analysis walk up to `stop`, recovering from broken statements and
-/// local items the same way, but leaving the proofs before `stop` unchecked:
-/// a theorem or lemma is in scope whatever its proof did. Gives the theory a
-/// search at `stop` runs in, and the target's assertion. Fails with
-/// `MissingTheorem` or `MissingProofBlock` when the walk never reaches
-/// `stop`, and with `UnavailableDependency` when the target theorem names a
-/// declaration the walk dropped.
-pub fn analyzeToSearchPoint(
+/// The analysis walk up to `block`, a block of the proof source: to before
+/// the statement of the theorem it names, or to the lemma itself. The walk
+/// recovers from broken statements and local items as an analysis does, but
+/// leaves the proofs before `block` unchecked: a theorem or lemma is in
+/// scope whatever its proof did. Fails with `MissingTheorem` or
+/// `MissingProofBlock` when the walk never reaches `block`, and with
+/// `UnavailableDependency` when its theorem names a declaration the walk
+/// dropped.
+pub fn analyzeToBlock(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
-    stop: SearchStop,
-) !SearchPoint {
+    block: TheoremBlock,
+) !BlockPoint {
     var state = AnalysisState.init(
         allocator,
         self.source,
         self.proof_source,
         true,
     );
-    state.stop = stop;
+    state.stop = block;
     walk(self, allocator, &state, true) catch |err| {
-        if (err != error.SearchPointReached) return err;
+        if (err != error.BlockReached) return err;
         return .{ .theory = state.theory, .assertion = state.reached.? };
     };
-    return switch (stop) {
+    return switch (block.kind) {
         .theorem => error.MissingTheorem,
         .lemma => error.MissingProofBlock,
     };
@@ -334,14 +340,14 @@ fn walk(
 
 fn stopAtTheorem(state: *AnalysisState, stmt: MM0Stmt) !void {
     const stop = state.stop orelse return;
-    if (stop != .theorem or stmt != .assertion) return;
+    if (stop.kind != .theorem or stmt != .assertion) return;
     const assertion = stmt.assertion;
-    if (!std.mem.eql(u8, assertion.name, stop.theorem)) return;
+    if (!std.mem.eql(u8, assertion.name, stop.name)) return;
     if (!Common.assertionDependenciesAvailable(&state.theory.env, assertion)) {
         return error.UnavailableDependency;
     }
     state.reached = assertion;
-    return error.SearchPointReached;
+    return error.BlockReached;
 }
 
 fn stopAtLemma(
@@ -351,17 +357,14 @@ fn stopAtLemma(
     block: TheoremBlock,
 ) !void {
     const stop = state.stop orelse return;
-    if (stop != .lemma) return;
-    if (stop.lemma.start != block.span.start or stop.lemma.end != block.span.end) {
-        return;
-    }
+    if (stop.kind != .lemma or stop.span.start != block.span.start) return;
     state.reached = try Common.parseLemmaAssertion(
         self,
         allocator,
         &state.theory.parser,
         block,
     );
-    return error.SearchPointReached;
+    return error.BlockReached;
 }
 
 fn analyzeDrainAnchoredLocalProofItems(
@@ -891,7 +894,7 @@ fn analyzeAssertionStatement(
     };
 }
 
-/// A search keeps every theorem before its target in scope, proved or not:
+/// A walk to a block keeps every theorem before it in scope, proved or not:
 /// the theorem's proof block is skipped unchecked when it comes next.
 fn skipTheoremProof(proof: *ProofAnalysisState, assertion: AssertionStmt) void {
     const item = proof.nextItem() catch {

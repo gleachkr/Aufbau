@@ -4,7 +4,8 @@
 //! span, note, sink entry and error — under the edits an editor makes:
 //! nothing (all hits), a body edit that only shifts later blocks, a body
 //! edit that flips an outcome and its undo, and a theory edit that shifts
-//! every `.mm0` position. A run with the inline conclusion sink must bypass the memo.
+//! every `.mm0` position. A run with the unknown-value sink must bypass the
+//! memo.
 
 const std = @import("std");
 const mm0 = @import("../lib.zig");
@@ -19,18 +20,18 @@ fn analyzeDump(
     mm0_text: []const u8,
     proof_text: []const u8,
     memo: ?*CheckMemo,
-    inlines_sink: bool,
+    unknowns_sink: bool,
 ) ![]u8 {
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
     var holes = mm0.CompilerSupport.Context.HoleInferenceSink{ .allocator = arena };
-    var inlines = mm0.CompilerSupport.Context.InlineConclusionSink{ .allocator = arena };
+    var unknowns = mm0.UnknownValueSink.init(arena);
     var compiler = Compiler.initWithProof(arena, mm0_text, proof_text);
     compiler.allow_search_placeholders = true;
     compiler.hole_inference_sink = &holes;
-    if (inlines_sink) compiler.inline_conclusion_sink = &inlines;
+    if (unknowns_sink) compiler.unknown_value_sink = &unknowns;
     compiler.check_memo = memo;
 
     var out: std.Io.Writer.Allocating = .init(arena);
@@ -74,11 +75,12 @@ fn analyzeDump(
             filled.text,
         });
     }
-    for (inlines.items.items) |item| {
-        try writer.print("inline {d}-{d} {s}\n", .{
-            item.span.start,
-            item.span.end,
-            item.conclusion,
+    for (unknowns.items.items) |item| {
+        try writer.print("unknown {s} {s} {s} {}\n", .{
+            item.theorem,
+            item.name,
+            item.value,
+            item.partial,
         });
     }
     return try allocator.dupe(u8, out.written());
@@ -148,8 +150,8 @@ const Scenario = struct {
     name: []const u8,
     mm0_text: []const u8,
     proof_text: []const u8,
-    /// Also attach the inline conclusion sink.
-    inlines_sink: bool = false,
+    /// Also attach the unknown-value sink.
+    unknowns_sink: bool = false,
 };
 
 /// Cold vs warm must agree; returns the warm dump's hit delta.
@@ -159,9 +161,9 @@ fn expectSameAnalysis(
     stem: []const u8,
     scenario: Scenario,
 ) !void {
-    const cold = try analyzeDump(allocator, scenario.mm0_text, scenario.proof_text, null, scenario.inlines_sink);
+    const cold = try analyzeDump(allocator, scenario.mm0_text, scenario.proof_text, null, scenario.unknowns_sink);
     defer allocator.free(cold);
-    const warm = try analyzeDump(allocator, scenario.mm0_text, scenario.proof_text, memo, scenario.inlines_sink);
+    const warm = try analyzeDump(allocator, scenario.mm0_text, scenario.proof_text, memo, scenario.unknowns_sink);
     defer allocator.free(warm);
     if (!std.mem.eql(u8, cold, warm)) {
         std.debug.print(
@@ -386,16 +388,16 @@ fn runFixture(
         try std.testing.expectEqual(hits, memo.hits);
     }
 
-    // The memo records no inline conclusions, so a run that collects them
-    // checks every block.
+    // The memo records no values of named unknowns, so a run that collects
+    // them checks every block.
     {
         const hits = memo.hits;
         const misses = memo.misses;
         try expectSameAnalysis(allocator, memo, stem, .{
-            .name = "inline sink",
+            .name = "unknown-value sink",
             .mm0_text = mm0_text,
             .proof_text = proof_text,
-            .inlines_sink = true,
+            .unknowns_sink = true,
         });
         try std.testing.expectEqual(hits, memo.hits);
         try std.testing.expectEqual(misses, memo.misses);

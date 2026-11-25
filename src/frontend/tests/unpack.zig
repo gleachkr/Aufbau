@@ -36,12 +36,32 @@ const test_auf =
     \\
 ;
 
+/// Expect a rewrite of the line at `needle` in `auf` that reads
+/// `expected`, or none when it is null.
+fn expectReplacement(
+    mm0_src: []const u8,
+    auf: []const u8,
+    needle: []const u8,
+    expected: ?[]const u8,
+) !void {
+    const allocator = std.testing.allocator;
+    const offset = std.mem.indexOf(u8, auf, needle).?;
+    const suggestion = (try unpackAt(allocator, mm0_src, auf, offset)) orelse {
+        return std.testing.expectEqual(expected, null);
+    };
+    defer suggestion.deinit(allocator);
+    try std.testing.expectEqualStrings(
+        expected orelse return error.UnexpectedSuggestion,
+        suggestion.replacement,
+    );
+}
+
 fn offsetOf(needle: []const u8) usize {
     return std.mem.indexOf(u8, test_auf, needle).?;
 }
 
 fn unpackAt(
-    work_allocator: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     mm0_src: []const u8,
     auf: []const u8,
     offset: usize,
@@ -50,8 +70,7 @@ fn unpackAt(
     defer arena_state.deinit();
     const block = try ProofScript.blockTouching(arena_state.allocator(), auf, offset);
     return try Unpack.unpackAtSourceOffset(
-        std.testing.allocator,
-        work_allocator,
+        allocator,
         mm0_src,
         auf,
         block.?,
@@ -59,7 +78,7 @@ fn unpackAt(
     );
 }
 
-/// Expect no rewrite at `offset`, decided without analyzing the document.
+/// Expect no rewrite at `offset`, decided without checking anything.
 fn expectNoTarget(auf: []const u8, offset: usize) !void {
     try std.testing.expectEqual(
         @as(?Unpack.UnpackSuggestion, null),
@@ -219,9 +238,8 @@ test "unpack round-trips on a real fixture with rich notation" {
 
     // `valid_mp [box_k [], l1]` — an inline application whose conclusion
     // renders through hoare's unicode notation (modal boxes, `→`, `⊨`).
-    // The internal validation pass re-analyzes the rewritten document, so a
-    // non-null result means the pretty-printed conclusion re-parsed to a
-    // checking proof.
+    // The rewritten proof is checked, so a non-null result means the
+    // pretty-printed conclusion re-parsed to a checking proof.
     const marker = "by valid_mp [box_k []";
     const offset = std.mem.indexOf(u8, auf_src, marker) orelse
         return error.MissingFixtureMarker;
@@ -233,7 +251,7 @@ test "unpack round-trips on a real fixture with rich notation" {
     );
 }
 
-test "unpack offers nothing when the document does not analyze cleanly" {
+test "unpack offers nothing when the line does not check" {
     const allocator = std.testing.allocator;
     // Unknown rule inside the inline application: there is a syntactic
     // target, but no trustworthy conclusions to materialize.
@@ -252,4 +270,105 @@ test "unpack offers nothing when the document does not analyze cleanly" {
         @as(?Unpack.UnpackSuggestion, null),
         try unpackAt(allocator, test_mm0, auf, offset),
     );
+}
+
+// Any other proof's check is the same before and after the rewrite, so only
+// the target's own proof has to hold. The rewrite may even cite a lemma
+// whose proof fails.
+test "unpack offers its rewrite beside broken proofs and statements" {
+    const mm0_src = test_mm0 ++ "\naxiom bad: $ nope $;\ntheorem t4: $ top $;\n";
+    const auf =
+        \\t1
+        \\---
+        \\l1: $ b -> top $ by nope_i []
+        \\
+        \\lemma broken: $ top /\ top $
+        \\---------------------------
+        \\l1: $ top /\ top $ by top_i
+        \\
+        \\t2
+        \\---
+        \\l1: $ (top /\ top) /\ top $ by conj_i [broken [], top_i []]
+        \\
+        \\t3
+        \\---
+        \\l1: $ p $ by auto?
+        \\
+        \\t4
+        \\---
+        \\l1: $ top /\ top $ by top_i
+        \\
+    ;
+    try expectReplacement(mm0_src, auf, "by conj_i",
+        \\l1_1: $ top /\ top $ by broken
+        \\l1_2: $ top $ by top_i
+        \\l1: $ (top /\ top) /\ top $ by conj_i [l1_1, l1_2]
+        \\
+    );
+}
+
+test "unpack rewrites a line of a lemma" {
+    const auf =
+        \\lemma other: $ top $
+        \\-------------------
+        \\l1: $ top $ by top_i
+        \\
+        \\lemma pair (p: wff): $ p $ > $ p /\ top $
+        \\----------------------------------------
+        \\l1: $ p /\ top $ by conj_i [#1, other []]
+        \\
+        \\t1
+        \\---
+        \\l1: $ b -> top $ by weaken [other []]
+        \\
+    ;
+    try expectReplacement(test_mm0, auf, "by conj_i",
+        \\l1_1: $ top $ by other
+        \\l1: $ p /\ top $ by conj_i [#1, l1_1]
+        \\
+    );
+}
+
+test "unpack offers nothing when another line of the proof fails" {
+    const auf =
+        \\t1
+        \\---
+        \\l1: $ b -> top $ by weaken [top_i []]
+        \\l2: $ b -> top $ by nope_i
+        \\l3: $ b -> top $ by l1
+        \\
+    ;
+    try expectReplacement(test_mm0, auf, "by weaken", null);
+}
+
+test "unpack offers its rewrite beside a search placeholder on another line" {
+    const auf =
+        \\t1
+        \\---
+        \\l1: $ top /\ top $ by auto?
+        \\l2: $ b -> top $ by weaken [top_i []]
+        \\
+    ;
+    try expectReplacement(test_mm0, auf, "by weaken",
+        \\l2_1: $ top $ by top_i
+        \\l2: $ b -> top $ by weaken [l2_1]
+        \\
+    );
+}
+
+// The hidden line proves the constant `top`, which reads back as the
+// theorem's variable of that name.
+test "unpack offers nothing when the rewritten proof does not check" {
+    const mm0_src = test_mm0 ++
+        \\
+        \\axiom drop (a b: wff): $ a $ > $ b -> b $;
+        \\theorem shadow (top: wff): $ top -> top $;
+    ;
+    const auf =
+        \\shadow
+        \\------
+        \\l1: $ top -> top $ by drop [top_i []]
+        \\
+    ;
+    try expectReplacement(mm0_src, auf, "by drop", null);
 }

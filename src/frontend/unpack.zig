@@ -9,9 +9,10 @@
 //! only conclusions and fresh labels are newly rendered.
 //!
 //! Two gates keep this sound without trusting the pretty-printer round-trip:
-//! the document must analyze cleanly before the rewrite (otherwise there are
-//! no trustworthy conclusions to materialize), and the rewritten document
-//! must analyze cleanly afterwards (otherwise no action is offered). The
+//! the target's proof must check before the rewrite (otherwise there are no
+//! trustworthy conclusions to materialize), and it must check afterwards
+//! (otherwise no action is offered). No other proof's check depends on how
+//! this one is written, so none is checked, and none needs to hold. The
 //! second gate also covers inference regressions: a nested application can
 //! check only via a contextual hint from its parent, and while the written
 //! conclusion carries at least the information the hint did, the gate makes
@@ -20,10 +21,12 @@
 const std = @import("std");
 const ArenaAllocator = @import("./arena_allocator.zig").ArenaAllocator;
 const ProofScript = @import("./proof_script.zig");
-const CompilerModule = @import("./compiler.zig");
+const Context = @import("./compiler/context.zig");
+const Analyze = @import("./compiler/pipeline/analyze.zig");
+const DiagnosticSink = @import("./compiler/diagnostic_sink.zig").DiagnosticSink;
 
-const Compiler = CompilerModule.Compiler;
-const InlineConclusionSink = CompilerModule.InlineConclusionSink;
+const CompilerContext = Context.CompilerContext;
+const InlineConclusionSink = Context.InlineConclusionSink;
 const Span = ProofScript.Span;
 const Ref = ProofScript.Ref;
 const RuleApplication = ProofScript.RuleApplication;
@@ -47,14 +50,10 @@ pub const UnpackSuggestion = struct {
 /// Compute the unpack rewrite for the proof line at `offset`, or null when
 /// there is nothing to unpack there or the rewrite cannot be validated.
 /// `block` is the block touching `offset` (`ProofScript.blockTouching`);
-/// without a target in it, nothing is analyzed.
-/// The returned strings are owned by `allocator`. `work_allocator` backs the
-/// working memory, which the two analyses free theorem by theorem: a caller
-/// whose `allocator` is an arena (the LSP's per-request one) passes the
-/// allocator under it, or those frees reclaim nothing.
+/// without a target in it, nothing is analyzed. The returned strings are
+/// owned by `allocator`.
 pub fn unpackAtSourceOffset(
     allocator: std.mem.Allocator,
-    work_allocator: std.mem.Allocator,
     mm0_src: []const u8,
     proof_src: []const u8,
     block: ProofBlock,
@@ -62,15 +61,16 @@ pub fn unpackAtSourceOffset(
 ) std.mem.Allocator.Error!?UnpackSuggestion {
     const line = findTarget(block, offset) orelse return null;
 
-    var work_arena = ArenaAllocator.init(work_allocator);
+    var work_arena = ArenaAllocator.init(allocator);
     defer work_arena.deinit();
     const work = work_arena.allocator();
 
-    // Gate 1 + conclusion capture: the document as written must analyze
-    // cleanly, with the sink recording every inline application's
-    // elaborated conclusion.
+    var point = (try blockPoint(work, mm0_src, proof_src, block)) orelse return null;
+
+    // Gate 1 + conclusion capture: the proof as written must check, with
+    // the sink recording every inline application's elaborated conclusion.
     var sink = InlineConclusionSink{ .allocator = work };
-    if (!try analyzesCleanly(work_allocator, mm0_src, proof_src, &sink)) return null;
+    if (!try checks(work, mm0_src, proof_src, &point, block, &sink)) return null;
 
     // Aborted fallback/retry attempts roll their entries back (see
     // `InlineConclusionSink`), so every entry comes from the surviving
@@ -88,13 +88,15 @@ pub fn unpackAtSourceOffset(
         &conclusions,
     )) orelse return null;
 
-    // Gate 2: the rewritten document must analyze cleanly too.
-    const spliced = try std.mem.concat(work, u8, &.{
-        proof_src[0..line.span.start],
+    // Gate 2: the rewritten proof must check too.
+    const rewritten_src = try std.mem.concat(work, u8, &.{
+        proof_src[block.span.start..line.span.start],
         built.replacement,
-        proof_src[line.span.end..],
+        proof_src[line.span.end..block.span.end],
     });
-    if (!try analyzesCleanly(work_allocator, mm0_src, spliced, null)) return null;
+    var parser = ProofScript.Parser.init(work, rewritten_src);
+    const rewritten = (try parser.nextBlockRecovering()) orelse return null;
+    if (!try checks(work, mm0_src, rewritten_src, &point, rewritten, null)) return null;
 
     const title = if (built.count == 1)
         try allocator.dupe(u8, "Unpack inline application")
@@ -114,7 +116,7 @@ pub fn unpackAtSourceOffset(
 
 /// The line of `block` at `offset` to unpack.
 fn findTarget(block: ProofBlock, offset: usize) ?ProofLine {
-    // A block with a broken line does not analyze cleanly.
+    // A block with a broken line does not check.
     for (block.lines) |line| {
         if (line.incomplete) return null;
     }
@@ -155,24 +157,42 @@ fn containsUnfinishedMarker(app: RuleApplication) bool {
     return false;
 }
 
-/// Run the LSP-path analysis and report whether it produced no primary
-/// diagnostics. Search placeholders are tolerated the way the LSP analysis
-/// tolerates them, so a placeholder elsewhere in the document does not
-/// disqualify an unrelated line from unpacking.
-fn analyzesCleanly(
+/// The theory `block` is checked in and its statement, or null when the
+/// analysis would not get as far as checking it.
+fn blockPoint(
     allocator: std.mem.Allocator,
     mm0_src: []const u8,
     proof_src: []const u8,
+    block: ProofBlock,
+) std.mem.Allocator.Error!?Analyze.BlockPoint {
+    var diagnostics = DiagnosticSink.init(mm0_src, proof_src);
+    var context = CompilerContext.init(mm0_src, proof_src, .none, &diagnostics);
+    return Analyze.analyzeToBlock(&context, allocator, block) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
+    };
+}
+
+/// Whether `block`, a block of `proof_src`, checks. Search placeholders are
+/// tolerated the way the editor's analysis tolerates them, so a placeholder
+/// on one line does not disqualify another from unpacking.
+fn checks(
+    allocator: std.mem.Allocator,
+    mm0_src: []const u8,
+    proof_src: []const u8,
+    point: *Analyze.BlockPoint,
+    block: ProofBlock,
     sink: ?*InlineConclusionSink,
 ) std.mem.Allocator.Error!bool {
-    var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
-    compiler.allow_search_placeholders = true;
-    compiler.inline_conclusion_sink = sink;
-    compiler.analyze() catch |err| switch (err) {
+    var diagnostics = DiagnosticSink.init(mm0_src, proof_src);
+    var context = CompilerContext.init(mm0_src, proof_src, .none, &diagnostics);
+    context.allow_search_placeholders = true;
+    context.inline_conclusion_sink = sink;
+    point.check(&context, allocator, block) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return false,
     };
-    return compiler.primaryDiagnostics().len == 0;
+    return true;
 }
 
 fn spanKey(span: Span) u128 {

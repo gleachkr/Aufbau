@@ -1,6 +1,6 @@
 //! Search fixture: the theory and target assertion a search runs against.
 //! The editor's search builds one with `fixtureForSourceTarget`, which runs
-//! the analysis walk up to the target (`Analyze.analyzeToSearchPoint`); the
+//! the analysis walk up to the target (`Analyze.analyzeToBlock`); the
 //! unit tests build theirs with the `.mm0`-only walks in `tests/helpers.zig`.
 //! Also the helpers both share (`parseGoal`, `searchContext`) and
 //! `readProofCase`.
@@ -54,14 +54,7 @@ pub fn fixtureForSourceTarget(
     // checks no proof, so an unfinished one before the target is no trouble.
     // Its proof stream is lenient like the target's parse, so the target
     // lemma's span matches.
-    const point = try Analyze.analyzeToSearchPoint(
-        &compiler,
-        allocator,
-        switch (target.block.kind) {
-            .theorem => .{ .theorem = target.block.name },
-            .lemma => .{ .lemma = target.block.span },
-        },
-    );
+    const point = try Analyze.analyzeToBlock(&compiler, allocator, target.block);
     return .{
         .theory = point.theory,
         .assertion = point.assertion,
