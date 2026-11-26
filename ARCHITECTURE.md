@@ -501,8 +501,14 @@ A unit lists every file its join looked up, also those it did not find
 and requests reuse both until one of those files changes: opening,
 editing or closing a document drops the entries that looked it up, and a
 file read from disk is compared by its mtime. An analysis reads that
-unit too, when it is current, and otherwise joins one for itself. The
-other caches are keyed by the states of the unit's files. Open
+unit too, when it is current, and otherwise joins one for itself. Units
+take their files' texts from one store (`bin/compiler/lsp_texts.zig`):
+an open document's text is shared while its version stands, a file's on
+disk while its mtime does, and a unit holds the texts it read until it is
+dropped, so roots that import the same library keep one copy of each file
+and a unit joined again reads only what changed. The joined texts stay
+each unit's own. The other caches are keyed by the states of the unit's
+files. Open
 `.mm0` files and `.auf` files with a sibling theory report on
 themselves; other files receive the root's view.
 

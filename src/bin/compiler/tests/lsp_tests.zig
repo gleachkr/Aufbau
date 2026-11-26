@@ -4102,6 +4102,16 @@ const DiskUnit = struct {
         return &entry.unit.mm0.joined.text[0];
     }
 
+    /// The text of lib.mm0 that requests on `root` read.
+    fn libraryText(self: *DiskUnit, root: []const u8) ![]const u8 {
+        const entry = self.handler.nav_cache.get(try self.uri(root)).?;
+        const lib_uri = try self.uri("lib.mm0");
+        for (entry.unit.mm0.files) |file| {
+            if (std.mem.eql(u8, file.uri, lib_uri)) return file.text;
+        }
+        return error.LibraryNotInUnit;
+    }
+
     fn neverStop(_: *anyopaque) bool {
         return false;
     }
@@ -4145,6 +4155,53 @@ test "LSP requests see an import change on disk" {
     try unit.expectDefined("main.mm0", main, "top", "lib.mm0", 2);
     try unit.close("lib.mm0");
     try unit.expectDefined("main.mm0", main, "top", "lib.mm0", 1);
+}
+
+test "LSP roots share the text of a file they both import" {
+    var unit: DiskUnit = undefined;
+    try unit.init();
+    defer unit.deinit();
+    const main = lsp_import_main_text;
+    const other =
+        \\import "lib.mm0";
+        \\theorem other: $ top $;
+    ;
+    try unit.write("lib.mm0", lsp_import_lib_text);
+    try unit.open("main.mm0", main);
+    try unit.open("other.mm0", other);
+    try unit.expectDefined("main.mm0", main, "top", "lib.mm0", 1);
+    try unit.expectDefined("other.mm0", other, "top", "lib.mm0", 1);
+    const read = try unit.libraryText("main.mm0");
+    try expectSameText(read, try unit.libraryText("other.mm0"));
+
+    // A root built again takes the text over while the file is unchanged.
+    try unit.change("main.mm0", 2, "-- A comment.\n" ++ main);
+    try unit.expectDefined("main.mm0", "-- A comment.\n" ++ main, "top", "lib.mm0", 1);
+    try expectSameText(read, try unit.libraryText("main.mm0"));
+
+    // A changed file is read again; the root that read it before keeps its
+    // text until it is built again.
+    try unit.write("lib.mm0", "-- A comment.\n" ++ lsp_import_lib_text);
+    try unit.expectDefined("main.mm0", "-- A comment.\n" ++ main, "top", "lib.mm0", 2);
+    const changed = try unit.libraryText("main.mm0");
+    try std.testing.expect(changed.ptr != read.ptr);
+    try expectSameText(read, try unit.libraryText("other.mm0"));
+    try std.testing.expectEqualStrings(lsp_import_lib_text, read);
+    try unit.expectDefined("other.mm0", other, "top", "lib.mm0", 2);
+    try expectSameText(changed, try unit.libraryText("other.mm0"));
+
+    // An open document's text is shared too.
+    try unit.open("lib.mm0", lsp_import_lib_text);
+    try unit.expectDefined("main.mm0", "-- A comment.\n" ++ main, "top", "lib.mm0", 1);
+    try unit.expectDefined("other.mm0", other, "top", "lib.mm0", 1);
+    const opened = try unit.libraryText("main.mm0");
+    try expectSameText(opened, try unit.libraryText("other.mm0"));
+}
+
+/// `a` and `b` are the same copy of a text.
+fn expectSameText(a: []const u8, b: []const u8) !void {
+    try std.testing.expectEqual(a.ptr, b.ptr);
+    try std.testing.expectEqual(a.len, b.len);
 }
 
 test "LSP requests see an import's proof file come and go on disk" {
