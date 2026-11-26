@@ -356,11 +356,10 @@ pub const KeepChecking = struct {
 };
 
 /// An editor host's say over a running analysis: asked after each proof the
-/// check memo could not replay, it answers whether to stop (newer text
+/// check memo checked and recorded, it answers whether to stop (newer text
 /// arrived, or a request is waiting). The analysis then fails with
-/// `error.AnalysisInterrupted`. Every run checks at least the first proof it
-/// cannot replay, so stopped runs get on, except at a proof whose check the
-/// memo cannot record.
+/// `error.AnalysisInterrupted`. So each stopped run leaves the next one a
+/// proof more to replay, and stopped runs get on.
 pub const AnalysisInterrupt = struct {
     context: *anyopaque,
     stopFn: *const fn (context: *anyopaque) bool,
@@ -534,10 +533,12 @@ pub const CompilerContext = struct {
         self: *CompilerContext,
         diag: Diagnostic,
     ) void {
+        if (self.check_memo) |memo| memo.noteDiagnostic(.primary, diag);
         self.diagnostics.addPrimaryDiagnostic(diag);
     }
 
     pub fn addWarning(self: *CompilerContext, diag: Diagnostic) void {
+        if (self.check_memo) |memo| memo.noteDiagnostic(.warning, diag);
         self.diagnostics.addWarning(diag);
     }
 

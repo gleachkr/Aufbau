@@ -195,6 +195,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   keys in the last file of a 126 MB library, with a code action requested
   and cancelled at each key as Neovim does, the diagnostics now arrive
   1.4 s after the last key instead of 69 s.
+- `abc lsp` checked a proof again at every key once the file's diagnostics
+  passed 256 errors or 32 warnings, the most it publishes: such a proof's
+  check was not kept. After renaming a rule that 4,000 proofs of a 126 MB
+  library cite, each key took 15 s to check, and now takes 0.4 s. A request
+  no longer stops a check right after a proof whose check cannot be kept
+  (one citing a rule declared later), which with steady requests kept the
+  check from getting past it.
 - `auto?` and `exact?` free each step's records when the step returns: one
   Cardano goal fell from 1.1 GiB to 30 MiB.
 - The search budget charges the work of matching large contexts, so a

@@ -24,8 +24,9 @@
 //! ranges, so they invalidate what follows, as they should. The memo key
 //! is that fingerprint plus a hash of the block body; the value is
 //! everything the check emitted: its error, the diagnostics and warnings
-//! it added, its hole sink entries, and the `last_diagnostic` it left
-//! behind. So a memo-backed run collects holes, and only holes: a run
+//! it added (all of them, also those past the sink's per-run limits:
+//! `noteDiagnostic`), its hole sink entries, and the `last_diagnostic` it
+//! left behind. So a memo-backed run collects holes, and only holes: a run
 //! without the hole sink, or with the unknown-value or stats sink, checks
 //! every block (`beginRun`).
 //!
@@ -42,8 +43,9 @@
 //! an entry's spans are relocated by the block's displacement. A span
 //! outside the block is not relocatable, be it in the `.auf` or the `.mm0`
 //! text, and makes the block unrecordable (it is simply re-checked each
-//! run). The only `.mm0` span a check reports is the declaration of a rule
-//! declared later.
+//! run, and a run is not stopped right after it: `AnalysisInterrupt`). The
+//! only `.mm0` span a check reports is the declaration of a rule declared
+//! later.
 //!
 //! Parsing: a replayed block's lines are not needed, so the memo also
 //! tells the proof parser which bodies it knows (`knownBodies`), and the
@@ -145,16 +147,25 @@ pub const CheckMemo = struct {
         }
     };
 
-    /// Sink positions at the start of a check, so its output can be
+    /// Hole sink positions at the start of a check, so its holes can be
     /// cut out afterwards.
     pub const Recording = struct {
-        primary_count: usize,
-        warning_count: usize,
-        dropped_primary: usize,
-        dropped_warnings: usize,
         holes: usize,
         assertions: usize,
     };
+
+    /// The diagnostics and warnings the check being recorded added, every
+    /// one of them: the sink keeps only so many a run (`DiagnosticSink`),
+    /// and a replay must hand it the same ones a check would, for it to
+    /// keep or count. Copied as they come, into what becomes the entry's
+    /// arena.
+    const Added = struct {
+        arena: ArenaAllocator,
+        primary: std.ArrayListUnmanaged(Diagnostic) = .empty,
+        warnings: std.ArrayListUnmanaged(Diagnostic) = .empty,
+    };
+
+    pub const AddedKind = enum { primary, warning };
 
     const Domain = enum(u8) { config = 1, mm0 = 2, proof = 3 };
 
@@ -181,6 +192,8 @@ pub const CheckMemo = struct {
     misses: usize = 0,
     /// Catalog lookups of the check being recorded.
     lookups: std.ArrayListUnmanaged(CatalogLookup) = .empty,
+    /// What the check being recorded added to the sink.
+    added: ?Added = null,
     recording: bool = false,
     recording_failed: bool = false,
 
@@ -195,7 +208,13 @@ pub const CheckMemo = struct {
         self.by_header.deinit(self.allocator);
         self.latest_runs.deinit(self.allocator);
         self.lookups.deinit(self.allocator);
+        self.discardAdded();
         self.* = undefined;
+    }
+
+    fn discardAdded(self: *CheckMemo) void {
+        if (self.added) |added| added.arena.deinit();
+        self.added = null;
     }
 
     /// Start a run over `ctx`'s sources. The memo stays inactive, and every
@@ -366,15 +385,32 @@ pub const CheckMemo = struct {
 
     pub fn beginRecording(self: *CheckMemo, ctx: *const CompilerContext) Recording {
         self.lookups.clearRetainingCapacity();
+        self.discardAdded();
+        self.added = .{ .arena = ArenaAllocator.init(self.allocator) };
         self.recording = true;
         self.recording_failed = false;
         return .{
-            .primary_count = ctx.diagnostics.primary_diagnostic_count,
-            .warning_count = ctx.diagnostics.warning_count,
-            .dropped_primary = ctx.diagnostics.dropped_primary_diagnostic_count,
-            .dropped_warnings = ctx.diagnostics.dropped_warning_count,
             .holes = ctx.hole_inference_sink.?.items.items.len,
             .assertions = ctx.hole_inference_sink.?.assertions.items.len,
+        };
+    }
+
+    /// Called as the sink is handed a diagnostic while a check is being
+    /// recorded, whether or not the sink has room left for it.
+    pub fn noteDiagnostic(self: *CheckMemo, kind: AddedKind, diag: Diagnostic) void {
+        if (!self.recording) return;
+        const added = &self.added.?;
+        const arena = added.arena.allocator();
+        const list = switch (kind) {
+            .primary => &added.primary,
+            .warning => &added.warnings,
+        };
+        const copy = dupeDiagnostic(arena, diag) catch {
+            self.recording_failed = true;
+            return;
+        };
+        list.append(arena, copy) catch {
+            self.recording_failed = true;
         };
     }
 
@@ -386,9 +422,9 @@ pub const CheckMemo = struct {
         };
     }
 
-    /// Store what the check emitted since `recording`. Skipped when the
-    /// output cannot be replayed faithfully: an out-of-memory outcome, a
-    /// sink that overflowed, or a span outside the block.
+    /// Store what the check emitted since `recording`, and say whether it
+    /// was stored. Skipped when the output cannot be replayed faithfully:
+    /// an out-of-memory outcome, or a span outside the block.
     pub fn finishRecording(
         self: *CheckMemo,
         ctx: *const CompilerContext,
@@ -397,17 +433,12 @@ pub const CheckMemo = struct {
         outcome: ?anyerror,
         proof: []const u8,
         block: ProofBlock,
-    ) void {
+    ) bool {
         self.recording = false;
-        if (self.recording_failed) return;
-        if (outcome) |err| if (err == error.OutOfMemory) return;
-        const sink = ctx.diagnostics;
-        if (sink.dropped_primary_diagnostic_count != recording.dropped_primary or
-            sink.dropped_warning_count != recording.dropped_warnings)
-        {
-            return;
-        }
-        self.record(ctx, recording, key, outcome, proof, block) catch {};
+        defer self.discardAdded();
+        if (self.recording_failed) return false;
+        if (outcome) |err| if (err == error.OutOfMemory) return false;
+        return self.record(ctx, recording, key, outcome, proof, block) catch false;
     }
 
     fn record(
@@ -418,50 +449,45 @@ pub const CheckMemo = struct {
         outcome: ?anyerror,
         proof: []const u8,
         proof_block: ProofBlock,
-    ) !void {
+    ) !bool {
         const block = proof_block.span;
         const header = proof_block.header_span;
+        const added = &self.added.?;
+        for ([_][]const Diagnostic{ added.primary.items, added.warnings.items }) |diags| {
+            for (diags) |diag| if (!spansRecordable(diag, block)) return false;
+        }
         const entry = try self.allocator.create(Entry);
         entry.* = .{
-            .arena = ArenaAllocator.init(self.allocator),
+            // The entry takes the arena the diagnostics were copied into.
+            .arena = added.arena,
             .outcome = outcome,
             .block = block,
             .header = headerHash(proof[header.start..header.end]),
             .body_len = proof_block.body_end - header.end,
             .body = key.body,
-            .primary = &.{},
-            .warnings = &.{},
+            .primary = added.primary.items,
+            .warnings = added.warnings.items,
             .last_diagnostic = null,
             .holes = &.{},
             .assertions = &.{},
             .lookups = &.{},
         };
+        self.added = null;
         // Every early return below means the output cannot be replayed, so
         // the entry is dropped unless it reaches the table.
         var stored = false;
         defer if (!stored) self.destroyEntry(entry);
         const arena = entry.arena.allocator();
 
-        const sink = ctx.diagnostics;
-        entry.primary = try dupeDiagnostics(
-            arena,
-            sink.primaryDiagnostics()[recording.primary_count..],
-            block,
-        ) orelse return;
-        entry.warnings = try dupeDiagnostics(
-            arena,
-            sink.warningDiagnostics()[recording.warning_count..],
-            block,
-        ) orelse return;
-        if (sink.last_diagnostic) |diag| {
-            if (!spansRecordable(diag, block)) return;
+        if (ctx.diagnostics.last_diagnostic) |diag| {
+            if (!spansRecordable(diag, block)) return false;
             entry.last_diagnostic = try dupeDiagnostic(arena, diag);
         }
         const holes = ctx.hole_inference_sink.?;
         const items = holes.items.items[recording.holes..];
         const copies = try arena.alloc(HoleInference, items.len);
         for (items, copies) |item, *copy| {
-            if (!spanWithin(item.span, block)) return;
+            if (!spanWithin(item.span, block)) return false;
             copy.* = .{
                 .span = item.span,
                 .expression = try arena.dupe(u8, item.expression),
@@ -472,7 +498,7 @@ pub const CheckMemo = struct {
         const filled_items = holes.assertions.items[recording.assertions..];
         const filled_copies = try arena.alloc(FilledAssertion, filled_items.len);
         for (filled_items, filled_copies) |item, *copy| {
-            if (!spanWithin(item.line, block)) return;
+            if (!spanWithin(item.line, block)) return false;
             copy.* = .{
                 .line = item.line,
                 .assertion = item.assertion,
@@ -495,6 +521,7 @@ pub const CheckMemo = struct {
         gop.value_ptr.* = entry;
         stored = true;
         if (proof_block.self_contained) self.noteKnownBody(entry);
+        return true;
     }
 
     fn destroyEntry(self: *CheckMemo, entry: *Entry) void {
@@ -591,20 +618,6 @@ fn relocateDiagnostic(diag: Diagnostic, delta: i64) Diagnostic {
         related.span = shiftSpan(related.span, delta);
     }
     return out;
-}
-
-/// Null when a diagnostic cannot be relocated.
-fn dupeDiagnostics(
-    arena: std.mem.Allocator,
-    diagnostics: []const Diagnostic,
-    block: Span,
-) !?[]const Diagnostic {
-    const copies = try arena.alloc(Diagnostic, diagnostics.len);
-    for (diagnostics, copies) |diag, *copy| {
-        if (!spansRecordable(diag, block)) return null;
-        copy.* = try dupeDiagnostic(arena, diag);
-    }
-    return copies;
 }
 
 /// A copy whose every string lives in `arena`. Mirrors the sink's

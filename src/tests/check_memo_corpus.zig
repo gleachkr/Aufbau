@@ -727,6 +727,159 @@ test "an analysis that is always stopped checks one proof a run" {
     try std.testing.expectEqualStrings(through, stopped);
 }
 
+test "an analysis that is always stopped gets past a proof the memo cannot record" {
+    const allocator = std.testing.allocator;
+    // `first` cites a rule declared after it: its error points into the
+    // `.mm0` text, so the memo cannot keep its check.
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\theorem first: $ top $;
+        \\theorem second: $ top $;
+        \\axiom ax_late: $ top $;
+    ;
+    const proof_text =
+        \\first
+        \\----
+        \\l1: $ top $ by ax_late []
+        \\
+        \\second
+        \\----
+        \\l1: $ top $ by top_i []
+        \\
+    ;
+    var memo = CheckMemo.init(allocator);
+    defer memo.deinit();
+    const always: mm0.AnalysisInterrupt = .{ .context = &memo, .stopFn = alwaysStop };
+    // The first run stops after `second`, the one check it could keep.
+    try std.testing.expectError(error.AnalysisInterrupted, analyzeDumpStopping(
+        allocator,
+        mm0_text,
+        proof_text,
+        &memo,
+        false,
+        always,
+    ));
+    try std.testing.expectEqual(@as(usize, 1), memo.entries.count());
+    const stopped = try analyzeDumpStopping(allocator, mm0_text, proof_text, &memo, false, always);
+    defer allocator.free(stopped);
+    const through = try analyzeDump(allocator, mm0_text, proof_text, null, false);
+    defer allocator.free(through);
+    try std.testing.expectEqualStrings(through, stopped);
+}
+
+/// `count` lemmas of `statement`, each justified by `justification`, then
+/// `last` (its statement is the same).
+fn lemmasThenLast(
+    allocator: std.mem.Allocator,
+    count: usize,
+    statement: []const u8,
+    justification: []const u8,
+    last_body: []const u8,
+) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    defer out.deinit();
+    for (0..count) |i| {
+        try out.writer.print(
+            "lemma e{d}: $ {s} $\n----\nl1: $ {s} $ by {s}\n\n",
+            .{ i, statement, statement, justification },
+        );
+    }
+    try out.writer.print("last\n----\n{s}", .{last_body});
+    return try out.toOwnedSlice();
+}
+
+test "check memo replays a proof checked after the run's diagnostics ran out as a cold check would" {
+    const allocator = std.testing.allocator;
+    // A long formula, for open goals whose printed goals fill the sink's
+    // string storage: a premise's goal is printed, and the sink copies it,
+    // unlike text the sources hold.
+    var long_buffer: [1203]u8 = undefined;
+    for (0..600) |i| @memcpy(long_buffer[2 * i ..][0..2], "~ ");
+    @memcpy(long_buffer[1200..], "top");
+    const long: []const u8 = &long_buffer;
+    var long_mm0_buffer: [1400]u8 = undefined;
+    const long_mm0 = try std.fmt.bufPrint(&long_mm0_buffer,
+        \\provable sort wff;
+        \\term top: wff;
+        \\term neg: wff > wff;
+        \\prefix neg: $~$ prec 100;
+        \\axiom top_i: $ top $;
+        \\axiom dn (a: wff): $ a $ > $ ~ a $;
+        \\theorem last: $ ~ {s} $;
+    , .{long});
+    var long_last_buffer: [1300]u8 = undefined;
+    const long_last = try std.fmt.bufPrint(&long_last_buffer, "l1: $ ~ {s} $ by dn [?]\n", .{long});
+    var long_statement_buffer: [1205]u8 = undefined;
+    const long_statement = try std.fmt.bufPrint(&long_statement_buffer, "~ {s}", .{long});
+    // How the dump shows a string the sink truncated.
+    const truncated = try std.fmt.allocPrint(allocator, "{any}", .{@as([]const u8, "<diagnostic string truncated>")});
+    defer allocator.free(truncated);
+    const short_mm0 =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\theorem last: $ top $;
+    ;
+    const short_last = "l1: $ top $ by sorry!\nl2: $ top $ by no_such_rule []\n";
+    const Limit = struct {
+        name: []const u8,
+        mm0: []const u8,
+        count: usize,
+        statement: []const u8,
+        broken: []const u8,
+        fixed: []const u8,
+        last: []const u8,
+        /// Whether the broken text's cold analysis shows `marker`: so the
+        /// case reaches the sink limit it is about.
+        marker: []const u8,
+        marked: bool,
+    };
+    const limits = [_]Limit{
+        // More errors, or more warnings, than the sink keeps.
+        .{ .name = "errors", .mm0 = short_mm0, .count = 300, .statement = "top", .broken = "no_such_rule []", .fixed = "top_i []", .last = short_last, .marker = "dropped 0 0 0 0", .marked = false },
+        .{ .name = "warnings", .mm0 = short_mm0, .count = 40, .statement = "top", .broken = "sorry!", .fixed = "top_i []", .last = short_last, .marker = "dropped 0 0 0 0", .marked = false },
+        // Fewer, but more text than its string storage holds.
+        .{ .name = "text", .mm0 = long_mm0, .count = 30, .statement = long_statement, .broken = "dn [?]", .fixed = "sorry!", .last = long_last, .marker = truncated, .marked = true },
+    };
+    for (limits) |limit| {
+        const broken = try lemmasThenLast(allocator, limit.count, limit.statement, limit.broken, limit.last);
+        defer allocator.free(broken);
+        const fixed = try lemmasThenLast(allocator, limit.count, limit.statement, limit.fixed, limit.last);
+        defer allocator.free(fixed);
+
+        const cold_broken = try analyzeDump(allocator, limit.mm0, broken, null, false);
+        defer allocator.free(cold_broken);
+        const marked = std.mem.find(u8, cold_broken, limit.marker) != null;
+        if (marked != limit.marked) {
+            std.debug.print("case {s} misses its limit:\n{s}\n", .{ limit.name, cold_broken });
+            return error.TestUnexpectedResult;
+        }
+        const cold_fixed = try analyzeDump(allocator, limit.mm0, fixed, null, false);
+        defer allocator.free(cold_fixed);
+        try std.testing.expect(std.mem.find(u8, cold_fixed, "dropped 0 0 0 0") != null);
+        try std.testing.expect(std.mem.find(u8, cold_fixed, truncated) == null);
+
+        var memo = CheckMemo.init(allocator);
+        defer memo.deinit();
+        const first = try analyzeDump(allocator, limit.mm0, broken, &memo, false);
+        defer allocator.free(first);
+        try std.testing.expectEqualStrings(cold_broken, first);
+        // Every proof was kept, `last` too.
+        const misses = memo.misses;
+        const again = try analyzeDump(allocator, limit.mm0, broken, &memo, false);
+        defer allocator.free(again);
+        try std.testing.expectEqualStrings(cold_broken, again);
+        try std.testing.expectEqual(misses, memo.misses);
+        // With the lemmas fixed, `last` is replayed into a sink with room.
+        const after_fix = try analyzeDump(allocator, limit.mm0, fixed, &memo, false);
+        defer allocator.free(after_fix);
+        try std.testing.expectEqualStrings(cold_fixed, after_fix);
+        try std.testing.expectEqual(misses + limit.count, memo.misses);
+    }
+}
+
 test "check memo keeps what a stopped run checked while another root's run ends" {
     const allocator = std.testing.allocator;
     const mm0_text =

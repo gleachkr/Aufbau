@@ -596,7 +596,10 @@ between trusted parser trees and frontend proof elaboration.
   read into what follows it. Only runs that
   collect holes, and nothing an entry does not record, use it, so every
   entry records the same output. Rule-catalog lookups, the one thing a
-  check reads beyond that prefix, are recorded and re-verified.
+  check reads beyond that prefix, are recorded and re-verified. An entry
+  holds every diagnostic its check added, also those past the sink's
+  per-run limits (`CheckMemo.noteDiagnostic`): a replay hands them to the
+  sink, which keeps or counts them as after a fresh check.
   `src/tests/check_memo_corpus.zig` is the guard: on
   every fixture, a warm analysis must equal a cold one under body edits
   that shift or break later blocks, their undo, comments that shift the
@@ -1417,9 +1420,10 @@ The native entry uses `lsp_kit`'s server loop over
 `src/bin/compiler/lsp_input.zig`, which reads stdin ahead into a queue. An
 edit only marks its unit pending (`Handler.pending`); the analysis runs once
 nothing is queued. No request waits for it. A running analysis asks the
-queue, after each proof it had to check, whether to stop: for an edit or for
-a request. A stopped run publishes nothing and drops no memo entry, and the
-next one replays what it checked. A request whose `$/cancelRequest` is
+queue, after each proof it checked and the memo kept, whether to stop: for
+an edit or for a request. Stopping after a check the memo cannot keep would
+lose it, and the next run would check it again. A stopped run publishes
+nothing and drops no memo entry, and the next one replays what it checked. A request whose `$/cancelRequest` is
 already queued is answered `RequestCancelled` without running. A root's
 first run checks only the proofs of the files on screen, the root and the
 open library files that report through it (`CheckScope`), and publishes on

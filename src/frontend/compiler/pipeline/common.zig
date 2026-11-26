@@ -1227,7 +1227,7 @@ fn releaseTheoremScratch(self: *const CompilerContext) void {
 /// the check reports and not its lines. With an active check memo
 /// (`CompilerContext.check_memo`), a hit replays the recorded outcome and
 /// output, without the theorem being built or the block's lines parsed; a
-/// check that ran is followed by a look at the interrupt, whose
+/// check the memo recorded is followed by a look at the interrupt, whose
 /// `AnalysisInterrupted` is the run's, not the block's. A block the memo
 /// does not replay and the check scope leaves out passes unchecked.
 pub fn analyzeBlock(
@@ -1267,10 +1267,12 @@ pub fn analyzeBlock(
     const recording = active.beginRecording(self);
     const outcome: ?anyerror =
         if (checkUnmemoized(self, scratch, theory, assertion, parsed)) null else |err| err;
-    active.finishRecording(self, recording, key, outcome, proof, parsed);
-    if (self.interrupt) |interrupt| {
+    // A stop after a check the memo could not keep would throw the check
+    // away, and the next run would check it again, and stop again.
+    const kept = active.finishRecording(self, recording, key, outcome, proof, parsed);
+    if (kept) if (self.interrupt) |interrupt| {
         if (interrupt.stopRequested()) return error.AnalysisInterrupted;
-    }
+    };
     if (outcome) |err| return err;
 }
 
