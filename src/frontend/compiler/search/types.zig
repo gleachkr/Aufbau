@@ -735,4 +735,6 @@ pub const SourceSuggestionOptions = struct {
     /// of the same proof source, for a caller that has it already; null
     /// parses the source for it. Any other block gives wrong targets.
     block: ?ProofScript.ProofBlock = null,
+    /// Bodies of the proof source the walk to the target may pass over.
+    known_bodies: ?ProofScript.KnownBodies = null,
 };

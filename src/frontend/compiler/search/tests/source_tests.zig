@@ -914,7 +914,7 @@ test "the walk to a block checks no proof before it" {
         proof_src,
         std.mem.indexOf(u8, proof_src, "exact?").?,
     );
-    const point = try Analyze.analyzeToBlock(&compiler, arena.allocator(), block.?);
+    const point = try Analyze.analyzeToBlock(&compiler, arena.allocator(), block.?, null);
     try std.testing.expectEqual(@as(usize, 0), sink.primaryDiagnostics().len);
     try std.testing.expect(point.theory.env.getRuleId("wrong") != null);
     try std.testing.expect(point.theory.env.getRuleId("s") != null);

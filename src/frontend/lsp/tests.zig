@@ -1523,6 +1523,7 @@ const HoleHovers = struct {
             self.snapshot.proof_text.?,
             block,
             false,
+            self.snapshot.knownBodies(),
         );
         try std.testing.expectEqualDeep(
             hover,
@@ -3477,6 +3478,72 @@ test "a snapshot with known bodies answers as one that parsed them" {
             try std.testing.expectEqualDeep(block, try parsed.blockTouching(arena, offset));
             try std.testing.expectEqualDeep(block, try known.blockTouching(arena, offset));
         }
+    }
+}
+
+test "a snapshot tells a parser of its own proof text where the bodies end" {
+    const allocator = std.testing.allocator;
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\theorem main: $ top $;
+        \\theorem other: $ top $;
+    ;
+    const proof_text =
+        \\lemma tl: $ top $
+        \\----
+        \\l1: $ top $ by top_i []
+        \\l2: $ top $ by top_i []
+        \\
+        \\main
+        \\----
+        \\l1: $ top $ by tl []
+        \\other
+        \\----
+        \\l1: $ top $ by
+        \\
+    ;
+    var snapshot = try Snapshot.build(allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const copy = try arena.dupe(u8, proof_text);
+    for ([_][]const u8{ proof_text, copy }) |text| {
+        var plain = proof_script.Parser.initLenient(arena, text);
+        var passing = proof_script.Parser.initLenient(arena, text);
+        passing.known_bodies = snapshot.knownBodies();
+        var blocks: usize = 0;
+        while (try plain.nextBlockRecovering()) |block| : (blocks += 1) {
+            const passed = (try passing.nextBlockRecovering()).?;
+            try std.testing.expectEqual(block.span, passed.span);
+            try std.testing.expectEqual(block.body_end, passed.body_end);
+            // A different text, even an equal one, and a body that did not
+            // parse cleanly are parsed.
+            if (text.ptr != proof_text.ptr or !block.self_contained) {
+                try std.testing.expectEqualDeep(block, passed);
+                continue;
+            }
+            try std.testing.expectEqual(0, passed.lines.len);
+            try std.testing.expectEqual(
+                proof_script.KnownBodies.bodyHash(text[block.header_span.end..block.body_end]),
+                passed.known_body.?,
+            );
+            // A header the snapshot did not parse there gets no answer.
+            const known = snapshot.knownBodies();
+            var shifted = block.header_span;
+            shifted.start += 1;
+            try std.testing.expectEqual(null, known.findFn(known.ctx, text, shifted));
+        }
+        try std.testing.expectEqual(3, blocks);
+        try std.testing.expectEqual(null, try passing.nextBlockRecovering());
     }
 }
 

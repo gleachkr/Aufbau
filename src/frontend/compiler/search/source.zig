@@ -115,6 +115,7 @@ pub fn suggestionsAtSourceOffset(
         mm0_src,
         proof_src,
         target,
+        options.known_bodies,
     );
     var sink = DiagnosticSink.init(mm0_src, proof_src);
     var compiler = CompilerContext.init(mm0_src, proof_src, .none, &sink);

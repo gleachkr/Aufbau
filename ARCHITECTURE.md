@@ -611,7 +611,9 @@ registries. A search prepares its theory with the analysis walk itself:
 `analyzeToBlock` runs it up to the target theorem's statement or the
 target lemma's block, skipping the proofs before it unchecked and keeping
 every declared theorem and lemma in scope (`compiler/search/fixture.zig`
-calls it). `unpack.zig` walks the same way, then checks only the target's
+calls it). It reads no proof line, so its parser passes over every body the
+caller says it knows (`ProofScript.KnownBodies`; the editor passes its
+snapshot's). `unpack.zig` walks the same way, then checks only the target's
 proof, before and after its rewrite. A loop chooses only its error policy
 and whether to check proofs; what a statement step *is* lives in
 `common.zig` once.
@@ -1416,7 +1418,10 @@ indexed when a request looks into it, and the last one is kept. Names
 resolve in it as they stood at its block (`NameTable.seenBy`). A search for
 the uses of a declaration indexes, one at a time, the bodies of the blocks
 whose text spells it. With the check memo, the parse behind a snapshot also
-passes over the bodies the memo knows. A snapshot borrows the unit's texts.
+passes over the bodies the memo knows. In turn a snapshot tells a parser of
+its own proof text where each cleanly parsed body ends
+(`Snapshot.knownBodies`), so a request's walk to its block parses no line.
+A snapshot borrows the unit's texts.
 The handler translates byte spans through the negotiated LSP offset encoding.
 
 The native entry uses `lsp_kit`'s server loop over

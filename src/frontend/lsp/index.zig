@@ -36,6 +36,8 @@ const ProofBody = model.ProofBody;
 const NameTable = model.NameTable;
 const NotationCompletionDecl = notation.NotationCompletionDecl;
 const ProofBlock = @import("../proof_script.zig").ProofBlock;
+const KnownBodies = @import("../proof_script.zig").KnownBodies;
+const Span = @import("../proof_script.zig").Span;
 const proofSpanRange = @import("builder_support.zig").proofSpanRange;
 
 /// The index of one unit: its `.mm0` text and proof headers, plus the proof
@@ -382,6 +384,28 @@ pub const Snapshot = struct {
             return try info.source.withLines(allocator, self.proof_text.?);
         }
         return null;
+    }
+
+    /// Where the bodies of this snapshot's proof blocks end, for a parser of
+    /// its own proof text to pass over them (an analysis walk that needs no
+    /// lines). A different text, even an equal one, gets no answers.
+    pub fn knownBodies(self: *const Snapshot) KnownBodies {
+        return .{ .ctx = @constCast(self), .findFn = findKnownBody };
+    }
+
+    fn findKnownBody(ctx: *anyopaque, src: []const u8, header: Span) ?KnownBodies.Body {
+        const self: *const Snapshot = @ptrCast(@alignCast(ctx));
+        const text = self.proof_text orelse return null;
+        if (src.ptr != text.ptr or src.len != text.len) return null;
+        const info = self.proof_blocks[self.proofBlockNear(header.start) orelse return null];
+        const block = info.source;
+        if (!block.self_contained) return null;
+        if (block.header_span.start != header.start or block.header_span.end != header.end) return null;
+        return .{
+            .len = block.body_end - header.end,
+            .hash = block.known_body orelse
+                KnownBodies.bodyHash(text[header.end..block.body_end]),
+        };
     }
 
     /// The index of a block's body, valid until another block's is asked

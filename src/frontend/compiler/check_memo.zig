@@ -306,12 +306,8 @@ pub const CheckMemo = struct {
         return .{
             .fingerprint = self.fingerprint,
             .body = block.known_body orelse
-                bodyHash(proof[block.header_span.end..block.body_end]),
+                KnownBodies.bodyHash(proof[block.header_span.end..block.body_end]),
         };
-    }
-
-    fn bodyHash(body: []const u8) u64 {
-        return std.hash.Wyhash.hash(0, body);
     }
 
     fn headerHash(header: []const u8) u64 {
@@ -326,13 +322,15 @@ pub const CheckMemo = struct {
 
     fn findKnownBody(
         ctx: *anyopaque,
-        header: []const u8,
-        rest: []const u8,
+        src: []const u8,
+        header: Span,
     ) ?KnownBodies.Body {
         const self: *CheckMemo = @ptrCast(@alignCast(ctx));
-        const entry = self.by_header.get(headerHash(header)) orelse return null;
+        const header_text = src[header.start..header.end];
+        const rest = src[header.end..];
+        const entry = self.by_header.get(headerHash(header_text)) orelse return null;
         if (entry.body_len > rest.len) return null;
-        const hash = bodyHash(rest[0..entry.body_len]);
+        const hash = KnownBodies.bodyHash(rest[0..entry.body_len]);
         if (hash != entry.body) return null;
         return .{ .len = entry.body_len, .hash = hash };
     }

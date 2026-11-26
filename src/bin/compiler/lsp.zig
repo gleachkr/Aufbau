@@ -660,6 +660,7 @@ fn applicableRuleCompletions(
             .apply_at_offset = true,
             .work_allocator = work_allocator,
             .block = block,
+            .known_bodies = snapshot.knownBodies(),
         },
     ) catch |err| switch (err) {
         error.OutOfMemory => return err,
@@ -1180,6 +1181,7 @@ pub const Handler = struct {
             proof_side.joined.text,
             block,
             offset,
+            nav.snapshot.knownBodies(),
         ) orelse return null;
 
         return try self.replacementCodeAction(
@@ -1356,6 +1358,7 @@ pub const Handler = struct {
                 .status_detail = true,
                 .work_allocator = self.allocator,
                 .block = block,
+                .known_bodies = nav.snapshot.knownBodies(),
             },
         ) catch |err| switch (err) {
             error.OutOfMemory => return err,
@@ -2031,6 +2034,7 @@ pub const Handler = struct {
             nav.side().joined.text,
             block,
             fills,
+            nav.snapshot.knownBodies(),
         );
         return found;
     }

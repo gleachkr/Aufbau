@@ -152,8 +152,13 @@ This file records notable user-facing changes to Aufbau. The project follows
 - `abc lsp` checks a holey line's filled form only when code actions are
   asked for on that line, not for every holey line on every check. The
   first check of the last file of a 126 MB library takes 29.7 s instead of
-  36.7 s. "Fill in the holes" there now takes 0.43 s once the check has
+  36.7 s. "Fill in the holes" there now checks its proof once the check has
   ended, as it already did while the check was running.
+- Code actions and rule completion no longer parse the lines of every other
+  proof on the way to the one under the cursor. In the last file of a
+  126 MB library, "Fill in the holes" took 0.52 s and now takes 0.29 s, and
+  an unpack while the file is first checked took 1.1 s and now takes 0.9 s,
+  with 0.4 GiB less memory at its peak.
 
 ### Fixed
 

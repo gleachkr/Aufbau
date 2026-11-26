@@ -58,6 +58,7 @@ pub fn unpackAtSourceOffset(
     proof_src: []const u8,
     block: ProofBlock,
     offset: usize,
+    known_bodies: ?ProofScript.KnownBodies,
 ) std.mem.Allocator.Error!?UnpackSuggestion {
     const line = findTarget(block, offset) orelse return null;
 
@@ -65,7 +66,7 @@ pub fn unpackAtSourceOffset(
     defer work_arena.deinit();
     const work = work_arena.allocator();
 
-    var point = (try blockPoint(work, mm0_src, proof_src, block)) orelse return null;
+    var point = (try blockPoint(work, mm0_src, proof_src, block, known_bodies)) orelse return null;
 
     // Gate 1 + conclusion capture: the proof as written must check, with
     // the sink recording every inline application's elaborated conclusion.
@@ -164,10 +165,11 @@ fn blockPoint(
     mm0_src: []const u8,
     proof_src: []const u8,
     block: ProofBlock,
+    known_bodies: ?ProofScript.KnownBodies,
 ) std.mem.Allocator.Error!?Analyze.BlockPoint {
     var diagnostics = DiagnosticSink.init(mm0_src, proof_src);
     var context = CompilerContext.init(mm0_src, proof_src, .none, &diagnostics);
-    return Analyze.analyzeToBlock(&context, allocator, block) catch |err| switch (err) {
+    return Analyze.analyzeToBlock(&context, allocator, block, known_bodies) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return null,
     };

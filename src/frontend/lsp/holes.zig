@@ -5,6 +5,7 @@ const Analyze = @import("../compiler/pipeline/analyze.zig");
 const ArenaAllocator = @import("../arena_allocator.zig").ArenaAllocator;
 const Context = @import("../compiler/context.zig");
 const DiagnosticSink = @import("../compiler/diagnostic_sink.zig").DiagnosticSink;
+const KnownBodies = @import("../proof_script.zig").KnownBodies;
 const ProofBlock = @import("../proof_script.zig").ProofBlock;
 const Span = @import("../proof_script.zig").Span;
 const markdown = @import("markdown.zig");
@@ -23,13 +24,15 @@ pub const HoleFill = struct {
 
 /// The holes of `block`, a block of `proof_src`, as an analysis finds them,
 /// and with `fills` its holey lines filled in (`HoleInferenceSink.fills`).
-/// Only its own proof is checked: no check depends on another proof.
+/// Only its own proof is checked: no check depends on another proof. The
+/// walk to it passes over the bodies `known_bodies` knows.
 pub fn ofBlock(
     allocator: std.mem.Allocator,
     mm0_src: []const u8,
     proof_src: []const u8,
     block: ProofBlock,
     fills: bool,
+    known_bodies: ?KnownBodies,
 ) std.mem.Allocator.Error!HoleInferenceSink {
     var work_arena = ArenaAllocator.init(allocator);
     defer work_arena.deinit();
@@ -39,7 +42,7 @@ pub fn ofBlock(
 
     var walk_diagnostics = DiagnosticSink.init(mm0_src, proof_src);
     var walk = CompilerContext.init(mm0_src, proof_src, .none, &walk_diagnostics);
-    var point = Analyze.analyzeToBlock(&walk, work, block) catch |err| switch (err) {
+    var point = Analyze.analyzeToBlock(&walk, work, block, known_bodies) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return found,
     };

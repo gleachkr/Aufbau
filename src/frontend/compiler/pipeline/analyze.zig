@@ -145,11 +145,13 @@ pub const BlockPoint = struct {
 /// scope whatever its proof did. Fails with `MissingTheorem` or
 /// `MissingProofBlock` when the walk never reaches `block`, and with
 /// `UnavailableDependency` when its theorem names a declaration the walk
-/// dropped.
+/// dropped. No line of a proof is read, so the bodies `known_bodies` knows
+/// are passed over unparsed.
 pub fn analyzeToBlock(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
     block: TheoremBlock,
+    known_bodies: ?ProofScript.KnownBodies,
 ) !BlockPoint {
     var state = AnalysisState.init(
         allocator,
@@ -157,6 +159,7 @@ pub fn analyzeToBlock(
         self.proof_source,
         true,
     );
+    if (state.proof) |*proof| proof.parser.known_bodies = known_bodies;
     state.stop = block;
     walk(self, allocator, &state, true) catch |err| {
         if (err != error.BlockReached) return err;

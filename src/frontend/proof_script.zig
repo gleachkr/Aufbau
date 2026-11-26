@@ -271,15 +271,20 @@ pub fn blockTouching(
 /// pass over them.
 pub const KnownBodies = struct {
     ctx: *anyopaque,
-    /// The self-contained body (`ProofBlock.self_contained`) that followed a
-    /// header reading `header` and that `rest`, the text after one now,
-    /// starts with.
-    findFn: *const fn (ctx: *anyopaque, header: []const u8, rest: []const u8) ?Body,
+    /// The self-contained body (`ProofBlock.self_contained`) that follows
+    /// the block header at `header` in `src`.
+    findFn: *const fn (ctx: *anyopaque, src: []const u8, header: Span) ?Body,
 
     pub const Body = struct {
         len: usize,
+        /// `bodyHash` of the body's text.
         hash: u64,
     };
+
+    /// The hash a body is known by (`ProofBlock.known_body`).
+    pub fn bodyHash(body: []const u8) u64 {
+        return std.hash.Wyhash.hash(0, body);
+    }
 };
 
 pub const DefItem = struct {
@@ -729,11 +734,7 @@ pub const Parser = struct {
     /// is `header`.
     fn parseBody(self: *Parser, header: Span) !ParsedBody {
         if (self.known_bodies) |known| {
-            if (known.findFn(
-                known.ctx,
-                self.src[header.start..header.end],
-                self.src[header.end..],
-            )) |body| {
+            if (known.findFn(known.ctx, self.src, header)) |body| {
                 const end = header.end + body.len;
                 if (self.bodyEndsAt(end)) {
                     self.pos = self.skipProofLineTriviaFrom(end);

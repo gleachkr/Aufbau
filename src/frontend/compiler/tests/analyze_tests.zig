@@ -1264,7 +1264,7 @@ test "a check keeps no inline conclusion from an aborted fallback attempt" {
     const arena = arena_state.allocator();
     const inline_start = std.mem.indexOf(u8, proof_src, "top_i []").?;
     const block = (try mm0.ProofScript.blockTouching(arena, proof_src, inline_start)).?;
-    var point = try mm0.CompilerSupport.Analyze.analyzeToBlock(&context, arena, block);
+    var point = try mm0.CompilerSupport.Analyze.analyzeToBlock(&context, arena, block, null);
     context.inline_conclusion_sink = &sink;
     try point.check(&context, arena, block);
 

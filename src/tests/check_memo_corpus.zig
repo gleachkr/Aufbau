@@ -682,6 +682,14 @@ test "a proof checked alone has the holes an analysis finds in it" {
 
         var items: []const Context.HoleInference = found.items.items;
         var assertions: []const Context.FilledAssertion = found.assertions.items;
+        // The editor's walk to a block passes over the bodies its index knows.
+        var snapshot = try mm0.Frontend.LspIndex.Snapshot.build(allocator, .{
+            .mm0_uri = "file:///corpus.mm0",
+            .mm0_text = pair.mm0.text,
+            .proof_uri = "file:///corpus.auf",
+            .proof_text = proof_text,
+        });
+        defer snapshot.deinit();
         var parser = ProofScript.Parser.initLenient(arena, proof_text);
         while (try parser.nextBlockRecovering()) |block| {
             var item_count: usize = 0;
@@ -697,6 +705,7 @@ test "a proof checked alone has the holes an analysis finds in it" {
                 proof_text,
                 block,
                 true,
+                snapshot.knownBodies(),
             );
             try std.testing.expectEqualDeep(items[0..item_count], alone.items.items);
             try std.testing.expectEqualDeep(assertions[0..fill_count], alone.assertions.items);

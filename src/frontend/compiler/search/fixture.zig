@@ -45,6 +45,7 @@ pub fn fixtureForSourceTarget(
     mm0_src: []const u8,
     proof_src: []const u8,
     target: SourceTarget,
+    known_bodies: ?ProofScript.KnownBodies,
 ) !Fixture {
     var sink = DiagnosticSink.init(mm0_src, proof_src);
     var compiler = CompilerContext.init(mm0_src, proof_src, .none, &sink);
@@ -54,7 +55,7 @@ pub fn fixtureForSourceTarget(
     // checks no proof, so an unfinished one before the target is no trouble.
     // Its proof stream is lenient like the target's parse, so the target
     // lemma's span matches.
-    const point = try Analyze.analyzeToBlock(&compiler, allocator, target.block);
+    const point = try Analyze.analyzeToBlock(&compiler, allocator, target.block, known_bodies);
     return .{
         .theory = point.theory,
         .assertion = point.assertion,
