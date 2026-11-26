@@ -580,11 +580,7 @@ pub fn joinAll(
     };
     defer joiner.deinit();
     for (roots, 0..) |root, index| {
-        if (index != 0 and (joiner.out.items.len == 0 or
-            joiner.out.items[joiner.out.items.len - 1] != '\n'))
-        {
-            try joiner.emitSeparator();
-        }
+        if (index != 0 and !joiner.endsLine()) try joiner.emitSeparator();
         try joiner.write(root.key, root.text, true);
     }
     const files = try joiner.files.toOwnedSlice(allocator);
@@ -593,7 +589,7 @@ pub fn joinAll(
         .text = if (joiner.passthrough)
             roots[0].text
         else
-            try joiner.out.toOwnedSlice(allocator),
+            try std.mem.concat(allocator, u8, joiner.runs.items),
         .map = .{ .segments = segments },
         .files = files,
     };
@@ -604,7 +600,10 @@ const Joiner = struct {
     resolver: Resolver,
     syntax: Syntax,
     failure: ?*?JoinFailure,
-    out: std.ArrayListUnmanaged(u8) = .empty,
+    /// The joined text so far, as slices of the files' texts, and its
+    /// length. Copying them once at the end gives a buffer of the right size.
+    runs: std.ArrayListUnmanaged([]const u8) = .empty,
+    len: usize = 0,
     files: std.ArrayListUnmanaged(File) = .empty,
     segments: std.ArrayListUnmanaged(Segment) = .empty,
     /// Keys of files being joined or already joined (mm0-rs `working`).
@@ -621,7 +620,7 @@ const Joiner = struct {
     passthrough: bool,
 
     fn deinit(self: *Joiner) void {
-        self.out.deinit(self.allocator);
+        self.runs.deinit(self.allocator);
         self.files.deinit(self.allocator);
         self.segments.deinit(self.allocator);
         self.working.deinit(self.allocator);
@@ -745,22 +744,34 @@ const Joiner = struct {
         if (to == from and !(from == 0 and to == text.len)) return;
         try pending.append(self.allocator, self.segments.items.len);
         try self.segments.append(self.allocator, .{
-            .joined_start = self.out.items.len,
+            .joined_start = self.len,
             .len = to - from,
             .file_index = null,
             .file_offset = from,
         });
-        try self.out.appendSlice(self.allocator, text[from..to]);
+        try self.appendRun(text[from..to]);
     }
 
     fn emitSeparator(self: *Joiner) JoinError!void {
         try self.segments.append(self.allocator, .{
-            .joined_start = self.out.items.len,
+            .joined_start = self.len,
             .len = 1,
             .file_index = null,
             .file_offset = 0,
         });
-        try self.out.append(self.allocator, '\n');
+        try self.appendRun("\n");
+    }
+
+    fn appendRun(self: *Joiner, run: []const u8) JoinError!void {
+        if (run.len == 0) return;
+        try self.runs.append(self.allocator, run);
+        self.len += run.len;
+    }
+
+    /// Does the joined text end with a newline?
+    fn endsLine(self: *const Joiner) bool {
+        const last = self.runs.getLastOrNull() orelse return false;
+        return last[last.len - 1] == '\n';
     }
 
     fn fail(self: *Joiner, info: JoinFailure) void {
@@ -1846,6 +1857,14 @@ test "include join splices in place and joins roots" {
     const one = try includeMem(arena.allocator(), &files, roots[0..1], &failure);
     try std.testing.expect(one.isPassthrough());
     try std.testing.expect(one.text.ptr == roots[0].text.ptr);
+
+    // An empty root ends no line, so the next root still starts on a new one.
+    const empty_first = [_]File{ .{ .key = "e", .text = "" }, roots[1] };
+    const after_empty = try includeMem(arena.allocator(), &files, &empty_first, &failure);
+    try std.testing.expectEqualStrings(
+        "\nlemma d\n---\n\nlemma b\n---\n\nt\n---\n",
+        after_empty.text,
+    );
 }
 
 test "include join rejects a second include of the same file" {

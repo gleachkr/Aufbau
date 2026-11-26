@@ -138,7 +138,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   took 38 s and now takes 0.7 s, and the first completion 40 s, now 1.5 s. A
   hover on a hole, or "Fill in the holes", on a proof not checked yet checks
   that proof alone: such a hover took 40 s there and now takes 1.2 s. Requests
-  lengthen the first check: a hover every second takes it from 39 s to 98 s.
+  lengthen the first check: a hover every second takes it from 36 s to 47 s.
+- A request no longer reads and joins a file's imports again when none of them
+  has changed, nor does a check that a request stopped. In the last file of a
+  126 MB library, a second hover took 51 ms and now takes 0.3 ms.
 
 ### Fixed
 

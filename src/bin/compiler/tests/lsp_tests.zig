@@ -3877,6 +3877,10 @@ test "LSP resolves proof includes against open library files" {
     });
     try std.testing.expect(transport_state.containsMessage(lib_uri));
     try std.testing.expect(transport_state.containsMessage("nope"));
+    // Its own analysis, which finds no theory, leaves it to the root.
+    try std.testing.expect(!transport_state.containsMessage(
+        "could not find sibling .mm0 file",
+    ));
 }
 
 test "LSP reports a failing include in an imported theory's proof file" {
@@ -3979,6 +3983,308 @@ test "LSP reports a missing nested include" {
     });
     try std.testing.expect(publishedEmpty(&transport_state, lib_uri));
     try std.testing.expect(publishedEmpty(&transport_state, proof_uri));
+}
+
+/// A handler over a directory of files on disk.
+const DiskUnit = struct {
+    tmp: std.testing.TmpDir,
+    arena_state: std.heap.ArenaAllocator,
+    transport: TestTransport,
+    handler: Handler,
+    dir: []const u8,
+    /// The seconds of the next file's mtime, so that no two are the same.
+    clock: i64,
+
+    fn init(self: *DiskUnit) !void {
+        self.* = .{
+            .tmp = std.testing.tmpDir(.{}),
+            .arena_state = std.heap.ArenaAllocator.init(std.testing.allocator),
+            .transport = .{},
+            .handler = undefined,
+            .dir = undefined,
+            .clock = 1_000_000,
+        };
+        self.handler = Handler.init(
+            std.testing.allocator,
+            std.testing.io,
+            &self.transport.transport,
+        );
+        self.dir = try self.tmp.dir.realPathFileAlloc(
+            std.testing.io,
+            ".",
+            self.arena_state.allocator(),
+        );
+    }
+
+    fn deinit(self: *DiskUnit) void {
+        self.handler.deinit();
+        self.arena_state.deinit();
+        self.tmp.cleanup();
+    }
+
+    fn write(self: *DiskUnit, name: []const u8, text: []const u8) !void {
+        const io = std.testing.io;
+        try self.tmp.dir.writeFile(io, .{ .sub_path = name, .data = text });
+        self.clock += 1;
+        try self.tmp.dir.setTimestamps(io, name, .{
+            .modify_timestamp = .{ .new = .fromNanoseconds(self.clock * std.time.ns_per_s) },
+        });
+    }
+
+    fn remove(self: *DiskUnit, name: []const u8) !void {
+        try self.tmp.dir.deleteFile(std.testing.io, name);
+    }
+
+    fn uri(self: *DiskUnit, name: []const u8) ![]const u8 {
+        const arena = self.arena_state.allocator();
+        return pathToUri(arena, try std.fs.path.join(arena, &.{ self.dir, name }));
+    }
+
+    fn open(self: *DiskUnit, name: []const u8, text: []const u8) !void {
+        try self.handler.@"textDocument/didOpen"(self.arena_state.allocator(), .{
+            .textDocument = .{
+                .uri = try self.uri(name),
+                .languageId = .{ .custom_value = "aufbau" },
+                .version = 1,
+                .text = text,
+            },
+        });
+    }
+
+    fn change(self: *DiskUnit, name: []const u8, version: i32, text: []const u8) !void {
+        try self.handler.@"textDocument/didChange"(self.arena_state.allocator(), .{
+            .textDocument = .{ .uri = try self.uri(name), .version = version },
+            .contentChanges = &.{
+                .{ .text_document_content_change_whole_document = .{ .text = text } },
+            },
+        });
+    }
+
+    fn close(self: *DiskUnit, name: []const u8) !void {
+        try self.handler.@"textDocument/didClose"(self.arena_state.allocator(), .{
+            .textDocument = .{ .uri = try self.uri(name) },
+        });
+    }
+
+    /// Expect the last `needle` of `name`, a document with text `text`, to be
+    /// defined on line `line` of `target`.
+    fn expectDefined(
+        self: *DiskUnit,
+        name: []const u8,
+        text: []const u8,
+        needle: []const u8,
+        target: []const u8,
+        line: u32,
+    ) !void {
+        const location = try expectDefinitionLocation(
+            try self.definition(name, text, needle),
+        );
+        try std.testing.expectEqualStrings(try self.uri(target), location.uri);
+        try std.testing.expectEqual(line, location.range.start.line);
+    }
+
+    fn definition(
+        self: *DiskUnit,
+        name: []const u8,
+        text: []const u8,
+        needle: []const u8,
+    ) !lsp.ResultType("textDocument/definition") {
+        return self.handler.@"textDocument/definition"(self.arena_state.allocator(), .{
+            .textDocument = .{ .uri = try self.uri(name) },
+            .position = try testLastPosition(text, needle),
+        });
+    }
+
+    /// Where the joined theory that requests on main.mm0 read lies.
+    fn joinedTheory(self: *DiskUnit) !*const u8 {
+        const entry = self.handler.nav_cache.get(try self.uri("main.mm0")).?;
+        return &entry.unit.mm0.joined.text[0];
+    }
+
+    fn neverStop(_: *anyopaque) bool {
+        return false;
+    }
+
+    /// Leave documents that change pending, as the native server does.
+    fn analyzeLater(self: *DiskUnit) void {
+        self.handler.interrupt = .{ .context = self, .stopFn = neverStop };
+    }
+};
+
+test "LSP requests see an import change on disk" {
+    var unit: DiskUnit = undefined;
+    try unit.init();
+    defer unit.deinit();
+    const main = lsp_import_main_text;
+    try unit.write("lib.mm0", lsp_import_lib_text);
+    try unit.open("main.mm0", main);
+    try unit.expectDefined("main.mm0", main, "top", "lib.mm0", 1);
+
+    // Requests share the joined text while nothing changes.
+    const joined = try unit.joinedTheory();
+    try unit.expectDefined("main.mm0", main, "top", "lib.mm0", 1);
+    try std.testing.expectEqual(joined, try unit.joinedTheory());
+
+    try unit.write("lib.mm0", "-- A comment.\n" ++ lsp_import_lib_text);
+    try unit.expectDefined("main.mm0", main, "top", "lib.mm0", 2);
+
+    // A missing import is looked for again, and the root alone is shared.
+    try unit.remove("lib.mm0");
+    try std.testing.expectEqual(null, try unit.definition("main.mm0", main, "top"));
+    const alone = try unit.joinedTheory();
+    try std.testing.expectEqual(null, try unit.definition("main.mm0", main, "top"));
+    try std.testing.expectEqual(alone, try unit.joinedTheory());
+    try unit.write("lib.mm0", lsp_import_lib_text);
+    try unit.expectDefined("main.mm0", main, "top", "lib.mm0", 1);
+
+    // An open document hides the file, until it is closed.
+    try unit.open("lib.mm0", "-- One.\n-- Two.\n" ++ lsp_import_lib_text);
+    try unit.expectDefined("main.mm0", main, "top", "lib.mm0", 3);
+    try unit.change("lib.mm0", 2, "-- One.\n" ++ lsp_import_lib_text);
+    try unit.expectDefined("main.mm0", main, "top", "lib.mm0", 2);
+    try unit.close("lib.mm0");
+    try unit.expectDefined("main.mm0", main, "top", "lib.mm0", 1);
+}
+
+test "LSP requests see an import's proof file come and go on disk" {
+    var unit: DiskUnit = undefined;
+    try unit.init();
+    defer unit.deinit();
+    const proof =
+        \\main
+        \\----
+        \\l1: $ top $ by lib_top []
+    ;
+    const lib_proof =
+        \\lemma lib_top: $ top $
+        \\----
+        \\l1: $ top $ by top_i []
+        \\
+    ;
+    try unit.write("lib.mm0", lsp_import_lib_text);
+    try unit.write("main.mm0", lsp_import_main_text);
+    try unit.open("main.auf", proof);
+    try std.testing.expectEqual(null, try unit.definition("main.auf", proof, "lib_top"));
+    try unit.write("lib.auf", lib_proof);
+    try unit.expectDefined("main.auf", proof, "lib_top", "lib.auf", 0);
+    try unit.write("lib.auf", "-- A comment.\n" ++ lib_proof);
+    try unit.expectDefined("main.auf", proof, "lib_top", "lib.auf", 1);
+    try unit.remove("lib.auf");
+    try std.testing.expectEqual(null, try unit.definition("main.auf", proof, "lib_top"));
+}
+
+test "LSP requests see the root's proof file come and go on disk" {
+    var unit: DiskUnit = undefined;
+    try unit.init();
+    defer unit.deinit();
+    const main = lsp_import_main_text;
+    try unit.write("lib.mm0", lsp_import_lib_text);
+    try unit.open("main.mm0", main);
+    const params: types.ImplementationParams = .{
+        .textDocument = .{ .uri = try unit.uri("main.mm0") },
+        .position = try testLastPosition(main, "main"),
+    };
+    const arena = unit.arena_state.allocator();
+    const handler = &unit.handler;
+    try std.testing.expectEqual(
+        null,
+        try handler.@"textDocument/implementation"(arena, params),
+    );
+    try unit.write("main.auf", lsp_import_proof_text);
+    const location = try expectImplementationLocation(
+        try handler.@"textDocument/implementation"(arena, params),
+    );
+    try std.testing.expectEqualStrings(try unit.uri("main.auf"), location.uri);
+    try unit.remove("main.auf");
+    try std.testing.expectEqual(
+        null,
+        try handler.@"textDocument/implementation"(arena, params),
+    );
+}
+
+test "LSP requests see a file reopened that only a failed join has read" {
+    var unit: DiskUnit = undefined;
+    try unit.init();
+    defer unit.deinit();
+    const main = lsp_import_main_text;
+    try unit.open("lib.mm0", "import \"gone.mm0\";\n" ++ lsp_import_lib_text);
+    try unit.open("main.mm0", main);
+    try std.testing.expectEqual(null, try unit.definition("main.mm0", main, "top"));
+    // The same version of another text.
+    try unit.close("lib.mm0");
+    try unit.open("lib.mm0", lsp_import_lib_text);
+    try unit.expectDefined("main.mm0", main, "top", "lib.mm0", 1);
+}
+
+test "LSP requests from a proof file spelled another way join that file" {
+    var unit: DiskUnit = undefined;
+    try unit.init();
+    defer unit.deinit();
+    const arena = unit.arena_state.allocator();
+    const main = lsp_import_main_text;
+    const proof = lsp_import_proof_text;
+    try unit.write("lib.mm0", lsp_import_lib_text);
+    try unit.write("main.mm0", main);
+    // `main.auf` with an escaped `a`, which the server's own URIs never have.
+    const plain = try unit.uri("main.auf");
+    const spelled = try std.mem.concat(arena, u8, &.{
+        plain[0 .. plain.len - "ain.auf".len], "%61in.auf",
+    });
+    try unit.handler.@"textDocument/didOpen"(arena, .{
+        .textDocument = .{
+            .uri = spelled,
+            .languageId = .{ .custom_value = "aufbau" },
+            .version = 1,
+            .text = proof,
+        },
+    });
+    // The unit joined from main.mm0 has main.auf as it is on disk: absent.
+    try unit.expectDefined("main.mm0", main, "top", "lib.mm0", 1);
+    const location = try expectDefinitionLocation(
+        try unit.handler.@"textDocument/definition"(arena, .{
+            .textDocument = .{ .uri = spelled },
+            .position = try testLastPosition(proof, "top_i"),
+        }),
+    );
+    try std.testing.expectEqualStrings(try unit.uri("lib.mm0"), location.uri);
+    try std.testing.expectEqual(@as(u32, 2), location.range.start.line);
+}
+
+test "LSP analyses the files as they are, whatever the last request read" {
+    var unit: DiskUnit = undefined;
+    try unit.init();
+    defer unit.deinit();
+    const main = lsp_import_main_text;
+    const main_uri = try unit.uri("main.auf");
+    const lib_uri = try unit.uri("lib.mm0");
+    try unit.write("lib.mm0", lsp_import_lib_text);
+    try unit.write("main.mm0", main);
+    unit.analyzeLater();
+    try unit.open("main.auf", lsp_import_proof_text);
+
+    // The analysis reads what the request has joined.
+    try unit.expectDefined("main.auf", lsp_import_proof_text, "top_i", "lib.mm0", 2);
+    const joined = try unit.joinedTheory();
+    try unit.handler.analyzePending();
+    try std.testing.expect(publishedEmpty(&unit.transport, main_uri));
+    try std.testing.expectEqual(joined, try unit.joinedTheory());
+
+    // But not once a file has changed since.
+    unit.transport.clearMessages();
+    try unit.change("main.auf", 2, lsp_import_proof_text ++ "\n");
+    try unit.expectDefined("main.auf", lsp_import_proof_text, "top_i", "lib.mm0", 2);
+    try unit.write("lib.mm0", lsp_import_lib_text ++ "\naxiom bad: $ nope $;\n");
+    try unit.handler.analyzePending();
+    try std.testing.expect(publishedContains(&unit.transport, lib_uri, "nope"));
+
+    // Nor what a request read for the same file opened under another URI.
+    unit.transport.clearMessages();
+    try unit.write("lib.mm0", lsp_import_lib_text);
+    try unit.expectDefined("main.auf", lsp_import_proof_text, "top_i", "lib.mm0", 2);
+    try unit.open("x/../main.auf", "main\n----\nl1: $ top $ by nope []\n");
+    try unit.handler.analyzePending();
+    const other_uri = try unit.uri("x/../main.auf");
+    try std.testing.expect(publishedContains(&unit.transport, other_uri, "nope"));
 }
 
 const Input = @import("../lsp_input.zig").Input;

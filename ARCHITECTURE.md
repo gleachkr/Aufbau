@@ -494,9 +494,15 @@ maps editor positions forward through the source map's inverse and index
 ranges and diagnostic spans back to (file, span), so diagnostics publish
 per file and navigation crosses files. A join that fails degrades to the
 root alone with its statements blanked (positions unchanged) plus a
-diagnostic on the failing statement. Every cache is keyed by the states
-of all files of the unit, and each analysis records what it read, so an
-edit to an imported document re-analyses the roots that import it. Open
+diagnostic on the failing statement. Each analysis records what it read,
+so an edit to an imported document re-analyses the roots that import it.
+A unit lists every file its join looked up, also those it did not find
+(`Unit.lookups`). The navigation cache keeps a root's unit with its index,
+and requests reuse both until one of those files changes: opening,
+editing or closing a document drops the entries that looked it up, and a
+file read from disk is compared by its mtime. An analysis reads that
+unit too, when it is current, and otherwise joins one for itself. The
+other caches are keyed by the states of the unit's files. Open
 `.mm0` files and `.auf` files with a sibling theory report on
 themselves; other files receive the root's view.
 

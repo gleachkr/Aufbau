@@ -136,6 +136,13 @@ const UnitFile = struct {
     }
 };
 
+/// What a unit's join found at `path`. Neither a version nor an mtime means
+/// nothing it could read.
+const UnitLookup = struct {
+    path: []const u8,
+    state: NavigationDocumentState,
+};
+
 /// A span of a joined text resolved to the file it was copied from.
 const UnitLocation = struct {
     file: UnitFile,
@@ -198,6 +205,9 @@ const Unit = struct {
     mm0: UnitSide,
     proof: ?UnitSide,
     failures: []const UnitFailure,
+    /// Every file the join looked up, found or not. While each is as it was
+    /// then, the same join gives the same unit.
+    lookups: []const UnitLookup,
 
     const Found = struct {
         document: LspIndex.DocumentId,
@@ -231,8 +241,8 @@ const Unit = struct {
         return false;
     }
 
-    /// The document states of every file, `.mm0` side then proof side:
-    /// the cache key for anything computed from the unit.
+    /// The document states of every file, `.mm0` side then proof side: the
+    /// key of what is cached from the unit apart from its navigation entry.
     fn states(
         self: *const Unit,
         allocator: std.mem.Allocator,
@@ -317,9 +327,9 @@ const Unit = struct {
 };
 
 /// The states of every file a unit was built from, owned by the handler
-/// allocator. Every cache below is keyed by one: an edit to any file of the
-/// unit (a version bump for an open document, an mtime change on disk)
-/// makes a stored key stale.
+/// allocator. What analyses and searches found is kept under one: an edit to
+/// any file of the unit (a version bump for an open document, an mtime change
+/// on disk) makes it stale.
 const UnitKey = struct {
     states: []NavigationDocumentState,
 
@@ -365,7 +375,8 @@ const UnitKey = struct {
 const NavigationCacheEntry = struct {
     /// The root `.mm0` URI; aliases the map key.
     uri: []const u8,
-    key: UnitKey,
+    /// The root proof file's URI, whether or not there is such a file.
+    proof_uri: []const u8,
     /// Backs `unit`: its joined texts and file records.
     unit_arena: ArenaAllocator,
     unit: Unit,
@@ -377,14 +388,16 @@ const NavigationCacheEntry = struct {
     ) void {
         self.snapshot.deinit();
         self.unit_arena.deinit();
-        self.key.deinit(allocator);
         allocator.free(self.uri);
         self.* = undefined;
     }
 };
 
 fn navEntryContainsUri(entry: NavigationCacheEntry, uri: []const u8) bool {
-    return entry.key.containsUri(uri);
+    for (entry.unit.lookups) |lookup| {
+        if (std.mem.eql(u8, lookup.state.uri, uri)) return true;
+    }
+    return false;
 }
 
 /// A navigation request's view of its unit: the index over the joined
@@ -2052,48 +2065,46 @@ pub const Handler = struct {
             );
             return;
         };
-        const mm0_loaded = self.loadTextPreferOpenDocument(arena, mm0_path) catch |err| {
-            // A proof file without a theory of its own that some root
-            // includes: that root's analysis reports on it.
-            if (err == error.FileNotFound and self.isDependency(proof_uri)) return;
-            const message = switch (err) {
-                error.FileNotFound => try mm0.allocDiagnosticMessage(
-                    arena,
-                    "proof_document_no_theory",
-                    .{},
-                ),
-                else => try mm0.allocDiagnosticMessage(
-                    arena,
-                    "proof_document_theory_unreadable",
-                    .{@errorName(err)},
-                ),
-            };
-            try self.publishMessageDiagnostic(
+        const roots: UnitRoots = .{
+            .mm0_uri = try pathToUri(arena, mm0_path),
+            .mm0_path = mm0_path,
+            .proof_uri = proof_uri,
+            .proof_path = proof_path,
+        };
+        // A request may have joined the same files already, say the one that
+        // stopped this analysis. The entry outlives the analysis: only
+        // requests and document changes replace it.
+        const unit: *const Unit = if (self.currentNavigation(roots)) |entry|
+            &entry.unit
+        else blk: {
+            const mm0_loaded = self.loadTextForUriPath(
                 arena,
-                proof_uri,
+                roots.mm0_uri,
+                mm0_path,
+            ) catch |err| return try self.publishTheoryUnreadable(
+                arena,
+                roots,
                 proof_version,
                 proof_text,
-                message,
+                err,
             );
-            const mm0_uri = try pathToUri(arena, mm0_path);
-            try self.clearDiagnostics(arena, mm0_uri, null);
-            return;
+            const built = try arena.create(Unit);
+            built.* = try self.buildUnit(
+                arena,
+                mm0_loaded,
+                mm0_path,
+                .{
+                    .uri = proof_uri,
+                    .text = proof_text,
+                    .version = proof_version,
+                    .mtime = null,
+                },
+                proof_path,
+            );
+            break :blk built;
         };
-
-        const unit = try self.buildUnit(
-            arena,
-            mm0_loaded,
-            mm0_path,
-            .{
-                .uri = proof_uri,
-                .text = proof_text,
-                .version = proof_version,
-                .mtime = null,
-            },
-            proof_path,
-        );
         const states = try unit.states(arena);
-        try self.recordUnitFiles(arena, proof_uri, &unit);
+        try self.recordUnitFiles(arena, proof_uri, unit);
 
         // One status diagnostic per search placeholder (warning until searched,
         // then info/error from the recorded outcome), published together with
@@ -2101,7 +2112,7 @@ pub const Handler = struct {
         // per document, so they must go out in the same payload.
         const search_diagnostics = try self.searchStatusDiagnostics(
             arena,
-            &unit,
+            unit,
             states,
         );
 
@@ -2121,7 +2132,7 @@ pub const Handler = struct {
         var holes_owned = true;
         defer if (holes_owned) holes.deinit();
         compiler.hole_inference_sink = &holes;
-        compiler.check_memo = self.checkMemoFor(mm0_loaded.uri);
+        compiler.check_memo = self.checkMemoFor(roots.mm0_uri);
         compiler.interrupt = self.interrupt;
         const analyzed = compiler.analyze();
         // A stopped analysis saw part of the unit: what it found is neither
@@ -2130,13 +2141,13 @@ pub const Handler = struct {
             if (err == error.AnalysisInterrupted) return err;
         }
         holes_owned = false;
-        try self.keepAnalysisHoles(mm0_loaded.uri, states, holes);
+        try self.keepAnalysisHoles(roots.mm0_uri, states, holes);
         analyzed catch |err| {
             if (hasDiagnostics(&compiler)) {
                 try self.publishUnitDiagnostics(
                     arena,
                     proof_uri,
-                    &unit,
+                    unit,
                     compiler.primaryDiagnostics(),
                     compiler.warningDiagnostics(),
                     compiler.diagnostics.last_diagnostic,
@@ -2154,8 +2165,8 @@ pub const Handler = struct {
                 );
                 try self.clearDiagnostics(
                     arena,
-                    mm0_loaded.uri,
-                    mm0_loaded.version,
+                    roots.mm0_uri,
+                    unit.mm0.rootFile().version,
                 );
             }
             return;
@@ -2164,7 +2175,7 @@ pub const Handler = struct {
         try self.publishUnitDiagnostics(
             arena,
             proof_uri,
-            &unit,
+            unit,
             compiler.primaryDiagnostics(),
             compiler.warningDiagnostics(),
             null,
@@ -2172,6 +2183,40 @@ pub const Handler = struct {
             compiler.omittedPrimaryDiagnostic(.mm0),
             search_diagnostics,
         );
+    }
+
+    /// Report that the theory of the proof file at `roots` cannot be loaded.
+    fn publishTheoryUnreadable(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        roots: UnitRoots,
+        proof_version: i32,
+        proof_text: []const u8,
+        err: anyerror,
+    ) !void {
+        // A proof file without a theory of its own that some root
+        // includes: that root's analysis reports on it.
+        if (err == error.FileNotFound and self.isDependency(roots.proof_uri)) return;
+        const message = switch (err) {
+            error.FileNotFound => try mm0.allocDiagnosticMessage(
+                arena,
+                "proof_document_no_theory",
+                .{},
+            ),
+            else => try mm0.allocDiagnosticMessage(
+                arena,
+                "proof_document_theory_unreadable",
+                .{@errorName(err)},
+            ),
+        };
+        try self.publishMessageDiagnostic(
+            arena,
+            roots.proof_uri,
+            proof_version,
+            proof_text,
+            message,
+        );
+        try self.clearDiagnostics(arena, roots.mm0_uri, null);
     }
 
     /// The check memo, set for a run over the unit rooted at `mm0_uri`.
@@ -2319,15 +2364,6 @@ pub const Handler = struct {
         });
     }
 
-    fn loadTextPreferOpenDocument(
-        self: *Handler,
-        arena: std.mem.Allocator,
-        path: []const u8,
-    ) !LoadedText {
-        const uri = try pathToUri(arena, path);
-        return try self.loadTextForUriPath(arena, uri, path);
-    }
-
     fn loadTextForUriPath(
         self: *Handler,
         arena: std.mem.Allocator,
@@ -2353,14 +2389,13 @@ pub const Handler = struct {
     }
 
     /// The file at `path` as a unit file: an open document first (unsaved
-    /// edits count), else the disk copy unless `open_only`. Null when there
-    /// is neither. Text and names are copied into `arena`, so a unit never
-    /// aliases the document store.
+    /// edits count), else the disk copy. Null when there is neither. Text and
+    /// names are copied into `arena`, so a unit never aliases the document
+    /// store.
     fn resolveUnitFile(
         self: *Handler,
         arena: std.mem.Allocator,
         path: []const u8,
-        open_only: bool,
     ) !?UnitFile {
         const uri = try pathToUri(arena, path);
         if (self.docs.get(uri)) |doc| {
@@ -2372,7 +2407,6 @@ pub const Handler = struct {
                 .mtime = null,
             };
         }
-        if (open_only) return null;
         const disk = readFileWithMtimeAlloc(self.io, arena, path) catch |err| {
             // On wasm there is no disk; the read reports FileNotFound.
             if (err == error.OutOfMemory) return error.OutOfMemory;
@@ -2432,16 +2466,16 @@ pub const Handler = struct {
     ) !Unit {
         var loader = UnitLoader{ .handler = self, .arena = arena };
         const mm0_root = try unitFileFrom(arena, mm0_loaded, mm0_path);
-        try loader.put(mm0_root);
+        try loader.files.put(arena, mm0_root.path, mm0_root);
         var proof_root: ?UnitFile = null;
         var proof: Imports.ProofRoot = .none;
-        if (proof_loaded) |loaded| {
-            proof_root = try unitFileFrom(arena, loaded, proof_path.?);
-            try loader.put(proof_root.?);
-            proof = .{ .file = .{
-                .key = proof_root.?.path,
-                .text = proof_root.?.text,
-            } };
+        if (proof_path) |path| {
+            if (proof_loaded) |loaded| {
+                const file = try unitFileFrom(arena, loaded, path);
+                proof_root = file;
+                proof = .{ .file = .{ .key = file.path, .text = file.text } };
+            }
+            try loader.files.put(arena, try arena.dupe(u8, path), proof_root);
         }
         // `.degrade` reports join failures in `unit.failures`; the loader
         // only fails on running out of memory.
@@ -2471,6 +2505,7 @@ pub const Handler = struct {
                 .root = indexOfKey(joined, proof_root.?.path),
             } else null,
             .failures = try failures.toOwnedSlice(arena),
+            .lookups = try loader.lookups(),
         };
     }
 
@@ -2503,7 +2538,7 @@ pub const Handler = struct {
     ) !void {
         // The statement's file was loaded before its statements were
         // followed, so it is always on record.
-        const file = loader.files.get(info.file_key) orelse return;
+        const file = loader.found(info.file_key) orelse return;
         try failures.append(arena, .{
             .file = file,
             .span = .{ .start = info.span.start, .end = info.span.end },
@@ -2513,7 +2548,7 @@ pub const Handler = struct {
         // there: the degraded unit has only the root left, whose errors
         // would otherwise just be knock-on ones.
         const via = info.via orelse return;
-        const via_file = loader.files.get(via.file_key) orelse return;
+        const via_file = loader.found(via.file_key) orelse return;
         try failures.append(arena, .{
             .file = via_file,
             .span = .{ .start = via.span.start, .end = via.span.end },
@@ -2725,44 +2760,27 @@ pub const Handler = struct {
         return roots.items;
     }
 
-    /// The root `.mm0` (and its proof file, when there is one) a request on
-    /// `uri` navigates: the document itself for a `.mm0`, its sibling for a
-    /// `.auf`. Null when the root cannot be loaded.
-    fn rootDocumentsForUri(
-        self: *Handler,
-        arena: std.mem.Allocator,
-        uri: []const u8,
-    ) !?RootDocuments {
+    /// The root `.mm0` and the proof file beside it that a request on `uri`
+    /// navigates: the document itself and its sibling. Null for any other
+    /// document.
+    fn rootsForUri(arena: std.mem.Allocator, uri: []const u8) !?UnitRoots {
         const path = uriToPath(arena, uri) catch return null;
         switch (documentKind(path)) {
             .mm0 => {
-                const mm0_loaded = self.loadTextForUriPath(arena, uri, path) catch
-                    return null;
-                var docs: RootDocuments = .{
-                    .mm0 = mm0_loaded,
+                const proof_path = siblingPathForMm0(arena, path) catch return null;
+                return .{
+                    .mm0_uri = uri,
                     .mm0_path = path,
-                    .proof = null,
-                    .proof_path = null,
+                    .proof_uri = try pathToUri(arena, proof_path),
+                    .proof_path = proof_path,
                 };
-                if (siblingPathForMm0(arena, path)) |proof_path| {
-                    const proof_uri = try pathToUri(arena, proof_path);
-                    if (self.loadTextForUriPath(arena, proof_uri, proof_path)) |proof| {
-                        docs.proof = proof;
-                        docs.proof_path = proof_path;
-                    } else |_| {}
-                } else |_| {}
-                return docs;
             },
             .proof => {
-                const proof_loaded = self.loadTextForUriPath(arena, uri, path) catch
-                    return null;
                 const mm0_path = siblingPathForProof(arena, path) catch return null;
-                const mm0_loaded = self.loadTextPreferOpenDocument(arena, mm0_path) catch
-                    return null;
                 return .{
-                    .mm0 = mm0_loaded,
+                    .mm0_uri = try pathToUri(arena, mm0_path),
                     .mm0_path = mm0_path,
-                    .proof = proof_loaded,
+                    .proof_uri = uri,
                     .proof_path = path,
                 };
             },
@@ -2775,71 +2793,49 @@ pub const Handler = struct {
         arena: std.mem.Allocator,
         uri: []const u8,
     ) !?NavigationSnapshot {
-        if (try self.rootDocumentsForUri(arena, uri)) |docs| {
-            return try self.navigationSnapshotForRoot(arena, uri, docs);
+        if (try rootsForUri(arena, uri)) |roots| {
+            if (try self.navigationSnapshotForRoot(arena, uri, roots)) |nav| return nav;
         }
         // A library proof file without a theory of its own navigates
         // through a root that includes it.
-        const roots = try self.dependentRoots(arena, uri);
-        for (roots) |root| {
+        for (try self.dependentRoots(arena, uri)) |root| {
             if (std.mem.eql(u8, root, uri)) continue;
-            const docs = try self.rootDocumentsForUri(arena, root) orelse continue;
-            return try self.navigationSnapshotForRoot(arena, uri, docs);
+            const roots = try rootsForUri(arena, root) orelse continue;
+            return try self.navigationSnapshotForRoot(arena, uri, roots) orelse continue;
         }
         return null;
     }
 
-    /// The cached index over the unit rooted at `docs`, rebuilt when any
-    /// file of the unit changed, viewed from `request_uri`.
+    /// The navigation entry for the unit at `roots`, if every file its join
+    /// looked up is as the join found it.
+    fn currentNavigation(self: *const Handler, roots: UnitRoots) ?*NavigationCacheEntry {
+        const entry = self.nav_cache.getPtr(roots.mm0_uri) orelse return null;
+        if (!std.mem.eql(u8, entry.proof_uri, roots.proof_uri)) return null;
+        for (entry.unit.lookups) |lookup| {
+            if (!self.lookupCurrent(lookup)) return null;
+        }
+        return entry;
+    }
+
+    /// Opening, changing or closing a document drops every entry that looked
+    /// it up (`invalidateCachesForUri`), so only what was read from disk is
+    /// checked here.
+    fn lookupCurrent(self: *const Handler, lookup: UnitLookup) bool {
+        const state = lookup.state;
+        return state.version != null or
+            state.mtime == fileMtime(self.io, lookup.path);
+    }
+
+    /// The cached index over the unit at `roots`, rebuilt when a file of the
+    /// unit changed, viewed from `request_uri`.
     fn navigationSnapshotForRoot(
         self: *Handler,
         arena: std.mem.Allocator,
         request_uri: []const u8,
-        docs: RootDocuments,
+        roots: UnitRoots,
     ) !?NavigationSnapshot {
-        var unit_arena = ArenaAllocator.init(self.allocator);
-        var keep_arena = false;
-        defer if (!keep_arena) unit_arena.deinit();
-
-        const unit = try self.buildUnit(
-            unit_arena.allocator(),
-            docs.mm0,
-            docs.mm0_path,
-            docs.proof,
-            docs.proof_path,
-        );
-        const states = try unit.states(arena);
-        const mm0_uri = docs.mm0.uri;
-
-        const entry: *NavigationCacheEntry = blk: {
-            if (self.nav_cache.getPtr(mm0_uri)) |entry| {
-                if (entry.key.eql(states)) break :blk entry;
-            }
-            self.removeNavigationCacheByMm0Uri(mm0_uri);
-
-            var snapshot = try LspIndex.Snapshot.build(self.allocator, .{
-                .mm0_uri = mm0_uri,
-                .mm0_text = unit.mm0.joined.text,
-                .proof_uri = if (unit.proof) |proof| proof.rootFile().uri else null,
-                .proof_text = if (unit.proof) |proof| proof.joined.text else null,
-                .check_memo = self.checkMemoFor(mm0_uri),
-            });
-            errdefer snapshot.deinit();
-            var key = try UnitKey.init(self.allocator, states);
-            errdefer key.deinit(self.allocator);
-            const owned_uri = try self.allocator.dupe(u8, mm0_uri);
-            errdefer self.allocator.free(owned_uri);
-            try self.nav_cache.put(self.allocator, owned_uri, .{
-                .uri = owned_uri,
-                .key = key,
-                .unit_arena = unit_arena,
-                .unit = unit,
-                .snapshot = snapshot,
-            });
-            keep_arena = true;
-            break :blk self.nav_cache.getPtr(owned_uri).?;
-        };
-
+        const entry = self.currentNavigation(roots) orelse
+            try self.buildNavigation(arena, roots) orelse return null;
         if (self.requestCancelled()) return error.RequestCancelled;
         const found = entry.unit.find(request_uri) orelse return null;
         return .{
@@ -2848,6 +2844,51 @@ pub const Handler = struct {
             .document = found.document,
             .file_index = found.file_index,
         };
+    }
+
+    /// Index the unit at `roots` anew. Null when its `.mm0` cannot be loaded.
+    fn buildNavigation(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        roots: UnitRoots,
+    ) !?*NavigationCacheEntry {
+        const mm0_loaded = self.loadTextForUriPath(arena, roots.mm0_uri, roots.mm0_path) catch
+            return null;
+        const proof_loaded = self.loadTextForUriPath(
+            arena,
+            roots.proof_uri,
+            roots.proof_path,
+        ) catch null;
+        self.removeNavigationCacheByMm0Uri(roots.mm0_uri);
+
+        var unit_arena = ArenaAllocator.init(self.allocator);
+        errdefer unit_arena.deinit();
+        const unit = try self.buildUnit(
+            unit_arena.allocator(),
+            mm0_loaded,
+            roots.mm0_path,
+            proof_loaded,
+            roots.proof_path,
+        );
+        const proof_uri = try unit_arena.allocator().dupe(u8, roots.proof_uri);
+        var snapshot = try LspIndex.Snapshot.build(self.allocator, .{
+            .mm0_uri = roots.mm0_uri,
+            .mm0_text = unit.mm0.joined.text,
+            .proof_uri = if (unit.proof) |proof| proof.rootFile().uri else null,
+            .proof_text = if (unit.proof) |proof| proof.joined.text else null,
+            .check_memo = self.checkMemoFor(roots.mm0_uri),
+        });
+        errdefer snapshot.deinit();
+        const owned_uri = try self.allocator.dupe(u8, roots.mm0_uri);
+        errdefer self.allocator.free(owned_uri);
+        try self.nav_cache.put(self.allocator, owned_uri, .{
+            .uri = owned_uri,
+            .proof_uri = proof_uri,
+            .unit_arena = unit_arena,
+            .unit = unit,
+            .snapshot = snapshot,
+        });
+        return self.nav_cache.getPtr(owned_uri).?;
     }
 
     fn removeNavigationCacheByMm0Uri(
@@ -2964,46 +3005,60 @@ pub const Handler = struct {
     }
 };
 
-const RootDocuments = struct {
-    mm0: LoadedText,
+/// A root `.mm0` and the proof file beside it, whether or not they exist.
+const UnitRoots = struct {
+    mm0_uri: []const u8,
     mm0_path: []const u8,
-    proof: ?LoadedText,
-    proof_path: ?[]const u8,
+    proof_uri: []const u8,
+    proof_path: []const u8,
 };
 
 /// Resolves imports and includes for `Handler.buildUnit`: a spec is joined
 /// to the importing file's directory and normalised lexically, then looked
-/// up as an open document or read from disk. Every file loaded is kept
-/// under its path so the unit can list them afterwards.
+/// up as an open document or read from disk. `files` keeps every answer under
+/// its path, null where there was no file, so a unit sees one state of each
+/// and can list them afterwards.
 const UnitLoader = struct {
     handler: *Handler,
     arena: std.mem.Allocator,
-    files: std.StringHashMapUnmanaged(UnitFile) = .empty,
+    files: std.StringArrayHashMapUnmanaged(?UnitFile) = .empty,
 
     fn resolver(self: *UnitLoader) Imports.Resolver {
         return .{ .ctx = @ptrCast(self), .resolveFn = resolveFn };
     }
 
-    fn put(self: *UnitLoader, file: UnitFile) !void {
-        try self.files.put(self.arena, file.path, file);
+    fn load(self: *UnitLoader, path: []const u8) !?UnitFile {
+        if (self.files.get(path)) |known| return known;
+        const file = try self.handler.resolveUnitFile(self.arena, path);
+        try self.files.put(self.arena, path, file);
+        return file;
     }
 
-    fn load(self: *UnitLoader, path: []const u8, open_only: bool) !?UnitFile {
-        if (self.files.get(path)) |file| return file;
-        const file = try self.handler.resolveUnitFile(
-            self.arena,
-            path,
-            open_only,
-        ) orelse return null;
-        try self.put(file);
-        return file;
+    /// The file loaded from `path`, if it was.
+    fn found(self: *const UnitLoader, path: []const u8) ?UnitFile {
+        return self.files.get(path) orelse null;
+    }
+
+    fn lookups(self: *const UnitLoader) ![]const UnitLookup {
+        const out = try self.arena.alloc(UnitLookup, self.files.count());
+        for (out, self.files.keys(), self.files.values()) |*lookup, path, entry| {
+            lookup.* = .{
+                .path = path,
+                .state = if (entry) |file| file.state() else .{
+                    .uri = try pathToUri(self.arena, path),
+                    .version = null,
+                    .mtime = null,
+                },
+            };
+        }
+        return out;
     }
 
     /// The unit files behind a join, parallel to `joined.files`.
     fn filesFor(self: *UnitLoader, joined: Imports.Joined) ![]const UnitFile {
         const out = try self.arena.alloc(UnitFile, joined.files.len);
         for (joined.files, 0..) |file, index| {
-            out[index] = self.files.get(file.key).?;
+            out[index] = self.found(file.key).?;
         }
         return out;
     }
@@ -3016,7 +3071,7 @@ const UnitLoader = struct {
     ) anyerror!Imports.Resolved {
         const self: *UnitLoader = @ptrCast(@alignCast(ctx));
         const path = try resolveSpecPath(allocator, from_key, spec);
-        const file = try self.load(path, false) orelse return error.FileNotFound;
+        const file = try self.load(path) orelse return error.FileNotFound;
         return .{ .key = file.path, .text = file.text };
     }
 };
@@ -3130,14 +3185,23 @@ fn readFileWithMtimeAlloc(
     const stat = try file.stat(io);
     var buffer: [4096]u8 = undefined;
     var reader = file.reader(io, &buffer);
-    const text = reader.interface.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
+    // The extra byte is for the read that finds the end.
+    var text = try std.ArrayList(u8).initCapacity(allocator, @intCast(stat.size + 1));
+    errdefer text.deinit(allocator);
+    reader.interface.appendRemaining(allocator, &text, .unlimited) catch |err| switch (err) {
         error.ReadFailed => return reader.err.?,
         else => |e| return e,
     };
     return .{
-        .text = text,
+        .text = try text.toOwnedSlice(allocator),
         .mtime = stat.mtime.nanoseconds,
     };
+}
+
+/// The mtime of the file at `path`; null when there is none.
+fn fileMtime(io: std.Io, path: []const u8) ?i128 {
+    const stat = std.Io.Dir.cwd().statFile(io, path, .{}) catch return null;
+    return stat.mtime.nanoseconds;
 }
 
 /// Can `path` be opened for reading? Checked without reading the contents.
