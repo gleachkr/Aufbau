@@ -36,6 +36,36 @@ fn analyzeDumpStopping(
     unknowns_sink: bool,
     interrupt: ?mm0.AnalysisInterrupt,
 ) ![]u8 {
+    return analyzeDumpWith(allocator, mm0_text, proof_text, .{
+        .memo = memo,
+        .unknowns_sink = unknowns_sink,
+        .interrupt = interrupt,
+    });
+}
+
+const DumpOptions = struct {
+    memo: ?*CheckMemo = null,
+    unknowns_sink: bool = false,
+    interrupt: ?mm0.AnalysisInterrupt = null,
+    scope: ?*mm0.CheckScope = null,
+    /// Dump only what lies in this scope's spans of the proof text, and
+    /// what lies in the theory: no `last` or `dropped` line.
+    only: ?*const mm0.CheckScope = null,
+
+    fn dumps(self: DumpOptions, source: mm0.CompilerDiagnosticSource, span: ?ProofScript.Span) bool {
+        const only = self.only orelse return true;
+        if (source != .proof) return true;
+        const actual = span orelse return true;
+        return only.covers(actual.start);
+    }
+};
+
+fn analyzeDumpWith(
+    allocator: std.mem.Allocator,
+    mm0_text: []const u8,
+    proof_text: []const u8,
+    options: DumpOptions,
+) ![]u8 {
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -45,9 +75,10 @@ fn analyzeDumpStopping(
     var compiler = Compiler.initWithProof(arena, mm0_text, proof_text);
     compiler.allow_search_placeholders = true;
     compiler.hole_inference_sink = &holes;
-    if (unknowns_sink) compiler.unknown_value_sink = &unknowns;
-    compiler.check_memo = memo;
-    compiler.interrupt = interrupt;
+    if (options.unknowns_sink) compiler.unknown_value_sink = &unknowns;
+    compiler.check_memo = options.memo;
+    compiler.interrupt = options.interrupt;
+    compiler.check_scope = options.scope;
 
     var out: std.Io.Writer.Allocating = .init(arena);
     const writer = &out.writer;
@@ -58,24 +89,29 @@ fn analyzeDumpStopping(
         try writer.print("result: {s}\n", .{@errorName(err)});
     }
     for (compiler.primaryDiagnostics()) |diag| {
+        if (!options.dumps(diag.source, diag.span)) continue;
         try writer.writeAll("primary ");
         try dumpDiagnostic(writer, diag);
     }
     for (compiler.warningDiagnostics()) |diag| {
+        if (!options.dumps(diag.source, diag.span)) continue;
         try writer.writeAll("warning ");
         try dumpDiagnostic(writer, diag);
     }
-    if (compiler.diagnostics.last_diagnostic) |diag| {
-        try writer.writeAll("last ");
-        try dumpDiagnostic(writer, diag);
+    if (options.only == null) {
+        if (compiler.diagnostics.last_diagnostic) |diag| {
+            try writer.writeAll("last ");
+            try dumpDiagnostic(writer, diag);
+        }
+        try writer.print("dropped {d} {d} {d} {d}\n", .{
+            compiler.diagnostics.dropped_primary_diagnostic_count,
+            compiler.diagnostics.dropped_mm0_primary_diagnostic_count,
+            compiler.diagnostics.dropped_proof_primary_diagnostic_count,
+            compiler.diagnostics.dropped_warning_count,
+        });
     }
-    try writer.print("dropped {d} {d} {d} {d}\n", .{
-        compiler.diagnostics.dropped_primary_diagnostic_count,
-        compiler.diagnostics.dropped_mm0_primary_diagnostic_count,
-        compiler.diagnostics.dropped_proof_primary_diagnostic_count,
-        compiler.diagnostics.dropped_warning_count,
-    });
     for (holes.items.items) |hole| {
+        if (!options.dumps(.proof, hole.span)) continue;
         try writer.print("hole {d}-{d} {s}\n", .{
             hole.span.start,
             hole.span.end,
@@ -83,6 +119,7 @@ fn analyzeDumpStopping(
         });
     }
     for (holes.assertions.items) |filled| {
+        if (!options.dumps(.proof, filled.line)) continue;
         try writer.print("filled {d}-{d} {d}-{d} {s}\n", .{
             filled.line.start,
             filled.line.end,
@@ -520,6 +557,71 @@ test "an analysis stopped at every proof ends as one that ran through" {
         all_stops += stops;
     }
     try std.testing.expect(all_stops > 1000);
+}
+
+test "an analysis that checks some proofs first ends as one that checked them all" {
+    const allocator = std.testing.allocator;
+    const stems = try fixtureStems(allocator);
+    defer {
+        for (stems) |stem| allocator.free(stem);
+        allocator.free(stems);
+    }
+    var all_skipped: usize = 0;
+    for (stems) |stem| {
+        var arena_state = std.heap.ArenaAllocator.init(allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        const mm0_path = try std.fmt.allocPrint(arena, "tests/proof_cases/{s}.mm0", .{stem});
+        const proof_path = try std.fmt.allocPrint(arena, "tests/proof_cases/{s}.auf", .{stem});
+        var failure: ?mm0.Imports.LoadFailure = null;
+        const pair = mm0.Imports.loadPair(std.testing.io, arena, mm0_path, proof_path, &failure) catch continue;
+        const proof_text = (pair.proof orelse continue).text;
+
+        const through = try analyzeDump(arena, pair.mm0.text, proof_text, null, false);
+        var cold = CheckMemo.init(allocator);
+        defer cold.deinit();
+        _ = try analyzeDump(arena, pair.mm0.text, proof_text, &cold, false);
+        // The open file is the second half of the proof text (a root after
+        // its includes) or the first (an open library file), split between
+        // two blocks as files are.
+        const blocks = try proofBlocks(arena, proof_text);
+        if (blocks.len < 2) continue;
+        const middle = blocks[blocks.len / 2].span.start;
+        const halves = [_]ProofScript.Span{
+            .{ .start = middle, .end = proof_text.len },
+            .{ .start = 0, .end = middle },
+        };
+        for (halves) |half| {
+            var scope: mm0.CheckScope = .{ .spans = &.{half} };
+            var memo = CheckMemo.init(allocator);
+            defer memo.deinit();
+            // What lies in the scope is what checking every proof finds there.
+            const first = try analyzeDumpWith(arena, pair.mm0.text, proof_text, .{
+                .memo = &memo,
+                .scope = &scope,
+                .only = &scope,
+            });
+            const expected = try analyzeDumpWith(arena, pair.mm0.text, proof_text, .{
+                .only = &scope,
+            });
+            try std.testing.expectEqualStrings(expected, first);
+            all_skipped += scope.skipped;
+            // Then the rest: all of it as if checked at once.
+            const rest = try analyzeDump(arena, pair.mm0.text, proof_text, &memo, false);
+            try std.testing.expectEqualStrings(through, rest);
+            try std.testing.expectEqual(cold.entries.count(), memo.entries.count());
+            // And the next first pass replays every proof it leaves out.
+            var again: mm0.CheckScope = .{ .spans = &.{half} };
+            const replayed = try analyzeDumpWith(arena, pair.mm0.text, proof_text, .{
+                .memo = &memo,
+                .scope = &again,
+                .only = &again,
+            });
+            try std.testing.expectEqualStrings(expected, replayed);
+            try std.testing.expectEqual(@as(usize, 0), again.skipped);
+        }
+    }
+    try std.testing.expect(all_skipped > 1000);
 }
 
 fn alwaysStop(_: *anyopaque) bool {

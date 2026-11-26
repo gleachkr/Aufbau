@@ -142,6 +142,13 @@ This file records notable user-facing changes to Aufbau. The project follows
 - A request no longer reads and joins a file's imports again when none of them
   has changed, nor does a check that a request stopped. In the last file of a
   126 MB library, a second hover took 51 ms and now takes 0.3 ms.
+- `abc lsp` checks the proofs of the open files first and publishes their
+  diagnostics, then checks the libraries they import. A library's
+  diagnostics stay as they were until its proofs are checked again. Opening
+  the last file of a 126 MB library showed its diagnostics after 37 s, and
+  now after 1.5 s; the whole check takes 0.5 s longer. With a client that
+  shows work-done progress, a check that runs longer than a second reports
+  the file it is in and how much of the proof text it has done.
 
 ### Fixed
 

@@ -370,6 +370,36 @@ pub const AnalysisInterrupt = struct {
     }
 };
 
+/// The proofs an analysis checks, when it is not all of them: an editor host
+/// checks the files on screen first. A proof starting outside `spans` is
+/// left unchecked, and counted, unless the check memo replays it; the
+/// theorem or lemma stays in scope either way, as after a failed proof.
+pub const CheckScope = struct {
+    /// Spans of the proof text, in order and disjoint.
+    spans: []const Span,
+    /// The proofs left unchecked so far.
+    skipped: usize = 0,
+
+    pub fn covers(self: *const CheckScope, offset: usize) bool {
+        for (self.spans) |span| {
+            if (offset < span.start) return false;
+            if (offset < span.end) return true;
+        }
+        return false;
+    }
+};
+
+/// An editor host's view of a running analysis: told where each proof it
+/// is about to check (not replay from the memo) starts in the proof text.
+pub const AnalysisProgress = struct {
+    context: *anyopaque,
+    checkingFn: *const fn (context: *anyopaque, proof_offset: usize) void,
+
+    pub fn checking(self: AnalysisProgress, proof_offset: usize) void {
+        self.checkingFn(self.context, proof_offset);
+    }
+};
+
 pub const CompilerContext = struct {
     source: []const u8,
     proof_source: ?[]const u8,
@@ -402,6 +432,10 @@ pub const CompilerContext = struct {
     /// Asked between the proofs of an analysis with an active check memo;
     /// null runs to the end. See `AnalysisInterrupt`.
     interrupt: ?AnalysisInterrupt = null,
+    /// Null checks every proof. See `CheckScope`.
+    check_scope: ?*CheckScope = null,
+    /// Null reports nothing. See `AnalysisProgress`.
+    progress: ?AnalysisProgress = null,
     /// The per-theorem arena: a theorem's check and its proof's emission
     /// allocate here, and it is reset once the theorem is done (its MMB
     /// records copied out, or its failure recorded), so a run holds the

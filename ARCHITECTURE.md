@@ -1420,7 +1420,17 @@ nothing is queued. No request waits for it. A running analysis asks the
 queue, after each proof it had to check, whether to stop: for an edit or for
 a request. A stopped run publishes nothing and drops no memo entry, and the
 next one replays what it checked. A request whose `$/cancelRequest` is
-already queued is answered `RequestCancelled` without running. The
+already queued is answered `RequestCancelled` without running. A root's
+first run checks only the proofs of the files on screen, the root and the
+open library files that report through it (`CheckScope`), and publishes on
+those. A proof it leaves out leaves its theorem in scope, as a failed one
+does, so what it finds in those files is what a full run finds there. Every
+pending root gets that
+run before any root's full run. A file the first run leaves out keeps its
+diagnostics until the full run replaces them. With a client that shows
+work-done progress, a check that has run a second shows `$/progress`: the
+file being checked and the share of the proof text done, ended when the
+check is done, its document closed, or an edit starts it over. The
 freestanding WASM entry
 reuses the handler with the compatibility transport and analyses each edit
 at once. `web/packages/lsp/` offers a directly called server and a browser

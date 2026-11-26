@@ -37,6 +37,7 @@ const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
 const CompilerLints = @import("../lints.zig");
 const TheoryState = @import("../theory_state.zig").TheoryState;
+const CheckMemo = @import("../check_memo.zig").CheckMemo;
 const Diagnostic = CompilerDiag.Diagnostic;
 const DiagnosticSource = CompilerDiag.DiagnosticSource;
 
@@ -1227,7 +1228,8 @@ fn releaseTheoremScratch(self: *const CompilerContext) void {
 /// (`CompilerContext.check_memo`), a hit replays the recorded outcome and
 /// output, without the theorem being built or the block's lines parsed; a
 /// check that ran is followed by a look at the interrupt, whose
-/// `AnalysisInterrupted` is the run's, not the block's.
+/// `AnalysisInterrupted` is the run's, not the block's. A block the memo
+/// does not replay and the check scope leaves out passes unchecked.
 pub fn analyzeBlock(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
@@ -1238,24 +1240,34 @@ pub fn analyzeBlock(
     const scratch = theoremAllocator(self, allocator);
     defer releaseTheoremScratch(self);
 
-    const memo = self.check_memo orelse
-        return checkUnmemoized(self, scratch, theory, assertion, block);
-    if (!memo.active) {
-        return checkUnmemoized(self, scratch, theory, assertion, block);
+    const memo: ?*CheckMemo = if (self.check_memo) |found|
+        if (found.active) found else null
+    else
+        null;
+    // Keyed whether or not it is checked: the fingerprint runs on.
+    var key: CheckMemo.Key = undefined;
+    if (memo) |active| {
+        const mm0_pos = theory.parser.core.pos;
+        key = active.keyForBlock(self.source, mm0_pos, self.proof_source.?, block);
+        if (active.find(key, block, &theory.rule_catalog, mm0_pos)) |entry| {
+            try entry.replay(self, block.span.start);
+            if (entry.outcome) |err| return err;
+            return;
+        }
     }
-    const proof = self.proof_source.?;
-    const mm0_pos = theory.parser.core.pos;
-    const key = memo.keyForBlock(self.source, mm0_pos, proof, block);
-    if (memo.find(key, block, &theory.rule_catalog, mm0_pos)) |entry| {
-        try entry.replay(self, block.span.start);
-        if (entry.outcome) |err| return err;
+    if (self.check_scope) |scope| if (!scope.covers(block.span.start)) {
+        scope.skipped += 1;
         return;
-    }
+    };
+    if (self.progress) |progress| progress.checking(block.span.start);
+    const active = memo orelse
+        return checkUnmemoized(self, scratch, theory, assertion, block);
+    const proof = self.proof_source.?;
     const parsed = try block.withLines(allocator, proof);
-    const recording = memo.beginRecording(self);
+    const recording = active.beginRecording(self);
     const outcome: ?anyerror =
         if (checkUnmemoized(self, scratch, theory, assertion, parsed)) null else |err| err;
-    memo.finishRecording(self, recording, key, outcome, proof, parsed);
+    active.finishRecording(self, recording, key, outcome, proof, parsed);
     if (self.interrupt) |interrupt| {
         if (interrupt.stopRequested()) return error.AnalysisInterrupted;
     }

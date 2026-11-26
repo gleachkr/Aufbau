@@ -449,6 +449,32 @@ const NavigationSnapshot = struct {
     }
 };
 
+/// A root whose diagnostics are out of date (`Handler.pending`).
+const PendingAnalysis = struct {
+    /// The proofs of its open files are checked and their diagnostics
+    /// published (`Handler.analyzeProofDocument`): the check of the rest is
+    /// left.
+    own_checked: bool = false,
+    /// When its analysis first ran (`std.Io.Clock.awake`).
+    started: ?i96 = null,
+    /// The progress shown for its check, once that has run long enough.
+    progress: ?ShownProgress = null,
+};
+
+const ShownProgress = struct {
+    token: i32,
+    /// The last percentage sent.
+    percentage: u32,
+};
+
+/// What `Handler.analyzeUri` got through.
+const AnalysisOutcome = enum {
+    /// The whole unit: its diagnostics are up to date.
+    checked,
+    /// The proofs of the open files only, whose diagnostics are published.
+    own_checked,
+};
+
 /// The holes found by an analysis of a unit in the states `key` names.
 const AnalysisHoles = struct {
     key: UnitKey,
@@ -704,8 +730,8 @@ pub const Handler = struct {
     /// each root's last analysis used.
     check_memo: mm0.CheckMemo,
     /// The documents whose diagnostics are out of date, by the URI whose
-    /// analysis covers them, in the order they changed (owned).
-    pending: std.StringArrayHashMapUnmanaged(void),
+    /// analysis covers them, in the order they last changed (owned).
+    pending: std.StringArrayHashMapUnmanaged(PendingAnalysis),
     /// Set by the native server (`lsp_input.zig`): a changed document is
     /// analysed once no input is waiting, and the analysis stops when this
     /// says so. Null analyses each change as it arrives (the browser host,
@@ -718,6 +744,13 @@ pub const Handler = struct {
     show_document_support: bool,
     /// The id of the last request this server sent the client.
     last_request_id: i64,
+    /// Whether the client shows progress the server starts
+    /// (`window.workDoneProgress`).
+    progress_support: bool,
+    /// The last progress token this server made.
+    last_progress_token: i32,
+    /// How long a check runs before its progress shows.
+    progress_delay_ns: i96,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -741,6 +774,9 @@ pub const Handler = struct {
             .snippet_support = false,
             .show_document_support = false,
             .last_request_id = 0,
+            .progress_support = false,
+            .last_progress_token = 0,
+            .progress_delay_ns = std.time.ns_per_s,
         };
     }
 
@@ -808,6 +844,7 @@ pub const Handler = struct {
 
         self.snippet_support = clientSupportsSnippets(request.capabilities);
         self.show_document_support = clientSupportsShowDocument(request.capabilities);
+        self.progress_support = clientSupportsWorkDoneProgress(request.capabilities);
 
         const supports_hierarchical_document_symbols =
             clientSupportsHierarchicalDocumentSymbols(request.capabilities);
@@ -963,7 +1000,7 @@ pub const Handler = struct {
     ) !void {
         const uri = params.textDocument.uri;
         self.invalidateCachesForUri(arena, uri);
-        self.dropPending(uri);
+        try self.dropPending(uri);
         try self.removeDocument(uri);
         try self.clearDiagnostics(arena, uri, null);
         try self.forgetUnit(arena, uri);
@@ -1801,8 +1838,9 @@ pub const Handler = struct {
         self: *Handler,
         arena: std.mem.Allocator,
         uri: []const u8,
-    ) !void {
-        const doc = self.docs.get(uri) orelse return;
+        pending: *PendingAnalysis,
+    ) !AnalysisOutcome {
+        const doc = self.docs.get(uri) orelse return .checked;
         const path = uriToPath(arena, uri) catch |err| {
             try self.publishMessageDiagnostic(
                 arena,
@@ -1828,25 +1866,30 @@ pub const Handler = struct {
                     else => mm0.compilerErrorSummary(err),
                 },
             );
-            return;
+            return .checked;
         };
 
         switch (documentKind(path)) {
-            .mm0 => try self.analyzeMm0Document(
+            .mm0 => return self.analyzeMm0Document(
                 arena,
                 uri,
                 doc.version,
                 doc.text,
                 path,
+                pending,
             ),
-            .proof => try self.analyzeProofDocument(
+            .proof => return self.analyzeProofDocument(
                 arena,
                 uri,
                 doc.version,
                 doc.text,
                 path,
+                pending,
             ),
-            .other => try self.clearDiagnostics(arena, uri, doc.version),
+            .other => {
+                try self.clearDiagnostics(arena, uri, doc.version);
+                return .checked;
+            },
         }
     }
 
@@ -1876,13 +1919,13 @@ pub const Handler = struct {
         uri: []const u8,
     ) !void {
         const key = try self.analysisUri(arena, uri);
-        if (!self.pending.contains(key)) {
-            const owned = try self.allocator.dupe(u8, key);
-            errdefer self.allocator.free(owned);
-            try self.pending.put(self.allocator, owned, {});
-        }
+        // A change starts its check over, behind those still pending.
+        try self.dropPending(key);
+        const owned = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(owned);
+        try self.pending.put(self.allocator, owned, .{});
         // A proof file's analysis covers its `.mm0`.
-        if (try self.siblingMm0Uri(arena, key)) |mm0_uri| self.dropPending(mm0_uri);
+        if (try self.siblingMm0Uri(arena, key)) |mm0_uri| try self.dropPending(mm0_uri);
         if (self.interrupt == null) try self.analyzePending();
     }
 
@@ -1916,23 +1959,49 @@ pub const Handler = struct {
         return self.pending.count() != 0;
     }
 
-    /// Analyse the pending documents in the order they changed. One the
+    /// Analyse the pending documents in the order they changed: first the
+    /// proofs of the open files of each, then the rest of each. One the
     /// interrupt stops stays pending, with those after it.
     pub fn analyzePending(self: *Handler) !void {
-        while (self.pending.count() != 0) try self.analyzeFirstPending();
+        while (self.nextPending()) |index| try self.analyzePendingAt(index);
     }
 
-    fn analyzeFirstPending(self: *Handler) !void {
+    fn nextPending(self: *const Handler) ?usize {
+        if (self.pending.count() == 0) return null;
+        for (self.pending.values(), 0..) |entry, index| {
+            if (!entry.own_checked) return index;
+        }
+        return 0;
+    }
+
+    fn analyzePendingAt(self: *Handler, index: usize) !void {
         var arena_state = ArenaAllocator.init(self.allocator);
         defer arena_state.deinit();
-        const uri = self.pending.keys()[0];
-        const analyzed = self.analyzeUri(arena_state.allocator(), uri);
-        if (analyzed) |_| {} else |err| {
-            if (err == error.AnalysisInterrupted) return err;
+        const entry = &self.pending.values()[index];
+        if (self.showsProgress() and entry.started == null) entry.started = self.now();
+        const outcome = self.analyzeUri(
+            arena_state.allocator(),
+            self.pending.keys()[index],
+            entry,
+        ) catch |err| {
+            if (err != error.AnalysisInterrupted) try self.removePendingAt(index);
+            return err;
+        };
+        switch (outcome) {
+            .own_checked => entry.own_checked = true,
+            .checked => try self.removePendingAt(index),
         }
-        self.pending.orderedRemoveAt(0);
-        self.allocator.free(uri);
-        return analyzed;
+    }
+
+    /// Whether checks show their progress: the client shows what the server
+    /// starts, and the native server's output reaches it as it goes (the
+    /// browser host's waits for the message to be handled).
+    fn showsProgress(self: *const Handler) bool {
+        return self.progress_support and self.interrupt != null;
+    }
+
+    fn now(self: *const Handler) i96 {
+        return std.Io.Clock.awake.now(self.io).nanoseconds;
     }
 
     /// The holes the last analysis of `nav`'s unit found, if it saw these
@@ -1964,9 +2033,15 @@ pub const Handler = struct {
         return found;
     }
 
-    fn dropPending(self: *Handler, uri: []const u8) void {
-        const removed = self.pending.fetchOrderedRemove(uri) orelse return;
-        self.allocator.free(removed.key);
+    fn dropPending(self: *Handler, uri: []const u8) !void {
+        try self.removePendingAt(self.pending.getIndex(uri) orelse return);
+    }
+
+    fn removePendingAt(self: *Handler, index: usize) !void {
+        const pending = self.pending.values()[index];
+        self.allocator.free(self.pending.keys()[index]);
+        self.pending.orderedRemoveAt(index);
+        try self.endProgress(pending);
     }
 
     /// Whether the client cancelled the request being answered.
@@ -1982,18 +2057,19 @@ pub const Handler = struct {
         version: i32,
         text: []const u8,
         path: []const u8,
-    ) !void {
+        pending: *PendingAnalysis,
+    ) !AnalysisOutcome {
         if (siblingPathForMm0(arena, path)) |proof_path| {
             const proof_uri = try pathToUri(arena, proof_path);
             if (self.docs.get(proof_uri)) |proof_doc| {
-                try self.analyzeProofDocument(
+                return self.analyzeProofDocument(
                     arena,
                     proof_uri,
                     proof_doc.version,
                     proof_doc.text,
                     proof_path,
+                    pending,
                 );
-                return;
             }
         } else |_| {}
 
@@ -2012,6 +2088,7 @@ pub const Handler = struct {
                     arena,
                     uri,
                     &unit,
+                    .checked,
                     compiler.primaryDiagnostics(),
                     compiler.warningDiagnostics(),
                     compiler.diagnostics.last_diagnostic,
@@ -2028,12 +2105,13 @@ pub const Handler = struct {
                     @errorName(err),
                 );
             }
-            return;
+            return .checked;
         };
         try self.publishUnitDiagnostics(
             arena,
             uri,
             &unit,
+            .checked,
             compiler.primaryDiagnostics(),
             compiler.warningDiagnostics(),
             null,
@@ -2041,6 +2119,7 @@ pub const Handler = struct {
             compiler.omittedPrimaryDiagnostic(.mm0),
             &.{},
         );
+        return .checked;
     }
 
     fn analyzeProofDocument(
@@ -2050,7 +2129,8 @@ pub const Handler = struct {
         proof_version: i32,
         proof_text: []const u8,
         proof_path: []const u8,
-    ) !void {
+        pending: *PendingAnalysis,
+    ) !AnalysisOutcome {
         const mm0_path = siblingPathForProof(arena, proof_path) catch {
             try self.publishMessageDiagnostic(
                 arena,
@@ -2063,7 +2143,7 @@ pub const Handler = struct {
                     .{},
                 ),
             );
-            return;
+            return .checked;
         };
         const roots: UnitRoots = .{
             .mm0_uri = try pathToUri(arena, mm0_path),
@@ -2081,13 +2161,16 @@ pub const Handler = struct {
                 arena,
                 roots.mm0_uri,
                 mm0_path,
-            ) catch |err| return try self.publishTheoryUnreadable(
-                arena,
-                roots,
-                proof_version,
-                proof_text,
-                err,
-            );
+            ) catch |err| {
+                try self.publishTheoryUnreadable(
+                    arena,
+                    roots,
+                    proof_version,
+                    proof_text,
+                    err,
+                );
+                return .checked;
+            };
             const built = try arena.create(Unit);
             built.* = try self.buildUnit(
                 arena,
@@ -2134,12 +2217,33 @@ pub const Handler = struct {
         compiler.hole_inference_sink = &holes;
         compiler.check_memo = self.checkMemoFor(roots.mm0_uri);
         compiler.interrupt = self.interrupt;
+        // The editor shows the open files, so their proofs are checked first
+        // and their diagnostics published, then the rest. Without an
+        // interrupt nothing could come between the two, so all is checked
+        // at once.
+        const own: []const mm0.CompilerDiagnosticSpan =
+            if (self.interrupt != null) try self.ownProofSpans(arena, unit) else &.{};
+        var scope: mm0.CheckScope = .{ .spans = own };
+        if (self.interrupt != null and !pending.own_checked) compiler.check_scope = &scope;
+        var progress: CheckProgress = .{
+            .handler = self,
+            .pending = pending,
+            .side = &unit.proof.?,
+            .own = own,
+            .own_pass = compiler.check_scope != null,
+        };
+        if (self.showsProgress()) compiler.progress = progress.hook();
         const analyzed = compiler.analyze();
+        if (progress.failure) |err| return err;
         // A stopped analysis saw part of the unit: what it found is neither
         // published nor kept.
         if (analyzed) |_| {} else |err| {
             if (err == error.AnalysisInterrupted) return err;
         }
+        // A check of the open files' proofs alone publishes on those files
+        // only. Its holes are all a request can ask about: requests are
+        // about open files.
+        const outcome: AnalysisOutcome = if (scope.skipped != 0) .own_checked else .checked;
         holes_owned = false;
         try self.keepAnalysisHoles(roots.mm0_uri, states, holes);
         analyzed catch |err| {
@@ -2148,6 +2252,7 @@ pub const Handler = struct {
                     arena,
                     proof_uri,
                     unit,
+                    outcome,
                     compiler.primaryDiagnostics(),
                     compiler.warningDiagnostics(),
                     compiler.diagnostics.last_diagnostic,
@@ -2169,19 +2274,109 @@ pub const Handler = struct {
                     unit.mm0.rootFile().version,
                 );
             }
-            return;
+            return outcome;
         };
 
         try self.publishUnitDiagnostics(
             arena,
             proof_uri,
             unit,
+            outcome,
             compiler.primaryDiagnostics(),
             compiler.warningDiagnostics(),
             null,
             compiler.omittedPrimaryDiagnostic(.proof),
             compiler.omittedPrimaryDiagnostic(.mm0),
             search_diagnostics,
+        );
+        return outcome;
+    }
+
+    /// The spans of `unit`'s joined proof text that come from the files
+    /// its analysis reports on and the editor shows: the root, and the open
+    /// library files without a theory of their own (`ownsDiagnostics`).
+    fn ownProofSpans(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        unit: *const Unit,
+    ) ![]const mm0.CompilerDiagnosticSpan {
+        const side = unit.proof.?;
+        var spans = std.ArrayListUnmanaged(mm0.CompilerDiagnosticSpan).empty;
+        for (side.joined.map.segments) |segment| {
+            // Separators the join inserted hold no proofs.
+            const index = segment.file_index orelse continue;
+            const file = side.files[index];
+            if (index != side.root and
+                (!self.docs.contains(file.uri) or self.ownsDiagnostics(arena, file.uri)))
+            {
+                continue;
+            }
+            const start = segment.joined_start;
+            const end = start + segment.len;
+            if (spans.items.len != 0 and spans.items[spans.items.len - 1].end == start) {
+                spans.items[spans.items.len - 1].end = end;
+            } else {
+                try spans.append(arena, .{ .start = start, .end = end });
+            }
+        }
+        return spans.items;
+    }
+
+    /// Show `progress`'s check at the proof starting at `offset`, once the
+    /// check has run `progress_delay_ns`: begun with the client's
+    /// `window/workDoneProgress/create`, then reported as the percentage
+    /// rises. The client handles messages in order, so the token is used
+    /// without waiting for its answer, which the input queue would hold
+    /// until the check stops.
+    fn showProgress(self: *Handler, progress: *const CheckProgress, offset: usize) !void {
+        const pending = progress.pending;
+        const percentage = progress.percentage(offset);
+        const message = std.fs.path.basename(progress.fileAt(offset));
+        if (pending.progress) |*shown| {
+            if (percentage <= shown.percentage) return;
+            shown.percentage = percentage;
+            try self.writeProgress(shown.token, types.WorkDoneProgressReport{
+                .message = message,
+                .percentage = percentage,
+            });
+            return;
+        }
+        const started = pending.started orelse return;
+        if (self.now() - started < self.progress_delay_ns) return;
+        self.last_progress_token += 1;
+        const token = self.last_progress_token;
+        self.last_request_id += 1;
+        try self.transport.writeRequest(
+            self.io,
+            self.allocator,
+            .{ .number = self.last_request_id },
+            "window/workDoneProgress/create",
+            types.WorkDoneProgressCreateParams,
+            .{ .token = .{ .integer = token } },
+            .{ .emit_null_optional_fields = false },
+        );
+        pending.progress = .{ .token = token, .percentage = percentage };
+        try self.writeProgress(token, types.WorkDoneProgressBegin{
+            .title = "Checking proofs",
+            .message = message,
+            .percentage = percentage,
+        });
+    }
+
+    /// End the progress shown for `pending`, if any.
+    fn endProgress(self: *Handler, pending: PendingAnalysis) !void {
+        const shown = pending.progress orelse return;
+        try self.writeProgress(shown.token, types.WorkDoneProgressEnd{});
+    }
+
+    fn writeProgress(self: *Handler, token: i32, value: anytype) !void {
+        try self.transport.writeNotification(
+            self.io,
+            self.allocator,
+            "$/progress",
+            struct { token: types.ProgressToken, value: @TypeOf(value) },
+            .{ .token = .{ .integer = token }, .value = value },
+            .{ .emit_null_optional_fields = false },
         );
     }
 
@@ -2560,13 +2755,14 @@ pub const Handler = struct {
     /// in. The roots always receive a set (an empty one clears them); other
     /// files receive theirs only when they do not report on themselves
     /// (`ownsDiagnostics`), and closed ones only when there is something to
-    /// report. Records what the analysis read and published under
-    /// `record_uri`.
+    /// report and the analysis checked them. Records what the analysis read
+    /// and published under `record_uri`.
     fn publishUnitDiagnostics(
         self: *Handler,
         arena: std.mem.Allocator,
         record_uri: []const u8,
         unit: *const Unit,
+        outcome: AnalysisOutcome,
         primary: []const mm0.CompilerDiagnostic,
         warnings: []const mm0.CompilerDiagnostic,
         extra: ?mm0.CompilerDiagnostic,
@@ -2620,10 +2816,14 @@ pub const Handler = struct {
                 );
                 continue;
             }
-            // A closed file is left alone when it has nothing to report; an
-            // open library file always receives the root's view, which also
-            // clears the note its own analysis left ("no sibling theory").
-            if (diagnostics.items.len == 0 and !self.docs.contains(target.uri)) {
+            // A closed file is left alone when it has nothing to report, or
+            // when its proofs are not yet checked: what it shows stays until
+            // they are. An open library file always receives the root's
+            // view, which also clears the note its own analysis left ("no
+            // sibling theory").
+            if (!self.docs.contains(target.uri) and
+                (diagnostics.items.len == 0 or outcome == .own_checked))
+            {
                 continue;
             }
             if (self.ownsDiagnostics(arena, target.uri)) continue;
@@ -2636,6 +2836,14 @@ pub const Handler = struct {
             try published.append(arena, target.uri);
         }
 
+        // The closed files published for before stay so until the check of
+        // the rest says otherwise.
+        if (outcome == .own_checked) if (self.units.get(record_uri)) |record| {
+            for (record.published) |uri| {
+                if (uriListContains(published.items, uri)) continue;
+                try published.append(arena, uri);
+            }
+        };
         try self.storeUnitRecord(
             arena,
             record_uri,
@@ -3005,6 +3213,52 @@ pub const Handler = struct {
     }
 };
 
+/// The progress of one check of a unit's proofs (`Handler.showProgress`),
+/// told where each proof the check runs starts. The percentage counts the
+/// proof text done: in the check of the open files' proofs alone (`own`),
+/// their bytes up to the proof; in the check of the rest, all of theirs and
+/// the others' up to it. So it rises across both.
+const CheckProgress = struct {
+    handler: *Handler,
+    pending: *PendingAnalysis,
+    side: *const UnitSide,
+    own: []const mm0.CompilerDiagnosticSpan,
+    own_pass: bool,
+    /// Why a report could not be sent: the analysis returns it once done.
+    failure: ?anyerror = null,
+
+    fn hook(self: *CheckProgress) mm0.AnalysisProgress {
+        return .{ .context = self, .checkingFn = checking };
+    }
+
+    fn checking(context: *anyopaque, offset: usize) void {
+        const self: *CheckProgress = @ptrCast(@alignCast(context));
+        if (self.failure != null) return;
+        self.handler.showProgress(self, offset) catch |err| {
+            self.failure = err;
+        };
+    }
+
+    fn percentage(self: *const CheckProgress, offset: usize) u32 {
+        const total = self.side.joined.text.len;
+        if (total == 0) return 0;
+        var own_total: usize = 0;
+        var own_before: usize = 0;
+        for (self.own) |span| {
+            own_total += span.end - span.start;
+            own_before += @min(span.end, @max(span.start, offset)) - span.start;
+        }
+        const done = if (self.own_pass) own_before else own_total + (offset - own_before);
+        return @intCast(@min(100, done * 100 / total));
+    }
+
+    fn fileAt(self: *const CheckProgress, offset: usize) []const u8 {
+        const location = self.side.locate(.{ .start = offset, .end = offset }) orelse
+            return self.side.rootFile().path;
+        return location.file.path;
+    }
+};
+
 /// A root `.mm0` and the proof file beside it, whether or not they exist.
 const UnitRoots = struct {
     mm0_uri: []const u8,
@@ -3216,6 +3470,11 @@ fn clientSupportsSnippets(capabilities: types.ClientCapabilities) bool {
     const completion = text_document.completion orelse return false;
     const item = completion.completionItem orelse return false;
     return item.snippetSupport orelse false;
+}
+
+fn clientSupportsWorkDoneProgress(capabilities: types.ClientCapabilities) bool {
+    const window = capabilities.window orelse return false;
+    return window.workDoneProgress orelse false;
 }
 
 fn clientSupportsShowDocument(capabilities: types.ClientCapabilities) bool {

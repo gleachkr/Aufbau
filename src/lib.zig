@@ -10,6 +10,9 @@ pub const UnknownValueSink = @import("./frontend/compiler.zig").UnknownValueSink
 pub const CheckMemo = @import("./frontend/compiler/check_memo.zig").CheckMemo;
 pub const AnalysisInterrupt =
     @import("./frontend/compiler/context.zig").AnalysisInterrupt;
+pub const AnalysisProgress =
+    @import("./frontend/compiler/context.zig").AnalysisProgress;
+pub const CheckScope = @import("./frontend/compiler/context.zig").CheckScope;
 pub const DebugConfig = @import("./frontend/debug.zig").DebugConfig;
 pub const advertised_channel_list =
     @import("./frontend/debug.zig").advertised_channel_list;
