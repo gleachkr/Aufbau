@@ -1272,6 +1272,87 @@ test "LSP placeholder diagnostics report invalid search parameters" {
     ));
 }
 
+test "LSP placeholder diagnostics stay on bodies the check memo knows" {
+    const mm0_uri = "file:///tmp/lsp-status-known.mm0";
+    const proof_uri = "file:///tmp/lsp-status-known.auf";
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\theorem first: $ top $;
+        \\theorem second: $ top $;
+        \\theorem third: $ top $;
+    ;
+    // After the first check the memo knows every body, two of which spell
+    // a placeholder; the edit changes only `second`.
+    const before =
+        \\first
+        \\-----
+        \\l1: $ top $ by auto?
+        \\
+        \\second
+        \\------
+        \\l1: $ top $ by top_i []
+        \\
+        \\third
+        \\-----
+        \\l1: $ top $ by exact?
+    ;
+    const after =
+        \\first
+        \\-----
+        \\l1: $ top $ by auto?
+        \\
+        \\second
+        \\------
+        \\l1: $ top $ by top_i [ ]
+        \\
+        \\third
+        \\-----
+        \\l1: $ top $ by exact?
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        std.testing.io,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try handler.@"textDocument/didOpen"(arena, .{
+        .textDocument = .{
+            .uri = mm0_uri,
+            .languageId = .{ .custom_value = "mm0" },
+            .version = 1,
+            .text = mm0_text,
+        },
+    });
+    try handler.@"textDocument/didOpen"(arena, .{
+        .textDocument = .{
+            .uri = proof_uri,
+            .languageId = .{ .custom_value = "auf" },
+            .version = 1,
+            .text = before,
+        },
+    });
+    try std.testing.expect(handler.check_memo.entries.count() == 3);
+
+    transport_state.clearMessages();
+    try handler.@"textDocument/didChange"(arena, .{
+        .textDocument = .{ .uri = proof_uri, .version = 2 },
+        .contentChanges = &.{.{ .text_document_content_change_whole_document = .{ .text = after } }},
+    });
+    const ranges = try publishedRanges(arena, &transport_state, proof_uri);
+    try std.testing.expectEqual(@as(usize, 2), ranges.len);
+    try expectRangeText(after, ranges[0], "auto?");
+    try expectRangeText(after, ranges[1], "exact?");
+}
+
 test "LSP code action uses UTF-16 ranges after non-ASCII text" {
     const mm0_uri = "file:///tmp/lsp-code-action-utf16.mm0";
     const proof_uri = "file:///tmp/lsp-code-action-utf16.auf";

@@ -2462,11 +2462,19 @@ pub const Handler = struct {
         states: []const NavigationDocumentState,
     ) ![]const LocatedDiagnostic {
         const proof_side = unit.proof orelse return &.{};
+        // The memo knows where the bodies it checked end, so the scan
+        // parses only the bodies that spell a placeholder and those it does
+        // not know.
         const notices = try Search.placeholderNotices(
             arena,
             proof_side.joined.text,
+            self.check_memo.knownBodies(),
         );
         if (notices.len == 0) return &.{};
+        var converter = lsp_diagnostics.RangeConverter{
+            .arena = arena,
+            .encoding = self.offset_encoding,
+        };
 
         var outcomes: []const PlaceholderOutcome = &.{};
         if (self.search_status.getPtr(proof_side.rootFile().uri)) |entry| {
@@ -2525,9 +2533,10 @@ pub const Handler = struct {
                     },
                 }
             }
-            try self.appendLocated(
+            try appendLocated(
                 arena,
                 &diagnostics,
+                &converter,
                 proof_side,
                 notice.span,
                 severity,
@@ -2540,9 +2549,9 @@ pub const Handler = struct {
     /// A search-status diagnostic for `span` of the joined proof text, on
     /// the file the span lies in.
     fn appendLocated(
-        self: *Handler,
         arena: std.mem.Allocator,
         diagnostics: *std.ArrayListUnmanaged(LocatedDiagnostic),
+        converter: *lsp_diagnostics.RangeConverter,
         proof_side: UnitSide,
         span: Search.Span,
         severity: types.DiagnosticSeverity,
@@ -2553,11 +2562,10 @@ pub const Handler = struct {
             .uri = hit.file.uri,
             .version = hit.file.version,
             .diagnostic = .{
-                .range = lsp_diagnostics.offsets.locToRange(
-                    hit.file.text,
-                    .{ .start = hit.span.start, .end = hit.span.end },
-                    self.offset_encoding,
-                ),
+                .range = try converter.range(hit.file.text, .{
+                    .start = hit.span.start,
+                    .end = hit.span.end,
+                }),
                 .severity = severity,
                 .source = LSP_SERVER_NAME,
                 .code = .{ .string = SEARCH_STATUS_CODE },

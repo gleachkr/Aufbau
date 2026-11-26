@@ -391,12 +391,12 @@ fn outlineSymbolsIn(
 
 /// Converts many spans to LSP ranges, building each document's line table
 /// once, on its first span.
-const RangeConverter = struct {
+pub const RangeConverter = struct {
     arena: std.mem.Allocator,
     encoding: lsp.offsets.Encoding,
     tables: std.AutoHashMapUnmanaged(usize, offsets.LineTable) = .empty,
 
-    fn range(self: *RangeConverter, text: []const u8, span: Span) !types.Range {
+    pub fn range(self: *RangeConverter, text: []const u8, span: Span) !types.Range {
         const gop = try self.tables.getOrPut(self.arena, @intFromPtr(text.ptr));
         if (!gop.found_existing or gop.value_ptr.text.len != text.len) {
             gop.value_ptr.* = try offsets.LineTable.init(self.arena, text);

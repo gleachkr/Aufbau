@@ -168,6 +168,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   files that import the same library share one copy of each of its files.
   With eleven files of that library open and hovered, the server holds
   2.1 GiB instead of 5.0 GiB.
+- An `auto?`, `exact?` or `conversion?` left in a proof no longer makes
+  each edit parse every proof of the file and its libraries to find the
+  markers: a proof already checked whose text spells none is passed over.
+  In the last file of a 126 MB library, an edit with a marker in the file
+  took 0.54 s, against 0.28 s without one, and now takes 0.29 s, with
+  0.4 GiB less memory. Nor is each marker's position found by reading its
+  file from the start: an edit in a 15 MB file with 400 markers took
+  0.51 s and now takes 0.09 s.
 
 ### Fixed
 

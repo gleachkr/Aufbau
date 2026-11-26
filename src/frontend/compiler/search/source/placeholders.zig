@@ -9,6 +9,7 @@ const tunables = @import("../tunables.zig");
 const ProofScript = @import("../../../proof_script.zig");
 const RuleApplication = ProofScript.RuleApplication;
 const Span = ProofScript.Span;
+const KnownBodies = ProofScript.KnownBodies;
 const CompilerDiag = @import("../../../diag.zig");
 const ProofParser = ProofScript.Parser;
 const fixture_mod = @import("../fixture.zig");
@@ -63,12 +64,15 @@ pub const SearchPlaceholder = struct {
 /// `proof_src`, top-level and nested, in source order. Used by the LSP to
 /// publish a status diagnostic per placeholder. The parse is lenient, so a
 /// broken proof line costs only itself, and a broken header only its own
-/// item (the compiler's own diagnostics cover malformed source). The result
-/// is allocated on `allocator` (including each placeholder's non-empty
-/// `params` array); parser transients are torn down before returning.
+/// item (the compiler's own diagnostics cover malformed source). The parser
+/// passes over the bodies `known_bodies` knows that spell no placeholder
+/// name. The result is allocated on `allocator` (including each
+/// placeholder's non-empty `params` array); parser transients are torn down
+/// before returning.
 pub fn searchPlaceholders(
     allocator: std.mem.Allocator,
     proof_src: []const u8,
+    known_bodies: ?KnownBodies,
 ) ![]SearchPlaceholder {
     // A placeholder is an application of one of these rule names, so a
     // source that spells none of them has none, and is not parsed.
@@ -79,6 +83,11 @@ pub fn searchPlaceholders(
     var out = std.ArrayListUnmanaged(SearchPlaceholder).empty;
     errdefer out.deinit(allocator);
     var parser = ProofParser.initLenient(parse_arena.allocator(), proof_src);
+    var markerless: MarkerlessBodies = undefined;
+    if (known_bodies) |known| {
+        markerless = .{ .known = known };
+        parser.known_bodies = markerless.knownBodies();
+    }
     while (try parser.nextBlockRecovering()) |block| {
         for (block.lines) |line| {
             try collectSearchPlaceholders(
@@ -92,6 +101,24 @@ pub fn searchPlaceholders(
     }
     return try out.toOwnedSlice(allocator);
 }
+
+/// The bodies of `known` that spell no placeholder name: a body passed over
+/// has no lines to find placeholders in.
+const MarkerlessBodies = struct {
+    known: KnownBodies,
+
+    fn knownBodies(self: *MarkerlessBodies) KnownBodies {
+        return .{ .ctx = self, .findFn = find };
+    }
+
+    fn find(ctx: *anyopaque, src: []const u8, header: Span) ?KnownBodies.Body {
+        const self: *MarkerlessBodies = @ptrCast(@alignCast(ctx));
+        const body = self.known.findFn(self.known.ctx, src, header) orelse
+            return null;
+        if (spellsPlaceholder(src[header.end..][0..body.len])) return null;
+        return body;
+    }
+};
 
 /// Whether `src` spells a placeholder name anywhere. Every name ends in
 /// `?`, so one byte scan for `?` finds every candidate.
@@ -120,14 +147,15 @@ pub const PlaceholderNotice = struct {
 };
 
 /// The notices for every placeholder in `proof_src`, in source order (see
-/// `searchPlaceholders`). Everything is allocated on `allocator`; use an
-/// arena.
+/// `searchPlaceholders`, which `known_bodies` is passed to). Everything is
+/// allocated on `allocator`; use an arena.
 pub fn placeholderNotices(
     allocator: std.mem.Allocator,
     proof_src: []const u8,
+    known_bodies: ?KnownBodies,
 ) ![]PlaceholderNotice {
     var out = std.ArrayListUnmanaged(PlaceholderNotice).empty;
-    for (try searchPlaceholders(allocator, proof_src)) |placeholder| {
+    for (try searchPlaceholders(allocator, proof_src, known_bodies)) |placeholder| {
         try out.append(allocator, .{
             .kind = .placeholder,
             .placeholder = placeholder,

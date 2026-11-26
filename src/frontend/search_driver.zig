@@ -186,6 +186,7 @@ pub fn run(
         const placeholders = try Search.searchPlaceholders(
             scan_arena.allocator(),
             working,
+            null,
         );
         const next = for (placeholders) |placeholder| {
             if (placeholder.span.start >= cursor) break placeholder;

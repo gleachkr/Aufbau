@@ -460,6 +460,7 @@ test "searchPlaceholders carries parsed search params" {
     const placeholders = try source.searchPlaceholders(
         std.testing.allocator,
         proof_src,
+        null,
     );
     defer {
         for (placeholders) |placeholder| {

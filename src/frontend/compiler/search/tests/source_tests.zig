@@ -426,6 +426,7 @@ test "searchPlaceholders survives a broken sibling line" {
     const placeholders = try source.searchPlaceholders(
         std.testing.allocator,
         proof_src,
+        null,
     );
     defer std.testing.allocator.free(placeholders);
 
@@ -466,6 +467,7 @@ test "source search survives a broken block header before its target" {
     const placeholders = try source.searchPlaceholders(
         std.testing.allocator,
         proof_src,
+        null,
     );
     defer std.testing.allocator.free(placeholders);
     try std.testing.expectEqual(@as(usize, 1), placeholders.len);
@@ -493,7 +495,7 @@ test "placeholderNotices warns per placeholder and rejects bad parameters" {
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const notices = try source.placeholderNotices(arena.allocator(), proof_src);
+    const notices = try source.placeholderNotices(arena.allocator(), proof_src, null);
 
     try std.testing.expectEqual(@as(usize, 3), notices.len);
     try std.testing.expectEqual(.placeholder, notices[0].kind);
@@ -529,6 +531,7 @@ test "searchPlaceholders enumerates past local def and notation items" {
     const placeholders = try source.searchPlaceholders(
         std.testing.allocator,
         proof_src,
+        null,
     );
     defer std.testing.allocator.free(placeholders);
 
@@ -746,6 +749,7 @@ test "searchPlaceholders enumerates top-level and nested placeholders" {
     const placeholders = try source.searchPlaceholders(
         std.testing.allocator,
         proof_src,
+        null,
     );
     defer std.testing.allocator.free(placeholders);
 

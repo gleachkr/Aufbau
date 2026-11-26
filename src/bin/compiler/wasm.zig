@@ -374,6 +374,7 @@ fn writePlaceholderDiagnostics(
     const notices = mm0.CompilerSupport.Search.placeholderNotices(
         arena_state.allocator(),
         proof_src,
+        null,
     ) catch return;
     for (notices) |notice| {
         try jw.write(placed(compiler, .{
