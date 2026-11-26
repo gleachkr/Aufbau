@@ -25,10 +25,11 @@
 //! is that fingerprint plus a hash of the block body; the value is
 //! everything the check emitted: its error, the diagnostics and warnings
 //! it added (all of them, also those past the sink's per-run limits:
-//! `noteDiagnostic`), its hole sink entries, and the `last_diagnostic` it
-//! left behind. So a memo-backed run collects holes, and only holes: a run
-//! without the hole sink, or with the unknown-value or stats sink, checks
-//! every block (`beginRun`).
+//! `noteDiagnostic`), the holes' inferred values, and the `last_diagnostic`
+//! it left behind. So a memo-backed run collects those holes, and only
+//! them: a run without the hole sink, one that fills holey lines in
+//! (`HoleInferenceSink.fills`), or one with the unknown-value or stats sink
+//! checks every block (`beginRun`).
 //!
 //! The memo keeps what each root's latest run used (`root`): an entry no
 //! later run of its root found is one that root's texts no longer reach,
@@ -68,7 +69,6 @@ const RuleCatalog = @import("./rule_catalog.zig");
 const Context = @import("./context.zig");
 const CompilerContext = Context.CompilerContext;
 const HoleInference = Context.HoleInference;
-const FilledAssertion = Context.FilledAssertion;
 
 pub const CheckMemo = struct {
     pub const Key = struct {
@@ -106,7 +106,6 @@ pub const CheckMemo = struct {
         warnings: []const Diagnostic,
         last_diagnostic: ?Diagnostic,
         holes: []const HoleInference,
-        assertions: []const FilledAssertion,
         lookups: []const CatalogLookup,
 
         /// Re-emit everything the recorded check produced, with proof
@@ -132,13 +131,6 @@ pub const CheckMemo = struct {
                     .partial = hole.partial,
                 });
             }
-            for (self.assertions) |filled| {
-                try sink.addAssertionOwned(
-                    shiftSpan(filled.line, delta),
-                    shiftSpan(filled.assertion, delta),
-                    try sink.allocator.dupe(u8, filled.text),
-                );
-            }
             if (self.last_diagnostic) |diag| {
                 ctx.setDiagnostic(relocateDiagnostic(diag, delta));
             } else {
@@ -147,11 +139,10 @@ pub const CheckMemo = struct {
         }
     };
 
-    /// Hole sink positions at the start of a check, so its holes can be
+    /// The hole sink's length at the start of a check, so its holes can be
     /// cut out afterwards.
     pub const Recording = struct {
         holes: usize,
-        assertions: usize,
     };
 
     /// The diagnostics and warnings the check being recorded added, every
@@ -219,11 +210,12 @@ pub const CheckMemo = struct {
 
     /// Start a run over `ctx`'s sources. The memo stays inactive, and every
     /// block is checked, unless the run collects exactly what an entry
-    /// records: hole inferences, and neither named unknowns' values nor
-    /// solver stats (whose running maximum cannot be replayed).
+    /// records: hole inferences, and neither filled lines, named unknowns'
+    /// values nor solver stats (whose running maximum cannot be replayed).
     pub fn beginRun(self: *CheckMemo, ctx: *const CompilerContext) void {
         self.run +%= 1;
-        self.active = ctx.hole_inference_sink != null and
+        const holes_only = if (ctx.hole_inference_sink) |sink| !sink.fills else false;
+        self.active = holes_only and
             ctx.unknown_value_sink == null and
             ctx.inference_stats_sink == null;
         self.fingerprint = 0;
@@ -389,10 +381,7 @@ pub const CheckMemo = struct {
         self.added = .{ .arena = ArenaAllocator.init(self.allocator) };
         self.recording = true;
         self.recording_failed = false;
-        return .{
-            .holes = ctx.hole_inference_sink.?.items.items.len,
-            .assertions = ctx.hole_inference_sink.?.assertions.items.len,
-        };
+        return .{ .holes = ctx.hole_inference_sink.?.items.items.len };
     }
 
     /// Called as the sink is handed a diagnostic while a check is being
@@ -469,7 +458,6 @@ pub const CheckMemo = struct {
             .warnings = added.warnings.items,
             .last_diagnostic = null,
             .holes = &.{},
-            .assertions = &.{},
             .lookups = &.{},
         };
         self.added = null;
@@ -495,17 +483,6 @@ pub const CheckMemo = struct {
             };
         }
         entry.holes = copies;
-        const filled_items = holes.assertions.items[recording.assertions..];
-        const filled_copies = try arena.alloc(FilledAssertion, filled_items.len);
-        for (filled_items, filled_copies) |item, *copy| {
-            if (!spanWithin(item.line, block)) return false;
-            copy.* = .{
-                .line = item.line,
-                .assertion = item.assertion,
-                .text = try arena.dupe(u8, item.text),
-            };
-        }
-        entry.assertions = filled_copies;
         const lookups = try arena.alloc(CatalogLookup, self.lookups.items.len);
         for (self.lookups.items, lookups) |lookup, *copy| {
             copy.* = .{

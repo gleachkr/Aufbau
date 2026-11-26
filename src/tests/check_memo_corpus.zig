@@ -46,6 +46,8 @@ fn analyzeDumpStopping(
 const DumpOptions = struct {
     memo: ?*CheckMemo = null,
     unknowns_sink: bool = false,
+    /// Fill holey lines in (`HoleInferenceSink.fills`).
+    fills: bool = false,
     interrupt: ?mm0.AnalysisInterrupt = null,
     scope: ?*mm0.CheckScope = null,
     /// Dump only what lies in this scope's spans of the proof text, and
@@ -70,7 +72,10 @@ fn analyzeDumpWith(
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var holes = mm0.CompilerSupport.Context.HoleInferenceSink{ .allocator = arena };
+    var holes = mm0.CompilerSupport.Context.HoleInferenceSink{
+        .allocator = arena,
+        .fills = options.fills,
+    };
     var unknowns = mm0.UnknownValueSink.init(arena);
     var compiler = Compiler.initWithProof(arena, mm0_text, proof_text);
     compiler.allow_search_placeholders = true;
@@ -220,6 +225,8 @@ const Scenario = struct {
     proof_text: []const u8,
     /// Also attach the unknown-value sink.
     unknowns_sink: bool = false,
+    /// Also fill holey lines in.
+    fills: bool = false,
 };
 
 /// Cold vs warm must agree; returns the warm dump's hit delta.
@@ -229,9 +236,15 @@ fn expectSameAnalysis(
     stem: []const u8,
     scenario: Scenario,
 ) !void {
-    const cold = try analyzeDump(allocator, scenario.mm0_text, scenario.proof_text, null, scenario.unknowns_sink);
+    const options: DumpOptions = .{
+        .unknowns_sink = scenario.unknowns_sink,
+        .fills = scenario.fills,
+    };
+    const cold = try analyzeDumpWith(allocator, scenario.mm0_text, scenario.proof_text, options);
     defer allocator.free(cold);
-    const warm = try analyzeDump(allocator, scenario.mm0_text, scenario.proof_text, memo, scenario.unknowns_sink);
+    var warm_options = options;
+    warm_options.memo = memo;
+    const warm = try analyzeDumpWith(allocator, scenario.mm0_text, scenario.proof_text, warm_options);
     defer allocator.free(warm);
     if (!std.mem.eql(u8, cold, warm)) {
         std.debug.print(
@@ -483,6 +496,20 @@ fn runFixture(
         try std.testing.expectEqual(hits, memo.hits);
         try std.testing.expectEqual(misses, memo.misses);
     }
+
+    // Nor filled lines.
+    {
+        const hits = memo.hits;
+        const misses = memo.misses;
+        try expectSameAnalysis(allocator, memo, stem, .{
+            .name = "fills",
+            .mm0_text = mm0_text,
+            .proof_text = proof_text,
+            .fills = true,
+        });
+        try std.testing.expectEqual(hits, memo.hits);
+        try std.testing.expectEqual(misses, memo.misses);
+    }
 }
 
 test "check memo matches cold analysis across the proof-case corpus" {
@@ -646,7 +673,7 @@ test "a proof checked alone has the holes an analysis finds in it" {
         const pair = mm0.Imports.loadPair(std.testing.io, arena, mm0_path, proof_path, &failure) catch continue;
         const proof_text = (pair.proof orelse continue).text;
 
-        var found = HoleInferenceSink{ .allocator = arena };
+        var found = HoleInferenceSink{ .allocator = arena, .fills = true };
         var compiler = Compiler.initWithProof(allocator, pair.mm0.text, proof_text);
         compiler.allow_search_placeholders = true;
         compiler.hole_inference_sink = &found;
@@ -669,6 +696,7 @@ test "a proof checked alone has the holes an analysis finds in it" {
                 pair.mm0.text,
                 proof_text,
                 block,
+                true,
             );
             try std.testing.expectEqualDeep(items[0..item_count], alone.items.items);
             try std.testing.expectEqualDeep(assertions[0..fill_count], alone.assertions.items);

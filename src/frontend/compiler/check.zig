@@ -1329,6 +1329,7 @@ fn collectHoleInferences(
         surface,
         concrete,
     );
+    if (!sink.fills) return;
     const filled = try ViewTrace.formatExprSource(
         sink.allocator,
         theorem,

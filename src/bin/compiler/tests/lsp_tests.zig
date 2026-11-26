@@ -1784,13 +1784,14 @@ test "LSP hover and fill stay bounded on values that double per line" {
 }
 
 const FillSetup = enum {
-    /// The proof is never opened: the code action checks every block.
+    /// The proof is never opened, so nothing has checked it.
     closed,
-    /// The proof is opened first, so the diagnostics pass records the
-    /// blocks in the check memo and the code action replays them.
+    /// The proof is opened first, so the diagnostics pass has checked it
+    /// and its check memo holds the blocks. The code action checks the
+    /// proof again, filling its lines in, without the memo.
     open,
     /// As `open`, but the proof is opened with another text and then
-    /// edited into this one, so the replayed recordings are the edit's.
+    /// edited into this one, so the action must check the edit's text.
     edited,
 };
 
@@ -1912,7 +1913,7 @@ test "LSP fill-holes code action survives the diagnostics pass's check memo" {
     try expectFillHolesAction(.open);
 }
 
-test "LSP fill-holes code action replays the checks of an edit" {
+test "LSP fill-holes code action checks the text of an edit" {
     try expectFillHolesAction(.edited);
 }
 

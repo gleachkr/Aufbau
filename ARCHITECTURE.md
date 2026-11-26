@@ -586,7 +586,7 @@ between trusted parser trees and frontend proof elaboration.
   position, without the comments and whitespace between statements, and the
   proof text up to the block without the earlier blocks' bodies), keys a
   check by that fingerprint plus the block body, and on a
-  hit replays the recorded diagnostics, hole sink entries and error with
+  hit replays the recorded diagnostics, hole inferences and error with
   proof spans relocated to the block's new position, without building the
   theorem (`analyzeBlock` in `pipeline/common.zig`). Nor are the block's
   lines parsed: the memo also tells the proof parser the body it last saw
@@ -594,8 +594,9 @@ between trusted parser trees and frontend proof elaboration.
   one whose text is unchanged and that still ends where it did. Only a
   body whose lines all parsed is known this way, since a broken line may
   read into what follows it. Only runs that
-  collect holes, and nothing an entry does not record, use it, so every
-  entry records the same output. Rule-catalog lookups, the one thing a
+  collect holes, and nothing an entry does not record (filled lines, named
+  unknowns' values, solver stats), use it, so every entry records the same
+  output. Rule-catalog lookups, the one thing a
   check reads beyond that prefix, are recorded and re-verified. An entry
   holds every diagnostic its check added, also those past the sink's
   per-run limits (`CheckMemo.noteDiagnostic`): a replay hands them to the
@@ -1400,9 +1401,11 @@ roots share the blocks up to where their joined texts differ in something a
 check can see: roots that import the same files in another order share only
 those before the first difference. The
 diagnostics pass keeps the hole inferences it collects for each root
-(`analysis_holes`). A hover on a hole and the fill-holes action read them,
-or, when they are of other texts, check only the proof under the cursor
-(`lsp/holes.zig`). The memo keeps what each root's latest
+(`analysis_holes`). A hover on a hole reads them, or, when they are of
+other texts, checks only the proof under the cursor (`lsp/holes.zig`). The
+fill-holes action always checks that proof alone: the action offers a fill
+only if the filled line checks as written, a check per holey line that the
+analysis leaves out (`HoleInferenceSink.fills`). The memo keeps what each root's latest
 run used, so its size follows the open roots, not a cap. Cache
 invalidation is centralized in `Handler.invalidateCachesForUri`; the memo
 needs none, being keyed by content.

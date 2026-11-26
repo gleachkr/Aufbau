@@ -1071,7 +1071,7 @@ pub const Handler = struct {
         const found = try self.analysisHoles(arena, nav) orelse checked: {
             if (!nav.snapshot.isHoleAt(offset)) return null;
             const block = try nav.snapshot.blockTouching(arena, offset) orelse return null;
-            break :checked try blockHoles(arena, nav, block);
+            break :checked try blockHoles(arena, nav, block, false);
         };
         return try LspIndex.holes.hoverAt(arena, found, offset);
     }
@@ -1194,7 +1194,8 @@ pub const Handler = struct {
     }
 
     /// Offer to write a checked holey line's conclusion over its assertion,
-    /// filling in every hole on the line.
+    /// filling in every hole on the line. The analysis does not fill lines
+    /// in (`HoleInferenceSink.fills`), so the proof is checked here.
     fn fillHolesCodeAction(
         self: *Handler,
         arena: std.mem.Allocator,
@@ -1202,10 +1203,8 @@ pub const Handler = struct {
         block: ProofBlock,
         offset: usize,
     ) !?types.CodeAction {
-        const found = try self.analysisHoles(arena, nav) orelse checked: {
-            if (!nav.snapshot.holeyLineAt(block, offset)) return null;
-            break :checked try blockHoles(arena, nav, block);
-        };
+        if (!nav.snapshot.holeyLineAt(block, offset)) return null;
+        const found = try blockHoles(arena, nav, block, true);
         const fill = try LspIndex.holes.fillAt(
             arena,
             found,
@@ -2017,11 +2016,13 @@ pub const Handler = struct {
         return &kept.holes;
     }
 
-    /// The holes of `block`, a proof of `nav`'s unit, by a check of it alone.
+    /// The holes of `block`, a proof of `nav`'s unit, by a check of it alone,
+    /// with `fills` its holey lines filled in.
     fn blockHoles(
         arena: std.mem.Allocator,
         nav: NavigationSnapshot,
         block: ProofBlock,
+        fills: bool,
     ) !*const HoleInferenceSink {
         const found = try arena.create(HoleInferenceSink);
         found.* = try LspIndex.holes.ofBlock(
@@ -2029,6 +2030,7 @@ pub const Handler = struct {
             nav.unit.mm0.joined.text,
             nav.side().joined.text,
             block,
+            fills,
         );
         return found;
     }

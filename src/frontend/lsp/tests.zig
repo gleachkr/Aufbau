@@ -1486,6 +1486,8 @@ const HoleHovers = struct {
         compiler.analyze() catch |err| {
             if (err == error.OutOfMemory) return err;
         };
+        // An editor's analysis fills no lines in; the fill action does.
+        try std.testing.expectEqual(0, found.assertions.items.len);
         return .{
             .snapshot = try Snapshot.build(allocator, .{
                 .mm0_uri = "file:///test.mm0",
@@ -1520,6 +1522,7 @@ const HoleHovers = struct {
             self.snapshot.mm0_text,
             self.snapshot.proof_text.?,
             block,
+            false,
         );
         try std.testing.expectEqualDeep(
             hover,

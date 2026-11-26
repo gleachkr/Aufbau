@@ -149,6 +149,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   now after 1.5 s; the whole check takes 0.5 s longer. With a client that
   shows work-done progress, a check that runs longer than a second reports
   the file it is in and how much of the proof text it has done.
+- `abc lsp` checks a holey line's filled form only when code actions are
+  asked for on that line, not for every holey line on every check. The
+  first check of the last file of a 126 MB library takes 29.7 s instead of
+  36.7 s. "Fill in the holes" there now takes 0.43 s once the check has
+  ended, as it already did while the check was running.
 
 ### Fixed
 

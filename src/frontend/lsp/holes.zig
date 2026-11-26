@@ -21,18 +21,20 @@ pub const HoleFill = struct {
     replacement: []const u8,
 };
 
-/// The holes of `block`, a block of `proof_src`, as an analysis finds them.
+/// The holes of `block`, a block of `proof_src`, as an analysis finds them,
+/// and with `fills` its holey lines filled in (`HoleInferenceSink.fills`).
 /// Only its own proof is checked: no check depends on another proof.
 pub fn ofBlock(
     allocator: std.mem.Allocator,
     mm0_src: []const u8,
     proof_src: []const u8,
     block: ProofBlock,
+    fills: bool,
 ) std.mem.Allocator.Error!HoleInferenceSink {
     var work_arena = ArenaAllocator.init(allocator);
     defer work_arena.deinit();
     const work = work_arena.allocator();
-    var found: HoleInferenceSink = .{ .allocator = allocator };
+    var found: HoleInferenceSink = .{ .allocator = allocator, .fills = fills };
     errdefer found.deinit();
 
     var walk_diagnostics = DiagnosticSink.init(mm0_src, proof_src);

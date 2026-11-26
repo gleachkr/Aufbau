@@ -450,7 +450,7 @@ fn fillHoleValues(
     markers: []Marker,
     found_at: []const FoundAt,
 ) !void {
-    var sink = CompilerModule.HoleInferenceSink{ .allocator = allocator };
+    var sink = CompilerModule.HoleInferenceSink{ .allocator = allocator, .fills = true };
     defer sink.deinit();
     var compiler = CompilerModule.Compiler.initWithProof(
         allocator,

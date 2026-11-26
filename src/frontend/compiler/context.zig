@@ -43,6 +43,11 @@ pub const FilledAssertion = struct {
 pub const HoleInferenceSink = struct {
     allocator: std.mem.Allocator,
     items: std.ArrayListUnmanaged(HoleInference) = .empty,
+    /// Whether to fill in each holey line and keep the fills that check
+    /// (`assertions`). Checking a fill costs a check of the filled line, and
+    /// only a request for the fill reads it, so an editor's analysis leaves
+    /// this off.
+    fills: bool = false,
     /// Only for lines whose conclusion prints with source names.
     assertions: std.ArrayListUnmanaged(FilledAssertion) = .empty,
 
