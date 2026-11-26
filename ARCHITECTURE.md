@@ -1413,8 +1413,11 @@ invalidation is centralized in `Handler.invalidateCachesForUri`; the memo
 needs none, being keyed by content.
 `src/frontend/lsp/index.zig` owns arena-backed navigation snapshots; its
 builder uses lenient proof parsing rather than requiring a successful proof.
-A snapshot holds the `.mm0` side and the proof headers. A proof body is
-indexed when a request looks into it, and the last one is kept. Names
+A snapshot holds the `.mm0` side and the proof headers. It is built in a
+scratch arena, and what it keeps is copied out into its own
+(`lsp/compact.zig`), so the parses behind it are freed; a block keeps no
+lines (`ProofBlock.withoutLines`). A proof body is parsed and indexed when a
+request looks into it, and the last one is kept. Names
 resolve in it as they stood at its block (`NameTable.seenBy`). A search for
 the uses of a declaration indexes, one at a time, the bodies of the blocks
 whose text spells it. With the check memo, the parse behind a snapshot also

@@ -3,6 +3,7 @@ const ArenaAllocator = @import("../arena_allocator.zig").ArenaAllocator;
 
 const completion = @import("completion.zig");
 const Builder = @import("builder.zig").Builder;
+const Compactor = @import("compact.zig").Compactor;
 pub const holes = @import("holes.zig");
 const indexBody = @import("builder_body.zig").indexBody;
 const model = @import("model.zig");
@@ -75,47 +76,51 @@ pub const Snapshot = struct {
         allocator: std.mem.Allocator,
         input: SnapshotInput,
     ) !Snapshot {
-        var arena_state = ArenaAllocator.init(allocator);
-        errdefer arena_state.deinit();
-
-        const arena = arena_state.allocator();
-        var builder = Builder.init(arena);
-
-        const mm0_uri = try arena.dupe(u8, input.mm0_uri);
-        const proof_uri = if (input.proof_uri) |uri|
-            try arena.dupe(u8, uri)
-        else
-            null;
-
+        // Building leaves its parses and the lists' old buffers behind; only
+        // what the snapshot keeps is copied out of it.
+        var build_arena = ArenaAllocator.init(allocator);
+        defer build_arena.deinit();
+        var builder = Builder.init(build_arena.allocator());
         try builder.indexMm0(input.mm0_text);
         if (input.proof_text) |text| {
             try builder.indexProof(
                 text,
                 if (input.check_memo) |memo| memo.knownBodies() else null,
             );
+            // A body's lines are parsed again when a request needs them.
+            for (builder.proof_blocks.items) |*info| info.source = info.source.withoutLines(text);
         }
 
-        // Copy the arena last: the slices below can add buffers to it.
+        var arena_state = ArenaAllocator.init(allocator);
+        errdefer arena_state.deinit();
+        const texts = [_][]const u8{ input.mm0_text, input.proof_text orelse "" };
+        var keep: Compactor = .{
+            .arena = arena_state.allocator(),
+            .allocator = allocator,
+            .texts = &texts,
+        };
+        defer keep.deinit();
+        // Copy the arena last: the copies below add buffers to it.
         var snapshot: Snapshot = .{
             .arena = undefined,
             .body_arena = ArenaAllocator.init(allocator),
-            .mm0_uri = mm0_uri,
+            .mm0_uri = try keep.copy([]const u8, input.mm0_uri),
             .mm0_text = input.mm0_text,
-            .proof_uri = proof_uri,
+            .proof_uri = try keep.copy(?[]const u8, input.proof_uri),
             .proof_text = input.proof_text,
-            .declarations = try builder.declarations.toOwnedSlice(arena),
-            .decl_by_name = builder.decl_by_name,
-            .notation_by_token = builder.notation_by_token,
-            .proof_rule_by_name = builder.proof_rule_by_name,
-            .sort_var_by_token = builder.sort_var_by_token,
-            .symbols = try builder.symbols.toOwnedSlice(arena),
-            .mm0_outline = try builder.mm0_outline.toOwnedSlice(arena),
-            .proof_outline = try builder.proof_outline.toOwnedSlice(arena),
-            .proof_blocks = try builder.proof_blocks.toOwnedSlice(arena),
-            .proof_rules = try builder.proof_rules.toOwnedSlice(arena),
-            .notations = try builder.notations.toOwnedSlice(arena),
-            .hole_tokens = try builder.hole_tokens.toOwnedSlice(arena),
-            .unknown_prefixes = try builder.unknown_prefixes.toOwnedSlice(arena),
+            .declarations = try keep.copy([]const Declaration, builder.declarations.items),
+            .decl_by_name = try keep.nameTable(builder.decl_by_name),
+            .notation_by_token = try keep.nameTable(builder.notation_by_token),
+            .proof_rule_by_name = try keep.nameTable(builder.proof_rule_by_name),
+            .sort_var_by_token = try keep.stringMap(usize, builder.sort_var_by_token),
+            .symbols = try keep.copy([]const NavigationSymbol, builder.symbols.items),
+            .mm0_outline = try keep.copy([]const OutlineSymbol, builder.mm0_outline.items),
+            .proof_outline = try keep.copy([]const OutlineSymbol, builder.proof_outline.items),
+            .proof_blocks = try keep.copy([]const ProofBlockInfo, builder.proof_blocks.items),
+            .proof_rules = try keep.copy([]const ProofRuleDecl, builder.proof_rules.items),
+            .notations = try keep.copy([]const NotationCompletionDecl, builder.notations.items),
+            .hole_tokens = try keep.copy([]const []const u8, builder.hole_tokens.items),
+            .unknown_prefixes = try keep.copy([]const []const u8, builder.unknown_prefixes.items),
             .complete = builder.complete,
             .left_delims = builder.left_delims,
             .right_delims = builder.right_delims,

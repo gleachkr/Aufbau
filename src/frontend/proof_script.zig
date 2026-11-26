@@ -220,11 +220,22 @@ pub const ProofBlock = struct {
     /// Whether every line parsed and the body ends a physical line, so that
     /// its text alone decides its lines (see `KnownBodies`).
     self_contained: bool,
-    /// The hash of a body the parser passed over (`Parser.known_bodies`).
+    /// The hash of a body whose lines are not kept: one the parser passed
+    /// over (`Parser.known_bodies`), or one `withoutLines` left out.
     /// `lines` is then empty; `withLines` parses them.
     known_body: ?u64 = null,
 
-    /// A block whose body was passed over, with its lines. `src` is the text
+    /// The block without its lines, for `withLines` to parse again. `src` is
+    /// the text the block was parsed from.
+    pub fn withoutLines(self: ProofBlock, src: []const u8) ProofBlock {
+        var bare = self;
+        bare.lines = &.{};
+        bare.known_body = self.known_body orelse
+            KnownBodies.bodyHash(src[self.header_span.end..self.body_end]);
+        return bare;
+    }
+
+    /// A block whose lines were not kept, with its lines. `src` is the text
     /// the block was parsed from.
     pub fn withLines(
         self: ProofBlock,

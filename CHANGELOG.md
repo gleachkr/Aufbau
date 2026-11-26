@@ -159,6 +159,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   126 MB library, "Fill in the holes" took 0.52 s and now takes 0.29 s, and
   an unpack while the file is first checked took 1.1 s and now takes 0.9 s,
   with 0.4 GiB less memory at its peak.
+- `abc lsp` keeps less for each open file's navigation index: the parses
+  behind it are freed once it is built, and a proof's lines are parsed
+  again when a request looks into that proof. The index of the last file of
+  a 126 MB library takes 116 MiB instead of 394 MiB (785 MiB when built
+  before the file was first checked); the first request after an edit there,
+  which rebuilds the index, takes about 0.15 s longer.
+  With eleven files of that library open and hovered, the server holds
+  2.8 GiB instead of 5.0 GiB.
 
 ### Fixed
 

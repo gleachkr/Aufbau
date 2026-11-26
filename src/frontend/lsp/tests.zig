@@ -3460,8 +3460,21 @@ test "a snapshot with known bodies answers as one that parsed them" {
         var known = try Snapshot.build(allocator, input);
         defer known.deinit();
 
-        try std.testing.expect(known.proof_blocks[0].source.known_body != null);
-        try std.testing.expectEqual(whole, known.proof_blocks[1].source.known_body != null);
+        // Neither keeps a body's lines; a request parses them again.
+        for (parsed.proof_blocks, known.proof_blocks) |a, b| {
+            try std.testing.expectEqual(@as(usize, 0), a.source.lines.len);
+            try std.testing.expectEqual(@as(usize, 0), b.source.lines.len);
+        }
+        // With the memo a parser passes over the first body, and over the
+        // second while it is whole.
+        var parse_arena = std.heap.ArenaAllocator.init(allocator);
+        defer parse_arena.deinit();
+        var parser = proof_script.Parser.initLenient(parse_arena.allocator(), text);
+        parser.known_bodies = memo.knownBodies();
+        for ([_]bool{ true, whole }) |passed| {
+            const block = (try parser.nextBlockRecovering()).?;
+            try std.testing.expectEqual(passed, block.known_body != null);
+        }
         try std.testing.expectEqual(whole, known.complete);
         try std.testing.expectEqual(whole, parsed.complete);
         for (0..text.len) |offset| {
@@ -3479,6 +3492,46 @@ test "a snapshot with known bodies answers as one that parsed them" {
             try std.testing.expectEqualDeep(block, try known.blockTouching(arena, offset));
         }
     }
+}
+
+test "a snapshot keeps slices of its texts and copies the rest once" {
+    const allocator = std.testing.allocator;
+    const Compactor = @import("compact.zig").Compactor;
+    const Record = struct {
+        name: []const u8,
+        markdown: []const u8,
+        parts: []const []const u8,
+        tag: ?union(enum) { none, label: []const u8 },
+    };
+    const text = "sort wff;";
+    var built = std.heap.ArenaAllocator.init(allocator);
+    defer built.deinit();
+    const markdown = try built.allocator().dupe(u8, "**wff**");
+    const parts = try built.allocator().dupe([]const u8, &.{ markdown, text[0..4] });
+    const records = [_]Record{
+        .{ .name = text[5..8], .markdown = markdown, .parts = parts, .tag = .{ .label = markdown } },
+        .{ .name = text[0..4], .markdown = markdown, .parts = &.{}, .tag = null },
+    };
+
+    var kept = std.heap.ArenaAllocator.init(allocator);
+    defer kept.deinit();
+    var keep: Compactor = .{
+        .arena = kept.allocator(),
+        .allocator = allocator,
+        .texts = &.{text},
+    };
+    defer keep.deinit();
+    const copies = try keep.copy([]const Record, &records);
+    @memset(markdown, 'x');
+
+    try std.testing.expectEqual(text[5..].ptr, copies[0].name.ptr);
+    try std.testing.expectEqual(text[0..].ptr, copies[0].parts[1].ptr);
+    try std.testing.expectEqualStrings("**wff**", copies[0].markdown);
+    // One copy of the string however many records share it.
+    try std.testing.expectEqual(copies[0].markdown.ptr, copies[1].markdown.ptr);
+    try std.testing.expectEqual(copies[0].markdown.ptr, copies[0].parts[0].ptr);
+    try std.testing.expectEqual(copies[0].markdown.ptr, copies[0].tag.?.label.ptr);
+    try std.testing.expect(copies[1].tag == null);
 }
 
 test "a snapshot tells a parser of its own proof text where the bodies end" {

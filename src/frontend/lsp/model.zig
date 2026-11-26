@@ -73,7 +73,7 @@ pub const NameTable = struct {
     /// Entries replaced by a later one with the same name.
     replaced: std.ArrayListUnmanaged(Entry) = .empty,
 
-    const Entry = struct {
+    pub const Entry = struct {
         index: usize,
         /// The first block to see the entry.
         from_block: usize,
