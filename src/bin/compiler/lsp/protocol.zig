@@ -1,3 +1,7 @@
+//! The language server's side of the protocol: compiler diagnostics and
+//! index results turned into LSP records, with their byte spans converted
+//! to ranges in the client's encoding.
+
 const std = @import("std");
 const lsp = @import("lsp");
 const mm0 = @import("mm0");
@@ -89,15 +93,15 @@ pub const LocatedDiagnostic = struct {
 /// primaries, the omitted-count summary, then the warnings. A diagnostic
 /// whose document the context cannot name is dropped.
 pub fn locateCompilerDiagnostics(
-    arena: std.mem.Allocator,
+    converter: *RangeConverter,
     diag_context: DiagnosticContext,
     primary: []const mm0.CompilerDiagnostic,
     warnings: []const mm0.CompilerDiagnostic,
     extra: ?mm0.CompilerDiagnostic,
     proof_omitted: ?mm0.CompilerDiagnostic,
     mm0_omitted: ?mm0.CompilerDiagnostic,
-    encoding: lsp.offsets.Encoding,
 ) ![]LocatedDiagnostic {
+    const arena = converter.arena;
     var out = std.ArrayListUnmanaged(LocatedDiagnostic).empty;
     const sources = [_]mm0.CompilerDiagnosticSource{ .proof, .mm0 };
     for (sources) |source| {
@@ -107,43 +111,37 @@ pub fn locateCompilerDiagnostics(
         };
         if (extra) |diag| {
             if (diag.source == source) {
-                try appendLocated(arena, &out, diag_context, diag, encoding);
+                try appendLocated(converter, &out, diag_context, diag);
             }
         }
         for (primary) |diag| {
             if (diag.source != source) continue;
-            try appendLocated(arena, &out, diag_context, diag, encoding);
+            try appendLocated(converter, &out, diag_context, diag);
         }
         if (omitted) |diag| {
             if (diag.source == source) {
-                try appendLocated(arena, &out, diag_context, diag, encoding);
+                try appendLocated(converter, &out, diag_context, diag);
             }
         }
         for (warnings) |diag| {
             if (diag.source != source) continue;
-            try appendLocated(arena, &out, diag_context, diag, encoding);
+            try appendLocated(converter, &out, diag_context, diag);
         }
     }
     return try out.toOwnedSlice(arena);
 }
 
 fn appendLocated(
-    arena: std.mem.Allocator,
+    converter: *RangeConverter,
     out: *std.ArrayListUnmanaged(LocatedDiagnostic),
     diag_context: DiagnosticContext,
     diag: mm0.CompilerDiagnostic,
-    encoding: lsp.offsets.Encoding,
 ) !void {
     const hit = diag_context.locate(diag.source, spanOf(diag.span)) orelse return;
-    try out.append(arena, .{
+    try out.append(converter.arena, .{
         .uri = hit.uri,
         .version = hit.version,
-        .diagnostic = try compilerDiagnosticToLsp(
-            arena,
-            diag_context,
-            diag,
-            encoding,
-        ),
+        .diagnostic = try compilerDiagnosticToLsp(converter, diag_context, diag),
     });
 }
 
@@ -153,24 +151,22 @@ fn spanOf(span: anytype) ?Span {
 }
 
 pub fn compilerDiagnosticToLsp(
-    arena: std.mem.Allocator,
+    converter: *RangeConverter,
     diag_context: DiagnosticContext,
     diag: mm0.CompilerDiagnostic,
-    encoding: lsp.offsets.Encoding,
 ) !types.Diagnostic {
     const hit = diag_context.locate(diag.source, spanOf(diag.span)) orelse {
         return error.MissingDiagnosticDocument;
     };
     return .{
-        .range = clampedRange(hit.text, hit.span, encoding),
+        .range = try converter.range(hit.text, hit.span),
         .severity = diagnosticSeverityToLsp(diag.severity),
         .source = SERVER_NAME,
-        .message = .{ .string = try compilerDiagnosticMessage(arena, diag) },
+        .message = .{ .string = try compilerDiagnosticMessage(converter.arena, diag) },
         .relatedInformation = try compilerDiagnosticRelatedInformation(
-            arena,
+            converter,
             diag_context,
             diag,
-            encoding,
         ),
     };
 }
@@ -184,18 +180,21 @@ pub fn diagnosticSeverityToLsp(
     };
 }
 
+/// `span` kept within `text`: a span may come from a text that has since
+/// been shortened.
+fn clamp(text: []const u8, span: Span) offsets.Loc {
+    const start = @min(span.start, text.len);
+    return .{ .start = start, .end = @max(start, @min(span.end, text.len)) };
+}
+
+/// The range of one span. A request that converts many builds a
+/// `RangeConverter`, which scans each text once.
 fn clampedRange(
     text: []const u8,
     span: Span,
     encoding: lsp.offsets.Encoding,
 ) types.Range {
-    const start = @min(span.start, text.len);
-    const end = @max(start, @min(span.end, text.len));
-    return offsets.locToRange(
-        text,
-        .{ .start = start, .end = end },
-        encoding,
-    );
+    return offsets.locToRange(text, clamp(text, span), encoding);
 }
 
 pub fn zeroRange(
@@ -401,9 +400,7 @@ pub const RangeConverter = struct {
         if (!gop.found_existing or gop.value_ptr.text.len != text.len) {
             gop.value_ptr.* = try offsets.LineTable.init(self.arena, text);
         }
-        const start = @min(span.start, text.len);
-        const end = @max(start, @min(span.end, text.len));
-        return gop.value_ptr.locToRange(.{ .start = start, .end = end }, self.encoding);
+        return gop.value_ptr.locToRange(clamp(text, span), self.encoding);
     }
 };
 
@@ -417,11 +414,11 @@ fn declarationSymbolKind(kind: LspIndex.DeclarationKind) types.SymbolKind {
 }
 
 pub fn compilerDiagnosticRelatedInformation(
-    arena: std.mem.Allocator,
+    converter: *RangeConverter,
     diag_context: DiagnosticContext,
     diag: mm0.CompilerDiagnostic,
-    encoding: lsp.offsets.Encoding,
 ) !?[]const types.DiagnosticRelatedInformation {
+    const arena = converter.arena;
     var result = std.ArrayListUnmanaged(types.DiagnosticRelatedInformation).empty;
     for (diag.noteSlice()) |note| {
         const span = spanOf(note.span) orelse continue;
@@ -429,11 +426,7 @@ pub fn compilerDiagnosticRelatedInformation(
         try result.append(arena, .{
             .location = .{
                 .uri = hit.uri,
-                .range = offsets.locToRange(
-                    hit.text,
-                    .{ .start = hit.span.start, .end = hit.span.end },
-                    encoding,
-                ),
+                .range = try converter.range(hit.text, hit.span),
             },
             .message = try noteMessageText(arena, note.message),
         });
@@ -446,11 +439,7 @@ pub fn compilerDiagnosticRelatedInformation(
         try result.append(arena, .{
             .location = .{
                 .uri = hit.uri,
-                .range = offsets.locToRange(
-                    hit.text,
-                    .{ .start = hit.span.start, .end = hit.span.end },
-                    encoding,
-                ),
+                .range = try converter.range(hit.text, hit.span),
             },
             .message = try relatedLabelText(arena, related.label),
         });

@@ -144,6 +144,16 @@ pub const PlaceholderNotice = struct {
     span: Span,
     /// In the active diagnostic locale.
     message: []const u8,
+
+    /// How a host reports the notice before any search has run: a
+    /// placeholder still to be searched is a warning, a parameter it
+    /// rejects an error (the search runs without it).
+    pub fn severity(self: PlaceholderNotice) CompilerDiag.DiagnosticSeverity {
+        return switch (self.kind) {
+            .placeholder => .warning,
+            .parameter => .@"error",
+        };
+    }
 };
 
 /// The notices for every placeholder in `proof_src`, in source order (see

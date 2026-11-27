@@ -1,8 +1,8 @@
 const std = @import("std");
 const lsp = @import("lsp");
-const lsp_diagnostics = @import("lsp_diagnostics");
+const protocol = @import("../lsp/protocol.zig");
 
-const offsets = lsp_diagnostics.offsets;
+const offsets = protocol.offsets;
 const Position = lsp.types.Position;
 
 test "a span inside a character widens to the whole character" {

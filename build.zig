@@ -198,14 +198,6 @@ pub fn build(b: *std.Build) void {
     });
     addSearchBuildOptions(b, mm0_lib, search_timers);
 
-    const lsp_diagnostics_module = b.createModule(.{
-        .root_source_file = b.path("src/frontend/lsp/diagnostics.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    lsp_diagnostics_module.addImport("mm0", mm0_lib);
-    lsp_diagnostics_module.addImport("lsp", lsp_module);
-
     const wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
@@ -220,14 +212,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     addSearchBuildOptions(b, mm0_wasm_lib, false);
-
-    const lsp_diagnostics_wasm_module = b.createModule(.{
-        .root_source_file = b.path("src/frontend/lsp/diagnostics.zig"),
-        .target = wasm_target,
-        .optimize = optimize,
-    });
-    lsp_diagnostics_wasm_module.addImport("mm0", mm0_wasm_lib);
-    lsp_diagnostics_wasm_module.addImport("lsp", lsp_wasm_module);
 
     const verifier_module = b.createModule(.{
         .root_source_file = b.path("src/bin/verifier/main.zig"),
@@ -250,7 +234,6 @@ pub fn build(b: *std.Build) void {
     });
     compiler_module.addImport("mm0", mm0_lib);
     compiler_module.addImport("lsp", lsp_module);
-    compiler_module.addImport("lsp_diagnostics", lsp_diagnostics_module);
     compiler_module.addOptions("build_options", version_options);
 
     const compiler_exe = b.addExecutable(.{
@@ -301,10 +284,6 @@ pub fn build(b: *std.Build) void {
     });
     lsp_server_wasm_module.addImport("mm0", mm0_wasm_lib);
     lsp_server_wasm_module.addImport("lsp", lsp_wasm_module);
-    lsp_server_wasm_module.addImport(
-        "lsp_diagnostics",
-        lsp_diagnostics_wasm_module,
-    );
     lsp_server_wasm_module.addOptions("build_options", version_options);
 
     const lsp_server_wasm = b.addExecutable(.{
@@ -539,10 +518,6 @@ pub fn build(b: *std.Build) void {
     });
     compiler_bin_test_module.addImport("mm0", mm0_lib);
     compiler_bin_test_module.addImport("lsp", lsp_module);
-    compiler_bin_test_module.addImport(
-        "lsp_diagnostics",
-        lsp_diagnostics_module,
-    );
     compiler_bin_test_module.addOptions("build_options", version_options);
 
     const compiler_bin_tests = b.addTest(.{
@@ -606,7 +581,6 @@ pub fn build(b: *std.Build) void {
     });
     fuzz_lsp_server_module.addImport("mm0", mm0_lib);
     fuzz_lsp_server_module.addImport("lsp", lsp_module);
-    fuzz_lsp_server_module.addImport("lsp_diagnostics", lsp_diagnostics_module);
     fuzz_lsp_server_module.addOptions("build_options", version_options);
     fuzz_test_module.addImport("lsp_server", fuzz_lsp_server_module);
 

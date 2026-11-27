@@ -4,7 +4,7 @@
 const std = @import("std");
 const lsp = @import("lsp");
 const mm0 = @import("mm0");
-const lsp_diagnostics = @import("lsp_diagnostics");
+const protocol = @import("./protocol.zig");
 const lsp_texts = @import("../lsp_texts.zig");
 const unit_mod = @import("./unit.zig");
 
@@ -160,7 +160,7 @@ pub const NavigationSnapshot = struct {
         position: types.Position,
         encoding: lsp.offsets.Encoding,
     ) ?usize {
-        const offset = lsp_diagnostics.offsets.positionToIndex(
+        const offset = protocol.offsets.positionToIndex(
             self.file().text,
             position,
             encoding,

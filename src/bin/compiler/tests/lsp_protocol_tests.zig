@@ -2,13 +2,13 @@ const std = @import("std");
 const lsp = @import("lsp");
 const mm0 = @import("mm0");
 const lsp_server = @import("../lsp.zig");
-const lsp_diagnostics = @import("lsp_diagnostics");
+const protocol = @import("../lsp/protocol.zig");
 const types = lsp.types.flat;
 const DocumentKind = lsp_server.DocumentKind;
-const DiagnosticContext = lsp_diagnostics.DiagnosticContext;
-const locateCompilerDiagnostics = lsp_diagnostics.locateCompilerDiagnostics;
-const compilerDiagnosticToLsp = lsp_diagnostics.compilerDiagnosticToLsp;
-const diagnosticSeverityToLsp = lsp_diagnostics.diagnosticSeverityToLsp;
+const DiagnosticContext = protocol.DiagnosticContext;
+const locateCompilerDiagnostics = protocol.locateCompilerDiagnostics;
+const compilerDiagnosticToLsp = protocol.compilerDiagnosticToLsp;
+const diagnosticSeverityToLsp = protocol.diagnosticSeverityToLsp;
 const pathToUri = lsp_server.pathToUri;
 const uriToPath = lsp_server.uriToPath;
 const siblingPathForProof = lsp_server.siblingPathForProof;
@@ -248,15 +248,15 @@ test "compiler diagnostics filter by source for LSP publishing" {
             .version = 1,
         },
     };
+    var converter = protocol.RangeConverter{ .arena = allocator, .encoding = .@"utf-16" };
     const located = try locateCompilerDiagnostics(
-        allocator,
+        &converter,
         diag_context,
         &.{},
         &diags,
         null,
         null,
         null,
-        .@"utf-16",
     );
     try std.testing.expectEqual(@as(usize, 2), located.len);
     try std.testing.expectEqualStrings("file:///tmp/test.auf", located[0].uri);
@@ -313,15 +313,15 @@ test "compiler source diagnostics merge primaries and warnings" {
         },
     };
 
+    var converter = protocol.RangeConverter{ .arena = allocator, .encoding = .@"utf-16" };
     const located = try locateCompilerDiagnostics(
-        allocator,
+        &converter,
         diag_context,
         &primary,
         &warnings,
         extra,
         null,
         null,
-        .@"utf-16",
     );
     // Proof-side first, then `.mm0`-side: the extra diagnostic, primaries,
     // then warnings.
@@ -360,15 +360,15 @@ test "compiler source diagnostics append omitted summary" {
         },
     };
 
+    var converter = protocol.RangeConverter{ .arena = allocator, .encoding = .@"utf-16" };
     const located = try locateCompilerDiagnostics(
-        allocator,
+        &converter,
         diag_context,
         &primary,
         &.{},
         null,
         null,
         omitted,
-        .@"utf-16",
     );
     try std.testing.expectEqual(@as(usize, 2), located.len);
     try std.testing.expectEqualStrings(
@@ -442,12 +442,8 @@ test "compiler diagnostics publish related information" {
         },
     };
 
-    const lsp_diag = try compilerDiagnosticToLsp(
-        allocator,
-        diag_context,
-        diag,
-        .@"utf-16",
-    );
+    var converter = protocol.RangeConverter{ .arena = allocator, .encoding = .@"utf-16" };
+    const lsp_diag = try compilerDiagnosticToLsp(&converter, diag_context, diag);
     const related = lsp_diag.relatedInformation orelse {
         return error.ExpectedRelatedInformation;
     };
@@ -486,8 +482,9 @@ test "compiler dependency diagnostics render detail in LSP messages" {
             .version = 1,
         },
     };
+    var converter = protocol.RangeConverter{ .arena = allocator, .encoding = .@"utf-16" };
     const lsp_diag = try compilerDiagnosticToLsp(
-        allocator,
+        &converter,
         diag_context,
         .{
             .kind = .generic,
@@ -513,7 +510,6 @@ test "compiler dependency diagnostics render detail in LSP messages" {
                 .second_binding_text = "z",
             } },
         },
-        .@"utf-16",
     );
 
     try std.testing.expect(std.mem.containsAtLeast(
@@ -555,8 +551,9 @@ test "compiler dependency diagnostics explain one-sided violations" {
             .version = 1,
         },
     };
+    var converter = protocol.RangeConverter{ .arena = allocator, .encoding = .@"utf-16" };
     const lsp_diag = try compilerDiagnosticToLsp(
-        allocator,
+        &converter,
         diag_context,
         .{
             .kind = .generic,
@@ -582,7 +579,6 @@ test "compiler dependency diagnostics explain one-sided violations" {
                 .second_binding_text = "rel z z",
             } },
         },
-        .@"utf-16",
     );
 
     try std.testing.expect(std.mem.containsAtLeast(

@@ -10,32 +10,20 @@ const ArenaAllocator = mm0.ArenaAllocator;
 const diag_json = @import("diag_json.zig");
 const writeFields = diag_json.writeFields;
 
-const allocator = std.heap.wasm_allocator;
+const host = @import("./wasm_host.zig");
+const allocator = host.allocator;
+const ptrToConstSlice = host.ptrToConstSlice;
+const slicePtr = host.slicePtr;
+
+// The host's `alloc`, `free` and `set_locale` are this module's exports too.
+comptime {
+    _ = &host.alloc;
+    _ = &host.free;
+    _ = &host.set_locale;
+}
 
 var result_json: []u8 = &.{};
 var result_mmb: []u8 = &.{};
-
-pub export fn alloc(len: u32) u32 {
-    if (len == 0) return 0;
-    const buf = allocator.alloc(u8, len) catch return 0;
-    return @intCast(@intFromPtr(buf.ptr));
-}
-
-pub export fn free(ptr: u32, len: u32) void {
-    if (ptr == 0 or len == 0) return;
-    allocator.free(ptrToSlice(ptr, len));
-}
-
-/// Select the diagnostic locale ("en", "de") for all subsequent compiles.
-/// Returns 1 on success, 0 for an unknown locale name (the current locale
-/// is left unchanged). The embedding JS calls this once after
-/// instantiation; there is no environment in browser wasm.
-pub export fn set_locale(name_ptr: u32, name_len: u32) u32 {
-    const name = ptrToConstSlice(name_ptr, name_len);
-    const lang = mm0.parseCompilerLang(name) orelse return 0;
-    mm0.setCompilerLang(lang);
-    return 1;
-}
 
 pub export fn compile_sources(
     mm0_ptr: u32,
@@ -189,20 +177,6 @@ fn clearState() void {
     if (result_mmb.len != 0) allocator.free(result_mmb);
     result_json = &.{};
     result_mmb = &.{};
-}
-
-fn ptrToSlice(ptr: u32, len: u32) []u8 {
-    return @as([*]u8, @ptrFromInt(ptr))[0..len];
-}
-
-fn ptrToConstSlice(ptr: u32, len: u32) []const u8 {
-    if (ptr == 0 or len == 0) return &.{};
-    return @as([*]const u8, @ptrFromInt(ptr))[0..len];
-}
-
-fn slicePtr(bytes: []const u8) u32 {
-    if (bytes.len == 0) return 0;
-    return @intCast(@intFromPtr(bytes.ptr));
 }
 
 /// An empty JSON array.
@@ -379,10 +353,7 @@ fn writePlaceholderDiagnostics(
     for (notices) |notice| {
         try jw.write(placed(compiler, .{
             .message = notice.message,
-            .severity = switch (notice.kind) {
-                .placeholder => .warning,
-                .parameter => .@"error",
-            },
+            .severity = notice.severity(),
             .source = .proof,
             .err = switch (notice.kind) {
                 .placeholder => error.SearchPlaceholder,
@@ -398,7 +369,7 @@ fn writePlaceholderDiagnostics(
 /// compiler would leave empty set to null.
 const SyntheticDiagnostic = struct {
     message: []const u8,
-    severity: enum { @"error", warning } = .@"error",
+    severity: mm0.CompilerDiagnosticSeverity = .@"error",
     source: enum { mm0, proof },
     err: anyerror,
     /// The file the span lies in, when known (a join), else null.

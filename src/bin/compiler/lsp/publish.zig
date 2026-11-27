@@ -6,7 +6,7 @@
 const std = @import("std");
 const lsp = @import("lsp");
 const mm0 = @import("mm0");
-const lsp_diagnostics = @import("lsp_diagnostics");
+const protocol = @import("./protocol.zig");
 const handler_mod = @import("../lsp.zig");
 const uri_names = @import("./uris.zig");
 const unit_mod = @import("./unit.zig");
@@ -16,8 +16,8 @@ const types = lsp.types.flat;
 const ArenaAllocator = mm0.ArenaAllocator;
 const Handler = handler_mod.Handler;
 const HoleInferenceSink = mm0.CompilerSupport.Context.HoleInferenceSink;
-const LocatedDiagnostic = lsp_diagnostics.LocatedDiagnostic;
-const LSP_SERVER_NAME = lsp_diagnostics.SERVER_NAME;
+const LocatedDiagnostic = protocol.LocatedDiagnostic;
+const LSP_SERVER_NAME = protocol.SERVER_NAME;
 const Search = mm0.CompilerSupport.Search;
 const Unit = unit_mod.Unit;
 const UnitRoots = uri_names.UnitRoots;
@@ -29,7 +29,7 @@ const pathToUri = uri_names.pathToUri;
 const siblingPathForMm0 = uri_names.siblingPathForMm0;
 const siblingPathForProof = uri_names.siblingPathForProof;
 const uriToPath = uri_names.uriToPath;
-const zeroRange = lsp_diagnostics.zeroRange;
+const zeroRange = protocol.zeroRange;
 const AnalysisOutcome = @import("./analysis.zig").AnalysisOutcome;
 
 /// What the analysis of one open document touched: the other files it read
@@ -113,27 +113,29 @@ pub fn publishUnitDiagnostics(
     mm0_omitted: ?mm0.CompilerDiagnostic,
     extra_located: []const LocatedDiagnostic,
 ) !void {
+    var converter = protocol.RangeConverter{
+        .arena = arena,
+        .encoding = self.offset_encoding,
+    };
     var all = std.ArrayListUnmanaged(LocatedDiagnostic).empty;
-    try all.appendSlice(arena, try lsp_diagnostics.locateCompilerDiagnostics(
-        arena,
+    try all.appendSlice(arena, try protocol.locateCompilerDiagnostics(
+        &converter,
         unit.diagnosticContext(),
         primary,
         warnings,
         extra,
         proof_omitted,
         mm0_omitted,
-        self.offset_encoding,
     ));
     for (unit.failures) |failure| {
         try all.append(arena, .{
             .uri = failure.file.uri,
             .version = failure.file.version,
             .diagnostic = .{
-                .range = lsp_diagnostics.offsets.locToRange(
-                    failure.file.text,
-                    .{ .start = failure.span.start, .end = failure.span.end },
-                    self.offset_encoding,
-                ),
+                .range = try converter.range(failure.file.text, .{
+                    .start = failure.span.start,
+                    .end = failure.span.end,
+                }),
                 .severity = .Error,
                 .source = LSP_SERVER_NAME,
                 .message = .{ .string = failure.message },

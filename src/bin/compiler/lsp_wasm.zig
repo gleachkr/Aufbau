@@ -3,33 +3,22 @@ const lsp = @import("lsp");
 const mm0 = @import("mm0");
 const compiler_lsp = @import("./lsp.zig");
 
-const allocator = std.heap.wasm_allocator;
+const host = @import("./wasm_host.zig");
+const allocator = host.allocator;
+const ptrToConstSlice = host.ptrToConstSlice;
+const slicePtr = host.slicePtr;
+
+// The host's `alloc`, `free` and `set_locale` are this module's exports too.
+comptime {
+    _ = &host.alloc;
+    _ = &host.free;
+    _ = &host.set_locale;
+}
 
 var result_lsp: []u8 = &.{};
 var lsp_handler: compiler_lsp.Handler = undefined;
 var lsp_handler_initialized = false;
 var browser_transport: BrowserTransport = .{};
-
-pub export fn alloc(len: u32) u32 {
-    if (len == 0) return 0;
-    const buf = allocator.alloc(u8, len) catch return 0;
-    return @intCast(@intFromPtr(buf.ptr));
-}
-
-pub export fn free(ptr: u32, len: u32) void {
-    if (ptr == 0 or len == 0) return;
-    allocator.free(ptrToSlice(ptr, len));
-}
-
-/// Select the diagnostic locale ("en", "de") for all subsequent requests.
-/// Returns 1 on success, 0 for an unknown locale name (the current locale
-/// is left unchanged).
-pub export fn set_locale(name_ptr: u32, name_len: u32) u32 {
-    const name = ptrToConstSlice(name_ptr, name_len);
-    const lang = mm0.parseCompilerLang(name) orelse return 0;
-    mm0.setCompilerLang(lang);
-    return 1;
-}
 
 pub export fn process_lsp_message(message_ptr: u32, message_len: u32) u32 {
     clearLspResult();
@@ -85,20 +74,6 @@ pub export fn result_lsp_len() u32 {
 fn clearLspResult() void {
     if (result_lsp.len != 0) allocator.free(result_lsp);
     result_lsp = &.{};
-}
-
-fn ptrToSlice(ptr: u32, len: u32) []u8 {
-    return @as([*]u8, @ptrFromInt(ptr))[0..len];
-}
-
-fn ptrToConstSlice(ptr: u32, len: u32) []const u8 {
-    if (ptr == 0 or len == 0) return &.{};
-    return @as([*]const u8, @ptrFromInt(ptr))[0..len];
-}
-
-fn slicePtr(bytes: []const u8) u32 {
-    if (bytes.len == 0) return 0;
-    return @intCast(@intFromPtr(bytes.ptr));
 }
 
 /// The browser host does no I/O of its own: messages arrive and leave

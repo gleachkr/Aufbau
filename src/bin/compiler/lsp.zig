@@ -38,18 +38,18 @@ const Search = mm0.CompilerSupport.Search;
 const Unpack = mm0.CompilerSupport.Unpack;
 const Imports = mm0.Imports;
 const ProofBlock = mm0.ProofScript.ProofBlock;
-const lsp_diagnostics = @import("lsp_diagnostics");
-const DiagnosticContext = lsp_diagnostics.DiagnosticContext;
-const LocatedDiagnostic = lsp_diagnostics.LocatedDiagnostic;
-const LSP_SERVER_NAME = lsp_diagnostics.SERVER_NAME;
+const protocol = @import("./lsp/protocol.zig");
+const DiagnosticContext = protocol.DiagnosticContext;
+const LocatedDiagnostic = protocol.LocatedDiagnostic;
+const LSP_SERVER_NAME = protocol.SERVER_NAME;
 /// The command an open-goal action runs after its edit: select the first
 /// open goal `?` it added (arguments: the document uri and the range).
 const show_open_goal_command = "aufbau.showOpenGoal";
-const zeroRange = lsp_diagnostics.zeroRange;
-const highlightsToLsp = lsp_diagnostics.highlightsToLsp;
-const sourceRangesToLocations = lsp_diagnostics.sourceRangesToLocations;
-const completionsToLsp = lsp_diagnostics.completionsToLsp;
-const outlineSymbolsToLsp = lsp_diagnostics.outlineSymbolsToLsp;
+const zeroRange = protocol.zeroRange;
+const highlightsToLsp = protocol.highlightsToLsp;
+const sourceRangesToLocations = protocol.sourceRangesToLocations;
+const completionsToLsp = protocol.completionsToLsp;
+const outlineSymbolsToLsp = protocol.outlineSymbolsToLsp;
 const CodeActionResult = lsp.ResultType("textDocument/codeAction");
 
 const CodeActionItems = @typeInfo(CodeActionResult).optional.child;
@@ -410,7 +410,7 @@ pub const Handler = struct {
         for (params.contentChanges) |change| {
             switch (change) {
                 .text_document_content_change_partial => |partial| {
-                    const loc = lsp_diagnostics.offsets.rangeToLoc(
+                    const loc = protocol.offsets.rangeToLoc(
                         buffer.items,
                         partial.range,
                         self.offset_encoding,
@@ -687,7 +687,7 @@ pub const Handler = struct {
         const hit = proof_side.locate(span) orelse return null;
         const edits = try arena.alloc(types.TextEdit, 1);
         edits[0] = .{
-            .range = lsp_diagnostics.offsets.locToRange(
+            .range = protocol.offsets.locToRange(
                 hit.file.text,
                 .{ .start = hit.span.start, .end = hit.span.end },
                 self.offset_encoding,
@@ -1355,8 +1355,8 @@ fn positionAfterEdit(
     inserted: []const u8,
     encoding: lsp.offsets.Encoding,
 ) types.Position {
-    const at = lsp_diagnostics.offsets.indexToPosition(text, start, encoding, false);
-    const within = lsp_diagnostics.offsets.indexToPosition(inserted, inserted.len, encoding, false);
+    const at = protocol.offsets.indexToPosition(text, start, encoding, false);
+    const within = protocol.offsets.indexToPosition(inserted, inserted.len, encoding, false);
     if (within.line == 0) return .{ .line = at.line, .character = at.character + within.character };
     return .{ .line = at.line + within.line, .character = within.character };
 }

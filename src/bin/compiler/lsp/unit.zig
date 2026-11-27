@@ -6,7 +6,7 @@
 const std = @import("std");
 const lsp = @import("lsp");
 const mm0 = @import("mm0");
-const lsp_diagnostics = @import("lsp_diagnostics");
+const protocol = @import("./protocol.zig");
 const lsp_texts = @import("../lsp_texts.zig");
 const uris = @import("./uris.zig");
 
@@ -16,7 +16,7 @@ const Imports = mm0.Imports;
 const LspIndex = mm0.Frontend.LspIndex;
 const Search = mm0.CompilerSupport.Search;
 const pathToUri = uris.pathToUri;
-const DiagnosticContext = lsp_diagnostics.DiagnosticContext;
+const DiagnosticContext = protocol.DiagnosticContext;
 
 pub const OpenDocument = struct {
     text: []u8,
@@ -201,19 +201,19 @@ pub const Unit = struct {
         };
     }
 
-    pub fn rangeLocator(self: *const Unit) lsp_diagnostics.RangeLocator {
+    pub fn rangeLocator(self: *const Unit) protocol.RangeLocator {
         return .{ .ctx = @ptrCast(self), .locateFn = locateRange };
     }
 
-    pub fn diagnosticDocument(file: UnitFile) lsp_diagnostics.DiagnosticDocument {
+    pub fn diagnosticDocument(file: UnitFile) protocol.DiagnosticDocument {
         return .{ .uri = file.uri, .text = file.text, .version = file.version };
     }
 
     pub fn locateSpan(
         ctx: *const anyopaque,
         source: mm0.CompilerDiagnosticSource,
-        span: lsp_diagnostics.Span,
-    ) ?lsp_diagnostics.LocatedSpan {
+        span: protocol.Span,
+    ) ?protocol.LocatedSpan {
         const self: *const Unit = @ptrCast(@alignCast(ctx));
         const document: LspIndex.DocumentId = switch (source) {
             .mm0 => .mm0,
@@ -235,7 +235,7 @@ pub const Unit = struct {
     pub fn locateRange(
         ctx: *const anyopaque,
         range: LspIndex.SourceRange,
-    ) ?lsp_diagnostics.LocatedRange {
+    ) ?protocol.LocatedRange {
         const self: *const Unit = @ptrCast(@alignCast(ctx));
         const unit_side = self.side(range.document) orelse return null;
         const hit = unit_side.locate(.{

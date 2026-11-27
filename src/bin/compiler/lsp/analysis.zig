@@ -6,7 +6,7 @@
 const std = @import("std");
 const lsp = @import("lsp");
 const mm0 = @import("mm0");
-const lsp_diagnostics = @import("lsp_diagnostics");
+const protocol = @import("./protocol.zig");
 const handler_mod = @import("../lsp.zig");
 const uri_names = @import("./uris.zig");
 const unit_mod = @import("./unit.zig");
@@ -16,8 +16,8 @@ const types = lsp.types.flat;
 const ArenaAllocator = mm0.ArenaAllocator;
 const Handler = handler_mod.Handler;
 const HoleInferenceSink = mm0.CompilerSupport.Context.HoleInferenceSink;
-const LocatedDiagnostic = lsp_diagnostics.LocatedDiagnostic;
-const LSP_SERVER_NAME = lsp_diagnostics.SERVER_NAME;
+const LocatedDiagnostic = protocol.LocatedDiagnostic;
+const LSP_SERVER_NAME = protocol.SERVER_NAME;
 const Search = mm0.CompilerSupport.Search;
 const Unit = unit_mod.Unit;
 const UnitRoots = uri_names.UnitRoots;
@@ -29,7 +29,7 @@ const pathToUri = uri_names.pathToUri;
 const siblingPathForMm0 = uri_names.siblingPathForMm0;
 const siblingPathForProof = uri_names.siblingPathForProof;
 const uriToPath = uri_names.uriToPath;
-const zeroRange = lsp_diagnostics.zeroRange;
+const zeroRange = protocol.zeroRange;
 const publish = @import("./publish.zig");
 
 /// `Diagnostic.code` on everything `searchStatusDiagnostics` builds. These are
@@ -605,7 +605,7 @@ fn searchStatusDiagnostics(
         self.check_memo.knownBodies(),
     );
     if (notices.len == 0) return &.{};
-    var converter = lsp_diagnostics.RangeConverter{
+    var converter = protocol.RangeConverter{
         .arena = arena,
         .encoding = self.offset_encoding,
     };
@@ -616,10 +616,7 @@ fn searchStatusDiagnostics(
     for (notices) |notice| {
         // A rejected parameter is an error; it never blocks the search,
         // which simply does not apply it.
-        var severity: types.DiagnosticSeverity = switch (notice.kind) {
-            .placeholder => .Warning,
-            .parameter => .Error,
-        };
+        var severity = protocol.diagnosticSeverityToLsp(notice.severity());
         var message = notice.message;
         const recorded = if (notice.kind == .placeholder)
             outcomeForPlaceholder(outcomes, notice.span)
@@ -682,7 +679,7 @@ fn searchStatusDiagnostics(
 pub fn appendLocated(
     arena: std.mem.Allocator,
     diagnostics: *std.ArrayListUnmanaged(LocatedDiagnostic),
-    converter: *lsp_diagnostics.RangeConverter,
+    converter: *protocol.RangeConverter,
     proof_side: UnitSide,
     span: Search.Span,
     severity: types.DiagnosticSeverity,
