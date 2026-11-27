@@ -11,9 +11,10 @@ conversion; this is not a single build-module graph for every product.
 - JS packages and embeddable editor under `web/packages/`
 
 Proof semantics and elaboration live in the library. CLI entrypoints mostly
-handle I/O and arguments, but `src/bin/compiler/lsp.zig` also owns substantial
-application state: documents, caches, request routing, and publication.
-Both native and WASM language servers use that handler.
+handle I/O and arguments. The language server is the exception: its handler
+(`src/bin/compiler/lsp.zig`, with the modules of `src/bin/compiler/lsp/`)
+owns application state: documents, joined units, request routing, and
+publication. Both native and WASM language servers use that handler.
 
 ## High-level shape
 
@@ -482,30 +483,26 @@ so its proof-local items are anchored by position like any other item.
 Both joins share the source map. The MMB stays flat. `abc join` writes
 the joined `.mm0` so mm0-c remains the oracle for multi-file inputs.
 
-The language server (`bin/compiler/lsp.zig`) builds the same joins per
-request as a *unit*: its resolver looks a spec up (lexically, relative to
-the importing file's path) among the open documents first, then on disk
-(never on wasm, where the host opens library files as documents). The
-compiler and the navigation index run over the joined texts; the unit
+The language server builds the same joins as *units*
+(`bin/compiler/lsp/unit.zig`): its resolver looks a spec up (lexically,
+relative to the importing file's path) among the open documents first, then
+on disk (never on wasm, where the host opens library files as documents).
+The compiler and the navigation index run over the joined texts; the unit
 maps editor positions forward through the source map's inverse and index
 ranges and diagnostic spans back to (file, span), so diagnostics publish
 per file and navigation crosses files. A join that fails degrades to the
 root alone with its statements blanked (positions unchanged) plus a
-diagnostic on the failing statement. Each analysis records what it read,
-so an edit to an imported document re-analyses the roots that import it.
-A unit lists every file its join looked up, also those it did not find
-(`Unit.lookups`). The navigation cache keeps a root's unit with its index,
-and requests reuse both until one of those files changes: opening,
-editing or closing a document drops the entries that looked it up, and a
-file read from disk is compared by its mtime. An analysis reads that
-unit too, when it is current, and otherwise joins one for itself. Units
-take their files' texts from one store (`bin/compiler/lsp_texts.zig`):
-an open document's text is shared while its version stands, a file's on
-disk while its mtime does, and a unit holds the texts it read until it is
-dropped, so roots that import the same library keep one copy of each file
-and a unit joined again reads only what changed. The joined texts stay
-each unit's own. The other caches are keyed by the states of the unit's
-files. Open
+diagnostic on the failing statement. A unit lists every file its join
+looked up, also those it did not find (`Unit.lookups`). The handler keeps
+one unit per root, shared by the root's checks and its requests, until one
+of those files changes: opening, editing or closing a document drops the
+units that looked it up, and a file read from disk is compared by its
+mtime when the unit is next asked for. Units take their files' texts from
+one store (`bin/compiler/lsp_texts.zig`): an open document's text is
+shared while its version stands, a file's on disk while its mtime does,
+and a unit holds the texts it read until it is dropped, so roots that
+import the same library keep one copy of each file and a unit joined again
+reads only what changed. The joined texts stay each unit's own. Open
 `.mm0` files and `.auf` files with a sibling theory report on
 themselves; other files receive the root's view.
 
@@ -1397,23 +1394,80 @@ The important lifetimes are:
 
 ## Language server and browser editor
 
-`src/bin/compiler/lsp.zig` owns open documents, document version/mtime keys,
-navigation snapshots, search results, placeholder outcomes, and the
-proof-block check memo every analysis it runs shares (`check_memo.zig`),
-so an edit re-checks only the blocks it can affect and a root that imports
-a library replays the library's blocks instead of re-checking them. Two
-roots share the blocks up to where their joined texts differ in something a
-check can see: roots that import the same files in another order share only
-those before the first difference. The
-diagnostics pass keeps the hole inferences it collects for each root
-(`analysis_holes`). A hover on a hole reads them, or, when they are of
-other texts, checks only the proof under the cursor (`lsp/holes.zig`). The
-fill-holes action always checks that proof alone: the action offers a fill
-only if the filled line checks as written, a check per holey line that the
-analysis leaves out (`HoleInferenceSink.fills`). The memo keeps what each root's latest
-run used, so its size follows the open roots, not a cap. Cache
-invalidation is centralized in `Handler.invalidateCachesForUri`; the memo
-needs none, being keyed by content.
+The handler (`src/bin/compiler/lsp.zig`, `Handler`) keeps the request
+handlers and four pieces of state:
+
+- the open documents and the file-text store (`lsp_texts.zig`);
+- `units`, one `UnitState` per root (`lsp/unit_state.zig`): the joined
+  unit and, with it, everything found in its texts: the navigation
+  snapshot, built when a request first asks for it; the hole inferences of
+  the last analysis; the last search's results; and how each search marker's
+  search ended. Dropping the unit drops them all, so nothing computed from
+  one text is read against another, and no cache has its own invalidation;
+- `reports`, what each root's last analysis read and published on
+  (`lsp/publish.zig`), so an edit to an imported document re-analyses the
+  roots that import it and a file that leaves a unit has its diagnostics
+  cleared;
+- `pending`, the roots waiting for an analysis (`lsp/analysis.zig`).
+
+The modules beside the handler each take one job: `lsp/uris.zig` (URIs,
+paths and a file's root pair), `lsp/unit.zig` (joining and position
+mapping), `lsp/unit_state.zig`, `lsp/analysis.zig` (scheduling and running
+checks, search-marker status), `lsp/publish.zig` (diagnostic ownership and
+publication), `lsp/protocol.zig` (compiler diagnostics as LSP records),
+`lsp/offsets.zig` (byte offsets to LSP positions and back for any bytes,
+since lsp_kit's conversions assume valid UTF-8 and character boundaries),
+and `lsp/client.zig` (what the client said it supports).
+
+The handler is made for a named host (`Host`). A `queued` host (the native
+server) reads its input ahead into a queue (`lsp_input.zig`) and is asked,
+through `AnalysisInterrupt`, whether anything waits. A `serial` host (the
+browser worker) handles each message to its end. `lsp.serve` is the native
+server loop, over `lsp_kit`'s; the stdio tests run it too.
+
+Under a queued host an edit only marks its root pending; the analysis runs
+once nothing is queued, and no request waits for it. A running analysis
+asks the queue, after each proof it checked and the memo kept, whether to
+stop: for an edit or for a request. Stopping after a check the memo cannot
+keep would lose it, and the next run would check it again. A stopped run
+publishes nothing and drops no memo entry, and the next one replays what
+it checked. A request whose `$/cancelRequest` is already queued is
+answered `RequestCancelled` without running. A root's first run checks
+only the proofs of the files on screen, the root and the open library
+files that report through it (`CheckScope`), and publishes on those. A
+proof it leaves out leaves its theorem in scope, as a failed one does, so
+what it finds in those files is what a full run finds there. Every pending
+root gets that run before any root's full run. A file the first run leaves
+out keeps its diagnostics until the full run replaces them. With a client
+that shows work-done progress, a check that has run a second shows
+`$/progress`: the file being checked and the share of the proof text done,
+ended when the check is done, its document closed, or an edit starts it
+over. Under a serial host each edit is analysed at once and whole, and an
+in-flight search is not interrupted by a queued cancellation message.
+
+The compiler takes what an editor adds to a run as one group
+(`EditorHooks` on `Compiler.editor`: the check memo, the interrupt, the
+check scope, and progress). Every analysis the handler runs shares one
+proof-block check memo (`check_memo.zig`), so an edit re-checks only the
+blocks it can affect and a root that imports a library replays the
+library's blocks instead of re-checking them. Two roots share the blocks
+up to where their joined texts differ in something a check can see: roots
+that import the same files in another order share only those before the
+first difference. The memo keeps what each root's latest run used, so its
+size follows the open roots, not a cap, and it needs no invalidation,
+being keyed by content. A replayed block must give every collector what a
+check would have: the memo's `collectors` table classes each sink of the
+compiler context, at compile time, as recorded with the block or as one
+whose presence makes the run check afresh.
+
+Requests that need one proof checked (a hover on a hole whose inferences
+are of other texts, the fill-holes and unpack actions, a search at a
+marker) walk to its block once and check it alone
+(`Analyze.blockPoint`, `BlockPoint.checkAlone`); the walk passes over the
+bodies the snapshot knows. The fill-holes action offers a fill only if the
+filled line checks as written, a check per holey line that the analysis
+leaves out (`HoleInferenceSink.fills`).
+
 `src/frontend/lsp/index.zig` owns arena-backed navigation snapshots; its
 builder uses lenient proof parsing rather than requiring a successful proof.
 A snapshot holds the `.mm0` side and the proof headers. It is built in a
@@ -1427,34 +1481,19 @@ whose text spells it. With the check memo, the parse behind a snapshot also
 passes over the bodies the memo knows. In turn a snapshot tells a parser of
 its own proof text where each cleanly parsed body ends
 (`Snapshot.knownBodies`), so a request's walk to its block parses no line.
-A snapshot borrows the unit's texts.
-The handler translates byte spans through the negotiated LSP offset encoding.
+A snapshot borrows its unit's texts and answers in ranges of them; the
+handler maps those to files.
 
-The native entry uses `lsp_kit`'s server loop over
-`src/bin/compiler/lsp_input.zig`, which reads stdin ahead into a queue. An
-edit only marks its unit pending (`Handler.pending`); the analysis runs once
-nothing is queued. No request waits for it. A running analysis asks the
-queue, after each proof it checked and the memo kept, whether to stop: for
-an edit or for a request. Stopping after a check the memo cannot keep would
-lose it, and the next run would check it again. A stopped run publishes
-nothing and drops no memo entry, and the next one replays what it checked. A request whose `$/cancelRequest` is
-already queued is answered `RequestCancelled` without running. A root's
-first run checks only the proofs of the files on screen, the root and the
-open library files that report through it (`CheckScope`), and publishes on
-those. A proof it leaves out leaves its theorem in scope, as a failed one
-does, so what it finds in those files is what a full run finds there. Every
-pending root gets that
-run before any root's full run. A file the first run leaves out keeps its
-diagnostics until the full run replaces them. With a client that shows
-work-done progress, a check that has run a second shows `$/progress`: the
-file being checked and the share of the proof text done, ended when the
-check is done, its document closed, or an edit starts it over. The
-freestanding WASM entry
-reuses the handler with the compatibility transport and analyses each edit
-at once. `web/packages/lsp/` offers a directly called server and a browser
-Web Worker transport. Requests execute synchronously inside the worker: the
-page remains responsive, but an in-flight search is not interrupted by a
-queued cancellation message.
+The freestanding WASM entry (`lsp_wasm.zig`) feeds the handler through
+lsp-kit's server loop; it and the browser compiler (`wasm.zig`) share
+their host glue (`wasm_host.zig`). `web/packages/lsp/` offers a directly
+called server and a browser Web Worker transport. Requests execute
+synchronously inside the worker, so the page remains responsive.
+
+The handler's tests (`src/bin/compiler/tests/`) drive it through a
+`Session` (`lsp_support.zig`) that opens, changes and closes documents and
+settles pending analyses as the native server would, one file per area:
+protocol, units, navigation, actions, holes, offsets, and the stdio loop.
 
 The compiler, verifier, and direct LSP packages share one hosting module,
 `web/packages/shared/host.js`, which `build.zig` copies into each package as
