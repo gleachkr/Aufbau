@@ -270,7 +270,9 @@ the terms). Field names are camelCase.
 A name may also stand in an explicit binding, so that a rule application
 says which unknown a binder is: `imp_intro (a := $ ?h $)` discharges the
 assumption `?h`. A binding whose names are all known by the time its line
-is checked is an ordinary binding. One that still has holes leaves its
+is checked is an ordinary binding; a name in it stands for its value with
+the value's substitutions carried out (`P(c, y)`, not `[x := c] P(x, y)`),
+as the rule variable would be inferred. One that still has holes leaves its
 binder to inference, and once the line checks, the binder's value must
 fit what the binding writes (`HoleyBindingMismatch` otherwise); the names
 it fills are bound as a statement's are.
@@ -683,7 +685,9 @@ its failure analysis checked, every name the proof fixes at least in part:
 an open goal's report prints it and `partial` set when it is only the
 forced shape. A name the proof equates with an earlier open name has that
 name as its shape (`{name: "?b", value: "?a", partial: true}`); a name the
-proof does not fix at all is left out. It comes
+proof does not fix at all is left out. A value is listed with its
+substitutions carried out, so `?f` solved as `[x := ?t] P x` is listed as
+`P ?t`. It comes
 from `UnknownValueSink`, which keeps the check memo off.
 
 ---

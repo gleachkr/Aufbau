@@ -2027,7 +2027,15 @@ fn elaborateRefs(
                 if (ProofScript.isOpenGoalRuleName(inline_app.rule_name) and
                     OpenGoals.admitted(self))
                 {
-                    const line_idx = try admitInlineOpenGoal(
+                    const slot: PremiseSlot = .{
+                        .rule = rule,
+                        .partial_bindings = partial_bindings,
+                        .line_assertion = line_assertion,
+                        .expected_conclusion_hint = expected_conclusion_hint,
+                        .siblings = known,
+                        .idx = idx,
+                    };
+                    const line_idx = admitInlineOpenGoal(
                         self,
                         context,
                         theorem,
@@ -2035,15 +2043,20 @@ fn elaborateRefs(
                         line.label,
                         inline_app,
                         hint,
-                        .{
-                            .rule = rule,
-                            .partial_bindings = partial_bindings,
-                            .line_assertion = line_assertion,
-                            .expected_conclusion_hint = expected_conclusion_hint,
-                            .siblings = known,
-                            .idx = idx,
-                        },
-                    );
+                        slot,
+                    ) catch |err| {
+                        // The check stops here; the open goals after this
+                        // one still get what their positions fix.
+                        if (err == error.UnfinishedLine) try recordLaterOpenGoals(
+                            context,
+                            theorem,
+                            theorem_vars,
+                            source_refs,
+                            expected_ref_exprs,
+                            slot,
+                        );
+                        return err;
+                    };
                     refs[idx] = .{ .line = line_idx };
                     break :blk context.checked.items[line_idx].expr;
                 }
@@ -2194,6 +2207,53 @@ noinline fn admitInlineOpenGoal(
         shown,
     ));
     return error.UnfinishedLine;
+}
+
+/// Record what its position fixes of each open goal after `slot`'s among
+/// the application's references, for the line's report.
+fn recordLaterOpenGoals(
+    context: *const RuleApplyContext,
+    theorem: *TheoremContext,
+    theorem_vars: *const NameExprMap,
+    source_refs: []const ProofScript.Ref,
+    expected_ref_exprs: []const ?ExprId,
+    slot: PremiseSlot,
+) !void {
+    const records = context.open_goals orelse return;
+    for (source_refs[slot.idx + 1 ..], slot.idx + 1..) |ref, idx| {
+        const app = switch (ref) {
+            .application => |app| app,
+            .hyp, .line => continue,
+        };
+        if (!ProofScript.isOpenGoalRuleName(app.rule_name) or OpenGoals.hasBindings(app)) continue;
+        var later = slot;
+        later.idx = idx;
+        const hint = try refinedInlineHint(
+            context,
+            theorem,
+            slot.rule,
+            slot.partial_bindings,
+            slot.line_assertion,
+            slot.expected_conclusion_hint,
+            expected_ref_exprs[idx],
+            slot.siblings,
+            idx,
+        );
+        const goal = (try partialInlineGoal(context, theorem, later, hint)) orelse continue;
+        // A bare hole is no goal: the position fixes nothing of it.
+        if (theorem.interner.node(goal).* == .placeholder) continue;
+        try records.append(context.allocator, .{
+            .at = app.rule_span.start,
+            .goal = try OpenGoals.formatGoal(
+                context.allocator,
+                theorem,
+                context.env,
+                context.parser,
+                theorem_vars,
+                goal,
+            ),
+        });
+    }
 }
 
 /// What an inline open goal's position fixes of its goal, when it does not

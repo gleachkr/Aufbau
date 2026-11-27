@@ -108,6 +108,12 @@ axiom ex_elim {x y: obj} (g d s: ctx x) (p: wff x) (c: wff x):
 -- dummies named only in explicit bindings, which the pass must read.
 theorem unknown_rewrite_binder_all {x y: obj}:
   $ nd (hyp (A. x A. y (P x \/ Q y))) (A. y A. x (P x \/ Q y)) $;
+-- The same proof with each rule's formula bound to a name. `?p2` is solved
+-- as `sb x a (P x \/ Q y)`; l3's rule variable takes it with the
+-- substitution carried out, since `sb` has no `@congr` to rewrite it under
+-- the substitution l3 itself makes.
+theorem unknown_rewrite_binder_bound {x y: obj}:
+  $ nd (hyp (A. x A. y (P x \/ Q y))) (A. y A. x (P x \/ Q y)) $;
 -- Two existential introductions: l3's premise `sb x ?t (E. y ..)` must
 -- equal l2's conclusion `E. ?z ?q`, which only `sb_ex` gives.
 theorem unknown_rewrite_binder_ex (u v: obj) {x y: obj}:

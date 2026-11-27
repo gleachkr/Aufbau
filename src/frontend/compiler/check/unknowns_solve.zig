@@ -108,6 +108,11 @@ pub fn solve(inputs: Inputs, out: *Unknowns.Unknowns) !void {
         } else {
             try out.bound.put(inputs.allocator, name, value);
         }
+        // The value with its substitutions carried out, when that differs.
+        const reduced = try solver.reduced(value);
+        if (reduced == value) continue;
+        const told = if (solver.mentionsVariable(reduced)) try solver.visibleShape(reduced) else reduced;
+        if (!solver.isVariable(told)) try out.reduced.put(inputs.allocator, name, told);
     }
 }
 
@@ -1590,6 +1595,42 @@ const Solver = struct {
         const value = if (changed) try theorem.interner.internApp(app.term_id, args) else resolved;
         try self.resolved.put(self.inputs.allocator, resolved, value);
         return value;
+    }
+
+    /// The resolved `value` with each part under a `@rewrite` head in
+    /// normal form: its substitutions carried out. Nothing else is
+    /// rearranged, so a context keeps its members' order.
+    fn reduced(self: *Solver, resolved: ExprId) !ExprId {
+        var done: std.AutoHashMapUnmanaged(ExprId, ExprId) = .empty;
+        defer done.deinit(self.inputs.allocator);
+        return self.reducedIn(resolved, &done);
+    }
+
+    fn reducedIn(
+        self: *Solver,
+        value: ExprId,
+        done: *std.AutoHashMapUnmanaged(ExprId, ExprId),
+    ) !ExprId {
+        const theorem = self.inputs.theorem;
+        const app = switch (theorem.interner.node(value).*) {
+            .app => |app| app,
+            else => return value,
+        };
+        if (done.get(value)) |known| return known;
+        const result = if (self.rewriteOnly(app.term_id))
+            try self.normalForm(value)
+        else blk: {
+            const args = try theorem.allocator.alloc(ExprId, app.args.len);
+            defer theorem.allocator.free(args);
+            var changed = false;
+            for (app.args, args) |arg, *out| {
+                out.* = try self.reducedIn(arg, done);
+                if (out.* != arg) changed = true;
+            }
+            break :blk if (changed) try theorem.interner.internApp(app.term_id, args) else value;
+        };
+        try done.put(self.inputs.allocator, value, result);
+        return result;
     }
 
     fn mentionsVariable(self: *Solver, expr: ExprId) bool {

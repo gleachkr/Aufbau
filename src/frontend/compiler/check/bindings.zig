@@ -1187,7 +1187,7 @@ pub fn parseBindings(
         // A value with holes, once the names earlier lines fixed are
         // written in, is left to inference; the walk then checks the
         // binder's value against it (`LineWalk.checkHoleyBindings`).
-        const value = if (unknowns) |known| try known.substitute(allocator, theorem, parser, expr) else expr;
+        const value = if (unknowns) |known| try known.substitute(allocator, theorem, parser, expr, .binding) else expr;
         if (Holes.contains(value)) continue;
         bindings[arg_index] = try theorem.internParsedExpr(value);
     }

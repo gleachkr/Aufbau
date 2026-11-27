@@ -226,6 +226,25 @@ test "an inline open goal keeps what its line fixes outside and inside a context
     try expectOpenGoal(warnings[2], proof_src, "_ctx , q |- q \\/ p");
 }
 
+test "each inline open goal on a line reports what its position fixes" {
+    // The check stops at the first open goal, whose context stays open;
+    // the second still gets its goal.
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ p \/ q |- p \/ q $ by ?
+        \\l2: $ p \/ q |- q \/ p $ by or_elim [l1, ?, ?]
+    ;
+    var compiler = Compiler.initWithProof(std.testing.allocator, ctx_mm0_src, proof_src);
+    compiler.allow_search_placeholders = true;
+    try compiler.analyze();
+    try std.testing.expectEqual(@as(usize, 0), compiler.primaryDiagnostics().len);
+    const warnings = compiler.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 3), warnings.len);
+    try expectOpenGoal(warnings[1], proof_src, "_ctx , p |- q \\/ p");
+    try expectOpenGoal(warnings[2], proof_src, "_ctx , q |- q \\/ p");
+}
+
 test "an open goal in a rule application that falls back is reported once" {
     // `bad` fails on its second premise after its first, the open goal,
     // was admitted; `good` then checks the line. Only the attempt that
@@ -426,4 +445,45 @@ test "the pre-pass does not push an unknown witness under a binder it may captur
     try compiler.analyze();
     try std.testing.expect(compiler.primaryDiagnostics().len > 0);
     try std.testing.expectEqual(@as(usize, 0), sink.items.items.len);
+}
+
+const substitution_mm0_src =
+    \\delimiter $ ( ) $;
+    \\--| @hole _wff
+    \\--| @unknown ?
+    \\provable sort wff;
+    \\--| @hole _obj
+    \\--| @unknown ?o
+    \\sort obj;
+    \\term iff (a b: wff): wff; infixr iff: $<->$ prec 20;
+    \\term all {x: obj} (p: wff x): wff; prefix all: $A.$ prec 41;
+    \\term sb {x: obj} (t: obj x) (p: wff x): wff;
+    \\term P (a: obj): wff;
+    \\--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+    \\axiom iff_refl (a: wff): $ a <-> a $;
+    \\axiom iff_trans (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+    \\axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+    \\axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+    \\--| @rewrite
+    \\axiom sb_P {x: obj} (t: obj x): $ sb x t (P x) <-> P t $;
+    \\axiom all_elim {x: obj} (t: obj) (p: wff x): $ A. x p $ > $ sb x t p $;
+    \\theorem t {x: obj} (c: obj): $ A. x (P x) $ > $ P c $;
+;
+
+test "the value sink holds a shape whose open part a substitution carries" {
+    // `?f` is `sb x ?o1 (P x)`, told with the substitution carried out.
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ ?f $ by all_elim (t := $ ?o1 $) [#1]
+        \\l2: $ P c $ by ?
+    ;
+    var sink = helpers.mm0.UnknownValueSink.init(std.testing.allocator);
+    defer sink.deinit();
+    var compiler = Compiler.initWithProof(std.testing.allocator, substitution_mm0_src, proof_src);
+    compiler.allow_search_placeholders = true;
+    compiler.unknown_value_sink = &sink;
+    try compiler.analyze();
+    try std.testing.expectEqual(@as(usize, 1), sink.items.items.len);
+    try expectUnknownValue(sink.items.items[0], "?f", "P ?o1", true);
 }

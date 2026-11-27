@@ -343,6 +343,7 @@ pub const LineWalk = struct {
             self.theorem,
             &self.theory.parser,
             surface,
+            .statement,
         );
         try appendHoleNames(self.allocator, written, names);
     }
@@ -698,6 +699,7 @@ pub const LineWalk = struct {
             self.theorem,
             &self.theory.parser,
             surface,
+            .statement,
         );
         if (written == surface) return parsed;
         if (Holes.contains(written)) return .{ .holey = written };
@@ -751,6 +753,12 @@ pub const LineWalk = struct {
         while (partial.next()) |name| {
             if (!self.unknowns.bound.contains(name.*)) try names.append(self.allocator, name.*);
         }
+        var reduced = self.unknowns.reduced.keyIterator();
+        while (reduced.next()) |name| {
+            if (!self.unknowns.bound.contains(name.*) and !self.unknowns.partial.contains(name.*)) {
+                try names.append(self.allocator, name.*);
+            }
+        }
         if (names.items.len == 0) return;
         std.mem.sort([]const u8, names.items, {}, struct {
             fn lessThan(_: void, a: []const u8, b: []const u8) bool {
@@ -760,7 +768,7 @@ pub const LineWalk = struct {
         const out = sink.allocator();
         const theorem = try out.dupe(u8, self.assertion.name);
         for (names.items) |name| {
-            const known = (try self.unknowns.known(self.theorem, name)) orelse continue;
+            const known = (try self.unknowns.told(self.theorem, name)) orelse continue;
             const value = (try OpenGoals.formatGoalNamed(
                 out,
                 self.theorem,
@@ -837,7 +845,7 @@ pub const LineWalk = struct {
                     .end = math_start + token_span.end,
                 };
                 if (sink.covers(self.hover_from, span)) return;
-                const known = (try self.unknowns.known(self.theorem, name)) orelse return;
+                const known = (try self.unknowns.told(self.theorem, name)) orelse return;
                 const text = if (known.complete)
                     try ViewTrace.formatExprNamed(
                         sink.allocator,

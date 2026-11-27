@@ -47,6 +47,9 @@ importing file, and `<name>.auf` pairs with `<name>.mm0` (pass `proof` to
 name the root's proof file explicitly). Each diagnostic then carries the
 `file` it lies in, with `spanStart`/`spanEnd` local to that file.
 
+Spans are byte offsets into the UTF-8 text, not JavaScript string indices:
+encode the source (`new TextEncoder().encode(text)`) to slice by them.
+
 The default loader reads the package's WebAssembly file in browsers and Node.
 Pass `wasmUrl`, `wasmBytes`, `module`, or `instance` to `loadCompiler()` to
 control loading.

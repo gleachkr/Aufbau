@@ -30,6 +30,13 @@ pub const Unknowns = struct {
     /// open parts as placeholders. `substitute` writes it into a line with
     /// those parts as holes.
     partial: std.StringHashMapUnmanaged(ExprId) = .empty,
+    /// A name's value or shape with its substitutions carried out, when
+    /// that differs from what `bound` or `partial` holds: what the name is
+    /// reported as, and what a binding that names it gives its rule
+    /// variable. A statement keeps the other form, which is how the rule
+    /// that fixed it states it. This also holds a shape whose every open
+    /// part sat under a substitution, which `partial` cannot show.
+    reduced: std.StringHashMapUnmanaged(ExprId) = .empty,
     /// What the pre-pass found for an anonymous hole, by where the hole is
     /// written (`placeOf`): its value, or the shape forced on it, with its
     /// open parts as placeholders.
@@ -58,6 +65,7 @@ pub const Unknowns = struct {
     pub fn deinit(self: *Unknowns, allocator: std.mem.Allocator) void {
         self.bound.deinit(allocator);
         self.partial.deinit(allocator);
+        self.reduced.deinit(allocator);
         self.placed.deinit(allocator);
         self.statements.deinit(allocator);
         self.open.deinit(allocator);
@@ -79,6 +87,17 @@ pub const Unknowns = struct {
         var complete = true;
         const value = try self.fillOpen(theorem, shape, &complete);
         return .{ .value = value, .complete = complete };
+    }
+
+    /// `known`, with the substitutions in the value carried out.
+    pub fn told(self: *const Unknowns, theorem: *TheoremContext, name: []const u8) !?Known {
+        const value = self.reduced.get(name) orelse return self.known(theorem, name);
+        if (!theorem.containsPlaceholder(value)) return .{ .value = value, .complete = true };
+        // A shape, unless the walk has bound the name since.
+        if (self.bound.get(name)) |bound| return .{ .value = bound, .complete = true };
+        var complete = true;
+        const filled = try self.fillOpen(theorem, value, &complete);
+        return .{ .value = filled, .complete = complete };
     }
 
     fn fillOpen(self: *const Unknowns, theorem: *TheoremContext, id: ExprId, complete: *bool) !ExprId {
@@ -201,12 +220,18 @@ pub const Unknowns = struct {
         theorem: *TheoremContext,
         parser: *const MM0Parser,
         surface: *const Expr,
+        form: Form,
     ) !*const Expr {
         if (self.bound.count() == 0 and self.partial.count() == 0 and self.placed.count() == 0) return surface;
         if (self.placed.count() == 0 and !hasNamed(surface)) return surface;
         try self.refreshVarSurfaces(allocator, theorem);
-        return try self.substituteExpr(allocator, theorem, parser, surface);
+        return try self.substituteExpr(allocator, theorem, parser, surface, form);
     }
+
+    /// Which form of a solved name `substitute` writes: a statement takes
+    /// it as the rule that fixed it states it, a binding with its
+    /// substitutions carried out, as inference would find the variable.
+    pub const Form = enum { statement, binding };
 
     /// `surface` interned with each hole written as its value: the line it
     /// states once every hole in it has one. Null when a hole is left: one
@@ -261,6 +286,7 @@ pub const Unknowns = struct {
         theorem: *TheoremContext,
         parser: *const MM0Parser,
         expr: *const Expr,
+        form: Form,
     ) !*const Expr {
         switch (expr.*) {
             .variable => return expr,
@@ -269,7 +295,11 @@ pub const Unknowns = struct {
                     const value = self.placed.get(placeOf(hole) orelse return expr) orelse return expr;
                     return (try self.surfaceOf(allocator, theorem, parser, value, true)) orelse expr;
                 };
-                if (self.bound.get(name)) |value| {
+                if (self.bound.get(name)) |stated| {
+                    const value = switch (form) {
+                        .statement => stated,
+                        .binding => (try self.told(theorem, name)).?.value,
+                    };
                     return (try self.surfaceOf(allocator, theorem, parser, value, false)) orelse expr;
                 }
                 if (!self.partial.contains(name)) return expr;
@@ -281,7 +311,7 @@ pub const Unknowns = struct {
                 var changed = false;
                 var deps: u55 = 0;
                 for (term.args, args) |arg, *out| {
-                    out.* = try self.substituteExpr(allocator, theorem, parser, arg);
+                    out.* = try self.substituteExpr(allocator, theorem, parser, arg, form);
                     if (out.* != arg) changed = true;
                     deps |= out.*.deps();
                 }

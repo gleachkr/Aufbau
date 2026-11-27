@@ -13,6 +13,8 @@ This file records notable user-facing changes to Aufbau. The project follows
   goal as a warning naming its goal, with hole tokens for the parts the line
   does not fix. A proof with an open goal does not compile; the CLI lists
   every open goal and how many remain. Unlike `sorry!`, no MMB is written.
+  Each `?` among a line's premises gets its goal, including those after one
+  the line fixes only in part (`or_elim [l1, ?, ?]`).
 - A code action on `?` lists every rule whose conclusion matches the goal,
   ranked by how much the cited facts close. Applying one cites the
   hypotheses and earlier lines that state a premise exactly, leaves each
@@ -63,6 +65,12 @@ This file records notable user-facing changes to Aufbau. The project follows
     values that disagree, the note names the first line by which they do
     and the two terms that could not be equal ("the lines up to l3 give the
     named unknowns values that disagree (v cannot equal u)").
+  - A solved value is reported, and given to a rule variable by a binding
+    that names it, with its substitutions carried out: a name solved as
+    `[x := c] P(x, y)` reads `P(c, y)`, so a theory without a `@congr` rule
+    for its substitution term still checks the rule the binding is on. A
+    name whose only open part a substitution carries (`[x := ?t] P(x)`) is
+    reported by that shape (`P ?t`).
   - The wasm compile result lists each theorem's names in `unknowns`
     (`[{theorem, name, value, partial}]`), as an open goal's report would
     print them, whether or not the compile succeeds. A name the lines
