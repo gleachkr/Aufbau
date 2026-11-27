@@ -120,12 +120,39 @@ fn reportClash(inputs: Inputs, out: *Unknowns.Unknowns) !void {
     }
 }
 
+/// The app nodes a walk of a shared term has entered. The first
+/// `plain_steps` go unrecorded, so a small term costs nothing.
+const Seen = struct {
+    const plain_steps = 64;
+
+    steps: usize = 0,
+    set: std.AutoHashMapUnmanaged(ExprId, void) = .empty,
+
+    fn begin(self: *Seen) void {
+        self.steps = 0;
+        if (self.set.count() != 0) self.set.clearRetainingCapacity();
+    }
+
+    /// False when `id` was entered before.
+    fn enter(self: *Seen, allocator: std.mem.Allocator, id: ExprId) bool {
+        self.steps += 1;
+        if (self.steps <= plain_steps) return true;
+        const slot = self.set.getOrPut(allocator, id) catch return true;
+        return !slot.found_existing;
+    }
+};
+
 const Solver = struct {
     inputs: Inputs,
     /// The statements read, by the address of their text, for the walk.
     read: *std.AutoHashMapUnmanaged(usize, Holes.ParsedAssertion),
     /// Each name's variable.
     names: std.StringArrayHashMapUnmanaged(ExprId) = .empty,
+    /// The app nodes the walk of a value under way has entered, and the
+    /// resolved form of those `resolveFully` has left: a value is a shared
+    /// term, and each of its nodes is visited once.
+    seen: Seen = .{},
+    resolved: std.AutoHashMapUnmanaged(ExprId, ExprId) = .empty,
     /// The pass's own variables, and what each is bound to.
     variables: std.AutoHashMapUnmanaged(ExprId, Slot) = .empty,
     /// Counts the waiting equations made outside a trial (`Slot.touched`).
@@ -221,6 +248,8 @@ const Solver = struct {
         const allocator = self.inputs.allocator;
         self.names.deinit(allocator);
         self.variables.deinit(allocator);
+        self.seen.set.deinit(allocator);
+        self.resolved.deinit(allocator);
         self.idle_steps.deinit(allocator);
         self.statements.deinit(allocator);
         self.work.deinit(allocator);
@@ -656,12 +685,17 @@ const Solver = struct {
 
     /// Whether `expr` mentions a pass variable made at `first` or later.
     /// A term over one was itself made later.
-    fn mentionsFrom(self: *const Solver, expr: ExprId, first: ExprId) bool {
+    fn mentionsFrom(self: *Solver, expr: ExprId, first: ExprId) bool {
+        self.seen.begin();
+        return self.mentionsFromIn(expr, first);
+    }
+
+    fn mentionsFromIn(self: *Solver, expr: ExprId, first: ExprId) bool {
         if (expr < first) return false;
         if (self.isVariable(expr)) return true;
         return switch (self.inputs.theorem.interner.node(expr).*) {
-            .app => |app| for (app.args) |arg| {
-                if (self.mentionsFrom(arg, first)) break true;
+            .app => |app| self.seen.enter(self.inputs.allocator, expr) and for (app.args) |arg| {
+                if (self.mentionsFromIn(arg, first)) break true;
             } else false,
             else => false,
         };
@@ -874,6 +908,11 @@ const Solver = struct {
     /// under a definition or `@rewrite` head may still lose a variable as
     /// more is bound, so it is left as it is.
     fn restrict(self: *Solver, expr: ExprId, allowed: u55) !void {
+        self.seen.begin();
+        return self.restrictIn(expr, allowed);
+    }
+
+    fn restrictIn(self: *Solver, expr: ExprId, allowed: u55) !void {
         const theorem = self.inputs.theorem;
         const resolved = self.resolve(expr);
         if (self.isVariable(resolved)) {
@@ -888,8 +927,10 @@ const Solver = struct {
             return;
         }
         switch (theorem.interner.node(resolved).*) {
-            .app => |app| if (!self.undecided(app.term_id)) for (app.args) |arg| {
-                try self.restrict(arg, allowed);
+            .app => |app| if (!self.undecided(app.term_id) and
+                self.seen.enter(self.inputs.allocator, resolved))
+            {
+                for (app.args) |arg| try self.restrictIn(arg, allowed);
             },
             .variable => if (try theorem.exprDeps(resolved, .{}) & ~allowed != 0) return error.Clash,
             .placeholder => {},
@@ -1480,7 +1521,7 @@ const Solver = struct {
     }
 
     fn bind(self: *Solver, variable: ExprId, value: ExprId) !void {
-        if (try self.occurs(variable, value)) return error.Clash;
+        if (self.occurs(variable, value)) return error.Clash;
         const env = &self.inputs.theory.env;
         const theorem = self.inputs.theorem;
         const want = try SurfaceExpr.exprIdSortName(theorem, env, variable);
@@ -1498,43 +1539,50 @@ const Solver = struct {
         self.progress += 1;
     }
 
-    fn occurs(self: *Solver, variable: ExprId, expr: ExprId) !bool {
+    fn occurs(self: *Solver, variable: ExprId, expr: ExprId) bool {
+        self.seen.begin();
+        return self.occursIn(variable, expr);
+    }
+
+    fn occursIn(self: *Solver, variable: ExprId, expr: ExprId) bool {
         const resolved = self.resolve(expr);
         if (resolved == variable) return true;
         return switch (self.inputs.theorem.interner.node(resolved).*) {
-            .app => |app| for (app.args) |arg| {
-                if (try self.occurs(variable, arg)) break true;
+            .app => |app| self.seen.enter(self.inputs.allocator, resolved) and for (app.args) |arg| {
+                if (self.occursIn(variable, arg)) break true;
             } else false,
             else => false,
         };
     }
 
     fn resolveFully(self: *Solver, expr: ExprId) !ExprId {
+        if (self.resolved.count() != 0) self.resolved.clearRetainingCapacity();
+        return self.resolveFullyIn(expr);
+    }
+
+    fn resolveFullyIn(self: *Solver, expr: ExprId) !ExprId {
         const theorem = self.inputs.theorem;
         const resolved = self.resolve(expr);
         const app = switch (theorem.interner.node(resolved).*) {
             .app => |app| app,
             else => return resolved,
         };
+        if (self.resolved.get(resolved)) |known| return known;
         const args = try theorem.allocator.alloc(ExprId, app.args.len);
         defer theorem.allocator.free(args);
         var changed = false;
         for (app.args, args) |arg, *out| {
-            out.* = try self.resolveFully(arg);
+            out.* = try self.resolveFullyIn(arg);
             if (out.* != arg) changed = true;
         }
-        if (!changed) return resolved;
-        return try theorem.interner.internApp(app.term_id, args);
+        const value = if (changed) try theorem.interner.internApp(app.term_id, args) else resolved;
+        try self.resolved.put(self.inputs.allocator, resolved, value);
+        return value;
     }
 
-    fn mentionsVariable(self: *const Solver, expr: ExprId) bool {
-        if (self.isVariable(expr)) return true;
-        return switch (self.inputs.theorem.interner.node(expr).*) {
-            .app => |app| for (app.args) |arg| {
-                if (self.mentionsVariable(arg)) break true;
-            } else false,
-            else => false,
-        };
+    fn mentionsVariable(self: *Solver, expr: ExprId) bool {
+        self.seen.begin();
+        return self.mentionsFromIn(expr, 0);
     }
 };
 

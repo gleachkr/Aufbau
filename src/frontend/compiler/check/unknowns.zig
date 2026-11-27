@@ -203,6 +203,34 @@ pub const Unknowns = struct {
         return try self.substituteExpr(allocator, theorem, parser, surface);
     }
 
+    /// `surface` interned with each named hole written as its value: the
+    /// line it states once every name in it is bound. Null when a hole is
+    /// left: an anonymous one, a name with no value, or one whose value
+    /// holds a placeholder. The values go in as they are interned, so a
+    /// value shared between lines is never spelled out.
+    pub fn internBound(
+        self: *const Unknowns,
+        theorem: *TheoremContext,
+        surface: *const Expr,
+    ) !?ExprId {
+        if (self.bound.count() == 0) return null;
+        switch (surface.*) {
+            .variable => return try theorem.internParsedExpr(surface),
+            .hole => |hole| {
+                const value = self.bound.get(hole.name orelse return null) orelse return null;
+                return if (theorem.containsPlaceholder(value)) null else value;
+            },
+            .term => |term| {
+                const args = try theorem.allocator.alloc(ExprId, term.args.len);
+                defer theorem.allocator.free(args);
+                for (term.args, args) |arg, *out| {
+                    out.* = (try self.internBound(theorem, arg)) orelse return null;
+                }
+                return try theorem.interner.internApp(term.id, args);
+            },
+        }
+    }
+
     /// Whether `substitute` writes a shape into `surface`: a name in it is
     /// not bound but has a shape from the pre-pass.
     pub fn writesShape(self: *const Unknowns, surface: *const Expr) bool {

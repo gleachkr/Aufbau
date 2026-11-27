@@ -522,6 +522,33 @@ test "compiler checks lines whose values double per line" {
     try mm0.verifyPair(std.testing.allocator, mm0_src, mmb);
 }
 
+test "compiler checks named unknowns whose values double per line" {
+    // As above, with each line a name the pre-pass solves: a solved value
+    // goes into its lines as the shared term it is.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\--| @unknown ?
+        \\provable sort wff;
+        \\term an (a b: wff): wff;
+        \\infixl an: $/\\$ prec 20;
+        \\axiom dup (a: wff): $ a $ > $ a /\\ a $;
+        \\axiom idr (a: wff): $ a $ > $ a $;
+        \\theorem th (p: wff): $ p $ > $ p $;
+    ;
+    var proof: std.ArrayListUnmanaged(u8) = .empty;
+    defer proof.deinit(std.testing.allocator);
+    try proof.appendSlice(std.testing.allocator, "th\n---\nl1: $ ?a1 $ by dup [#1]\n");
+    for (2..61) |k| {
+        try proof.print(std.testing.allocator, "l{d}: $ ?a{d} $ by dup [l{d}]\n", .{ k, k, k - 1 });
+    }
+    try proof.appendSlice(std.testing.allocator, "l0: $ p $ by idr [#1]\n");
+
+    var compiler = Compiler.initWithProof(std.testing.allocator, mm0_src, proof.items);
+    const mmb = try compiler.compileMmb(std.testing.allocator);
+    defer std.testing.allocator.free(mmb);
+    try mm0.verifyPair(std.testing.allocator, mm0_src, mmb);
+}
+
 test "compiler stops inline proofs nested past its stack guard" {
     // The deepest nesting the parser accepts is deeper than the checker's
     // stack allows in any build mode.

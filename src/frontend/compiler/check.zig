@@ -688,6 +688,9 @@ pub const LineWalk = struct {
             .concrete => return parsed,
             .holey => |surface| surface,
         };
+        if (try self.unknowns.internBound(self.theorem, surface)) |concrete| {
+            return .{ .concrete = concrete };
+        }
         const written = try self.unknowns.substitute(
             self.allocator,
             self.theorem,
