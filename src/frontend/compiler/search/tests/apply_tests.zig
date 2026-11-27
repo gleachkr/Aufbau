@@ -957,6 +957,7 @@ test "exact search accepts visible holey goals" {
         \\t
         \\------
         \\l1: $ a -> _wff -> a $ by exact?
+        \\l2: $ a -> b -> a $ by ax_keep [#1, #2]
     , "exact?", .{}, &.{ "ax_keep [#1, #1]", "ax_keep [#1, #2]" });
 }
 

@@ -92,6 +92,22 @@ $ _wff -> _wff $
 is two holes, not one shared hole. A hole shared across lines is a
 named unknown (below).
 
+The other lines of the proof may still fix a hole. The pre-pass that
+solves named unknowns (below) runs on every proof with a hole, and gives
+each anonymous hole a variable of its own: a line that cites the hole's
+line, a binding, or the theorem's conclusion when the hole's line is the
+last, may force its value. A hole forced in full is written as that value
+before its line is checked, so with `theorem t: $ P $` the proof
+
+```proof
+l1: $ _wff $ by exact?
+```
+
+searches for `P`. A hole the pre-pass does not force in full is left to
+its own line's check, which fills it as described under **Elaboration**:
+only that check may fill a hole by preference (the smallest context, the
+unit) where the lines force nothing, since no other line shares the hole.
+
 ---
 
 ## Named unknowns: `@unknown`
@@ -139,12 +155,13 @@ Nothing on `l1` fixes `?h`; `imp_intro` on `l2` does, so `l1` checks as
 ### How names are solved
 
 A name belongs to one theorem's proof. Before the lines are checked, a
-pre-pass solves the names from all the lines at once: each rule
+pre-pass solves the names, and the anonymous holes with them, from all
+the lines at once: each rule
 application's conclusion equals its statement, each premise equals what
 its reference states, each explicit binding equals its binder, and the
 last line equals the theorem's conclusion.
 Only the lines a hole reaches take part: a line that holds a hole, a line
-that cites one, and a line that names an unknown in a binding. Any other
+that cites one, and a line with a hole in a binding. Any other
 line says nothing about a name, so a mistake in it is reported as that
 line's own error.
 The pre-pass unifies these first-order and commits only what every
@@ -204,8 +221,8 @@ successful check must agree with:
   A chain holding a `@freshen` rule forces nothing;
 - equations that clash solve nothing.
 
-Then the lines are checked in order. A solved name is written as its
-value. A name the pre-pass solved only in part is written as its forced
+Then the lines are checked in order. A solved name, or a solved anonymous
+hole, is written as its value. A name the pre-pass solved only in part is written as its forced
 shape, with the parts still open as holes: a part that stands for another
 name as that name, any other part as an anonymous hole. With a later
 conjunction elimination `l2: $ P u $ by and_l [l1]`, the line
@@ -619,9 +636,9 @@ that allocation goes through the same `@vars`-pool path used by
 
 ## Editor support
 
-The language server reports what each hole was filled with on hover, and
-each occurrence of a named unknown with the value it stands for, whether
-the pre-pass solved it or a line filled it. A name the pre-pass only
+The language server reports what each hole was filled with on hover,
+whether the pre-pass solved it or its line filled it, and each occurrence
+of a named unknown with the value it stands for. A name the pre-pass only
 partly solved shows its forced shape as a "partly inferred expression",
 with the parts still open printed as their own names or, when anonymous,
 as their sort's hole token (`_` for a sort without one). On

@@ -626,6 +626,7 @@ test "exact search suppresses broad whole-line holes without refs" {
         \\t
         \\------
         \\l1: $ _wff $ by exact?
+        \\l2: $ P $ by p []
     , "exact?", .{}, &.{});
 }
 

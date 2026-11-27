@@ -1276,6 +1276,9 @@ const placeholder_chain_mm0 =
     \\axiom pq: $ P $ > $ Q $;
     \\axiom qr: $ Q $ > $ R $;
     \\axiom r: $ R $;
+    \\axiom id (a: wff): $ a $ > $ a $;
+    \\axiom aq (a: wff): $ a $ > $ Q $;
+    \\axiom ar (a: wff): $ a $ > $ R $;
     \\theorem t: $ R $;
 ;
 
@@ -1321,7 +1324,7 @@ test "analysis warns on a line citing a holey placeholder line" {
         \\t
         \\---
         \\l1: $ HOLE $ by auto?
-        \\l2: $ Q $ by pq [l1]
+        \\l2: $ Q $ by aq [l1]
         \\l3: $ R $ by qr [l2]
     ;
     var compiler = Compiler.initWithProof(
@@ -1348,9 +1351,9 @@ test "analysis warns on a line citing a holey placeholder line" {
         \\t
         \\---
         \\l1: $ HOLE $ by auto?
-        \\l2: $ HOLE $ by pq [l1]
+        \\l2: $ HOLE $ by id [l1]
         \\l3: $ R $ by r []
-        \\l4: $ R $ by qr [l2]
+        \\l4: $ R $ by ar [l2]
     ;
     var chain = Compiler.initWithProof(
         std.testing.allocator,

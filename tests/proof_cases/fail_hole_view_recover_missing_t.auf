@@ -2,3 +2,4 @@ hole_view_recover_missing_t
 ---------------------------
 
 l1: $ _wff $ by all_elim [#1]
+l2: $ sb u x (P x) $ by all_elim [#1]

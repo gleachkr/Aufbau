@@ -555,10 +555,9 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_hole_view_recover_ctx_missing_t",
         .outcome = .{ .fail = error.MissingBinderAssignment },
     },
-    .{
-        .stem = "fail_hole_abstract_hidden_target",
-        .outcome = .{ .fail = error.UnifyMismatch },
-    },
+    // The line's hole is hidden from its own check, and the pre-pass
+    // solves it from the cited premises.
+    .{ .stem = "pass_hole_abstract_hidden_target", .outcome = .pass },
     .{
         .stem = "fail_hole_fallback_first_diag",
         .outcome = .{ .fail = error.HoleConclusionMismatch },

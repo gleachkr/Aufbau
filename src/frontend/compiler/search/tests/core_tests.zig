@@ -144,14 +144,24 @@ fn ndFolSearch(
     comptime name: []const u8,
     comptime statement: []const u8,
     counters: *types.SearchCounters,
-    options: struct { max_depth: ?usize = 6, fixture: []const u8 = "nd_fol", dir: []const u8 = "search_bench_cases" },
+    options: struct {
+        max_depth: ?usize = 6,
+        fixture: []const u8 = "nd_fol",
+        dir: []const u8 = "search_bench_cases",
+        /// Lines after the searched one: a last line with a hole takes
+        /// the theorem's conclusion before the search sees it.
+        after: []const u8 = "",
+    },
 ) !types.SourceSuggestions {
     const allocator = arena.allocator();
     const path = try std.fmt.allocPrint(allocator, "tests/{s}/{s}.mm0", .{ options.dir, options.fixture });
     const fixture = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .unlimited);
     const mm0_src = try std.mem.concat(allocator, u8, &.{ fixture, extra });
     const underline: [name.len]u8 = @splat('-');
-    const proof_src = name ++ "\n" ++ underline ++ "\nl1: $ " ++ statement ++ " $ by auto?\n";
+    const proof_src = try std.mem.concat(allocator, u8, &.{
+        name ++ "\n" ++ underline ++ "\nl1: $ " ++ statement ++ " $ by auto?\n",
+        options.after,
+    });
     return suggestionsAtNeedle(arena, mm0_src, proof_src, "auto?", .{
         .counters = counters,
         .generate = .{ .enabled = true, .max_depth = options.max_depth },
@@ -2068,7 +2078,11 @@ test "the search core fills a context hole with what the proof needs" {
         "iff_dup",
         "_ctx ⊢ a ↔ (a ∧ a)",
         &counters,
-        .{ .fixture = "pass_prawitz_holes", .dir = "proof_cases" },
+        .{
+            .fixture = "pass_prawitz_holes",
+            .dir = "proof_cases",
+            .after = "l2: $ emp ⊢ a ↔ (a ∧ a) $ by auto?\n",
+        },
     );
     defer suggestions.deinit();
 
@@ -2116,6 +2130,7 @@ test "the search core splits a context hole and empties the parts nothing fills"
         \\pair_top
         \\--------
         \\l1: $ _ctx ⊢ ⊤ ∧ ⊤ $ by auto?
+        \\l2: $ ∅ ⊢ ⊤ ∧ ⊤ $ by auto?
     , "auto?", .{
         .counters = &counters,
         .generate = .{ .enabled = true },

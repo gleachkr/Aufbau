@@ -637,7 +637,9 @@ pub const LineWalk = struct {
             &self.theorem_vars,
         );
 
-        if (parsed_assertion == .holey) {
+        // The holes are reported on the line as written, whether the
+        // pre-pass or this line's check filled them.
+        if (written_assertion == .holey) {
             try collectHoleInferences(
                 compiler,
                 &apply_context,
@@ -645,7 +647,7 @@ pub const LineWalk = struct {
                 self.theorem,
                 &self.theorem_vars,
                 line,
-                parsed_assertion.holey,
+                written_assertion.holey,
                 self.checked.items[line_idx].expr,
             );
         }

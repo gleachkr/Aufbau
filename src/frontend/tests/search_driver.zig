@@ -283,6 +283,7 @@ test "search driver misses a marker whose sibling marker's goal is a hole" {
         \\t
         \\---
         \\l1: $ p /\ _w $ by both [auto?, auto?]
+        \\l2: $ p /\ q $ by both [#1, #2]
     ;
     var result = try SearchDriver.run(std.testing.allocator,
         \\--| @hole _w

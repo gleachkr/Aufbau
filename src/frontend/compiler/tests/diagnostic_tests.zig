@@ -1112,6 +1112,8 @@ test "compiler explains proof hole visible structure mismatches" {
 }
 
 test "compiler explains proof holes that leave binders unsolved" {
+    // The cited premise fixes the hole before the line is checked, so the
+    // error is the one the line gets written out.
     const mm0_src =
         \\delimiter $ ( ) $;
         \\--| @hole _wff
@@ -1140,25 +1142,18 @@ test "compiler explains proof holes that leave binders unsolved" {
     try std.testing.expectEqual(.missing_binder_assignment, diag.kind);
     try std.testing.expectEqualStrings("b", diag.name.?);
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;
-    try std.testing.expectEqualStrings("_wff", proof_src[span.start..span.end]);
+    try std.testing.expectEqualStrings("ax_vacuous", proof_src[span.start..span.end]);
     switch (diag.detail) {
         .missing_binder_assignment => |detail| {
             try std.testing.expectEqualStrings("b", detail.binder_name);
-            try std.testing.expectEqual(.holey_surface_match, detail.path);
+            try std.testing.expectEqual(.strict_replay, detail.path);
         },
         else => return error.ExpectedMissingBinderDetail,
     }
     try std.testing.expectEqual(@as(usize, 1), diag.noteSlice().len);
     try expectNoteText(
-        "holey assertion left binder b unsolved",
+        "inferred bindings before failure: a = a",
         diag.noteSlice()[0],
-    );
-    const note_span = diag.noteSlice()[0].span orelse {
-        return error.ExpectedDiagnosticSpan;
-    };
-    try std.testing.expectEqualStrings(
-        "_wff",
-        proof_src[note_span.start..note_span.end],
     );
 }
 
@@ -1384,6 +1379,7 @@ test "compiler names the binder an inline minor's refs leave open" {
         \\bad
         \\---
         \\l1: $ (Q \/ P _obj) /\ P c $ by and_intro [or_l [q []], pc []]
+        \\l2: $ (Q \/ P c) /\ P c $ by and_intro [or_l [q []], pc []]
     ;
 
     var compiler = Compiler.initWithProof(

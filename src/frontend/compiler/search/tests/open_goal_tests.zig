@@ -250,6 +250,7 @@ test "a holey open goal line offers no sorry!" {
         \\t
         \\---
         \\l1: $ p /\ _wff $ by ?
+        \\l2: $ p /\ q $ by ?
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -263,10 +264,12 @@ test "a holey open goal line offers no sorry!" {
         \\l1_1: $ _wff -> p /\ _wff $ by ?
         \\l1_2: $ _wff $ by ?
         \\l1: $ p /\ _wff $ by mp [l1_1, l1_2]
+        \\
     , suggestions.items[0].replacement);
     try std.testing.expectEqualStrings(
         \\l1_1: $ _wff $ by ?
         \\l1: $ p /\ _wff $ by andi [#1, l1_1]
+        \\
     , suggestions.items[1].replacement);
 }
 

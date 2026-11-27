@@ -64,15 +64,23 @@ pub const Inputs = struct {
 
 /// Solve the block's named unknowns and bind the solved ones in `out`.
 pub fn solve(inputs: Inputs, out: *Unknowns.Unknowns) !void {
-    if (!mayNameUnknowns(&inputs.theory.parser, inputs.lines)) return;
+    if (!mayHoldHoles(&inputs.theory.parser, inputs.lines)) return;
     var solver = Solver{ .inputs = inputs, .read = &out.statements };
     defer solver.deinit();
     // A clash, or anything else the pass cannot read, solves nothing.
     solver.run() catch |err| switch (err) {
         error.OutOfMemory => return err,
-        error.Clash => return reportClash(inputs, out),
+        // Only names are told of a clash: a line with a hole of its own
+        // reports its own error.
+        error.Clash => return if (mayNameUnknowns(&inputs.theory.parser, inputs.lines))
+            reportClash(inputs, out),
         else => return,
     };
+    var places = solver.places.iterator();
+    while (places.next()) |entry| {
+        const value = try solver.resolveFully(entry.value_ptr.*);
+        if (!solver.mentionsVariable(value)) try out.placed.put(inputs.allocator, entry.key_ptr.*, value);
+    }
     var it = solver.names.iterator();
     while (it.next()) |entry| {
         const name = entry.key_ptr.*;
@@ -148,6 +156,8 @@ const Solver = struct {
     read: *std.AutoHashMapUnmanaged(usize, Holes.ParsedAssertion),
     /// Each name's variable.
     names: std.StringArrayHashMapUnmanaged(ExprId) = .empty,
+    /// Each anonymous hole's variable, by where the hole is written.
+    places: std.AutoArrayHashMapUnmanaged(usize, ExprId) = .empty,
     /// The app nodes the walk of a value under way has entered, and the
     /// resolved form of those `resolveFully` has left: a value is a shared
     /// term, and each of its nodes is visited once.
@@ -247,6 +257,7 @@ const Solver = struct {
     fn deinit(self: *Solver) void {
         const allocator = self.inputs.allocator;
         self.names.deinit(allocator);
+        self.places.deinit(allocator);
         self.variables.deinit(allocator);
         self.seen.set.deinit(allocator);
         self.resolved.deinit(allocator);
@@ -277,27 +288,23 @@ const Solver = struct {
         // earlier line.
         var holey: std.StringHashMapUnmanaged(void) = .empty;
         defer holey.deinit(allocator);
-        var any_named = false;
+        var any = false;
         for (lines) |line| {
-            switch (try self.readStatement(line)) {
-                .plain => {},
-                .holey => try holey.put(allocator, line.label, {}),
-                .named => {
-                    try holey.put(allocator, line.label, {});
-                    any_named = true;
-                },
+            if (try self.readStatement(line)) {
+                try holey.put(allocator, line.label, {});
+                any = true;
             }
-            if (applicationMayName(parser, line.application)) any_named = true;
+            if (applicationMayHold(parser, line.application)) any = true;
         }
-        if (!any_named) return;
+        if (!any) return;
 
-        // Only a line with a hole, one that cites such a line, or one that
-        // names an unknown in a binding says anything about a hole: any
-        // other line's equations are between its own rule's binders and
-        // statements without holes.
+        // Only a line with a hole, one that cites such a line, or one with
+        // a hole in a binding says anything about a hole: any other line's
+        // equations are between its own rule's binders and statements
+        // without holes.
         for (lines) |line| {
             if (!holey.contains(line.label) and !citesAny(line.application, &holey) and
-                !applicationMayName(parser, line.application)) continue;
+                !applicationMayHold(parser, line.application)) continue;
             const statement = self.statements.get(line.label) orelse continue;
             try self.application(line.application, statement);
         }
@@ -311,13 +318,9 @@ const Solver = struct {
         try self.decideChoices();
     }
 
-    /// What a line's statement holds: no hole (or it could not be read), a
-    /// hole, or a named one.
-    const Statement = enum { plain, holey, named };
-
-    /// Read `line`'s statement, and keep it for the walk. A statement that
-    /// cannot be read is left out.
-    fn readStatement(self: *Solver, line: ProofLine) !Statement {
+    /// Read `line`'s statement, and keep it for the walk: whether it holds
+    /// a hole. A statement that cannot be read is left out.
+    fn readStatement(self: *Solver, line: ProofLine) !bool {
         const theory = self.inputs.theory;
         const parsed = Holes.parseAssertion(
             &theory.parser,
@@ -327,18 +330,18 @@ const Solver = struct {
             line.assertion.text,
         ) catch |err| switch (err) {
             error.OutOfMemory => return err,
-            else => return .plain,
+            else => return false,
         };
         try self.read.put(self.inputs.allocator, @intFromPtr(line.assertion.text.ptr), parsed);
         switch (parsed) {
             .concrete => |expr| {
                 try self.statements.put(self.inputs.allocator, line.label, expr);
-                return .plain;
+                return false;
             },
             .holey => |surface| {
-                const expr = (try self.internSurface(surface)) orelse return .plain;
+                const expr = (try self.internSurface(surface)) orelse return false;
                 try self.statements.put(self.inputs.allocator, line.label, expr);
-                return if (Unknowns.hasNamed(surface)) .named else .holey;
+                return true;
             },
         }
     }
@@ -944,7 +947,13 @@ const Solver = struct {
             .hole => |hole| {
                 const sort_name = SurfaceExpr.sortNameById(&self.inputs.theory.env, hole.sort) orelse
                     return null;
-                const name = hole.name orelse return try self.mint(sort_name);
+                const name = hole.name orelse {
+                    const variable = try self.mint(sort_name);
+                    if (Unknowns.placeOf(hole)) |place| {
+                        try self.places.put(self.inputs.allocator, place, variable);
+                    }
+                    return variable;
+                };
                 const entry = try self.names.getOrPut(self.inputs.allocator, name);
                 if (!entry.found_existing) entry.value_ptr.* = try self.mint(sort_name);
                 return entry.value_ptr.*;
@@ -1611,15 +1620,24 @@ fn dedupe(list: *std.ArrayListUnmanaged(ExprId)) void {
     list.shrinkRetainingCapacity(len);
 }
 
-/// Whether any line could hold a named unknown: some line's statement holds
-/// an `@unknown` prefix. A cheap text test, so blocks without names (and
-/// theories without `@unknown`) pay nothing.
+/// Whether a line could name an unknown: the walk then holds what it
+/// reports of a line to the end of the block, as a later line may bind a
+/// name it shows (a cheap test before parsing).
 pub fn mayNameUnknowns(parser: *const MM0Parser, lines: []const ProofLine) bool {
-    if (parser.core.unknown_prefixes.count() == 0) return false;
+    return anyText(parser, lines, textMayName);
+}
+
+/// Whether a line could hold a hole, named or not, in its statement or in
+/// an explicit binding.
+fn mayHoldHoles(parser: *const MM0Parser, lines: []const ProofLine) bool {
+    return anyText(parser, lines, textMayHold);
+}
+
+const TextTest = fn (*const MM0Parser, []const u8) bool;
+
+fn anyText(parser: *const MM0Parser, lines: []const ProofLine, comptime may: TextTest) bool {
     for (lines) |line| {
-        if (textMayName(parser, line.assertion.text) or applicationMayName(parser, line.application)) {
-            return true;
-        }
+        if (may(parser, line.assertion.text) or applicationAnyText(parser, line.application, may)) return true;
     }
     return false;
 }
@@ -1635,25 +1653,38 @@ fn citesAny(app: RuleApplication, labels: *const std.StringHashMapUnmanaged(void
 }
 
 /// Whether an explicit binding of `app` or of its inline sub-proofs may
-/// name an unknown.
-fn applicationMayName(parser: *const MM0Parser, app: RuleApplication) bool {
+/// hold a hole.
+fn applicationMayHold(parser: *const MM0Parser, app: RuleApplication) bool {
+    return applicationAnyText(parser, app, textMayHold);
+}
+
+fn applicationAnyText(parser: *const MM0Parser, app: RuleApplication, comptime may: TextTest) bool {
     for (app.arg_bindings) |binding| {
-        if (textMayName(parser, binding.formula.text)) return true;
+        if (may(parser, binding.formula.text)) return true;
     }
     for (app.refs) |ref| switch (ref) {
-        .application => |child| if (applicationMayName(parser, child)) return true,
+        .application => |child| if (applicationAnyText(parser, child, may)) return true,
         else => {},
     };
     return false;
 }
 
-/// Whether `text` holds an `@unknown` prefix (a cheap test before parsing).
+/// Whether `text` holds an `@unknown` prefix.
 fn textMayName(parser: *const MM0Parser, text: []const u8) bool {
     var it = parser.core.unknown_prefixes.keyIterator();
     while (it.next()) |prefix| {
         if (std.mem.indexOf(u8, text, prefix.*) != null) return true;
     }
     return false;
+}
+
+/// Whether `text` holds an `@hole` token or an `@unknown` prefix.
+fn textMayHold(parser: *const MM0Parser, text: []const u8) bool {
+    var it = parser.core.hole_tokens.keyIterator();
+    while (it.next()) |token| {
+        if (std.mem.indexOf(u8, text, token.*) != null) return true;
+    }
+    return textMayName(parser, text);
 }
 
 fn isOrdinaryRuleName(name: []const u8) bool {

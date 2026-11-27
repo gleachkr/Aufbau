@@ -2,3 +2,4 @@ hole_abstract_hidden_target
 ---------------------------
 
 l1: $ _wff $ by ax_ctx (x := $ x $) [#1, #2]
+l2: $ b -> top $ by ax_ctx (x := $ x $) [#1, #2]

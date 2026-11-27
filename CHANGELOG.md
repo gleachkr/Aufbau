@@ -74,6 +74,13 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Changed
 
+- Anonymous holes are solved with the named unknowns: every proof with a
+  hole gets the pre-pass, and a line that cites a hole's line, a binding,
+  or the theorem's conclusion (for the last line) may fix the hole before
+  its line is checked. A last line `l1: $ _wff $ by exact?` now searches
+  for the theorem's conclusion, and a line that used to fail because its
+  own check left a hole open may now check. What the lines do not force
+  is still filled by the line's own check, as before.
 - Comparing expressions through definitions is deterministic: the later
   definition is unfolded and the two sides are matched, with no search
   over unfoldings. Lean0's block-heavy `model-fold` part, which took 507 s

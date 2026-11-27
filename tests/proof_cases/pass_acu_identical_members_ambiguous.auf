@@ -2,3 +2,4 @@ acu_identical_members_ambiguous
 -------------------------------
 
 l1: $ _c ==> u $ by weaken [#1]
+l2: $ x , x , x , x , x , x , x , x , x , x , x , x , x , x , x , x , x , x , x , x , x , x , x , x ==> u $ by weaken [#1]

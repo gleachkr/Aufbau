@@ -30,6 +30,9 @@ pub const Unknowns = struct {
     /// open parts as placeholders. `substitute` writes it into a line with
     /// those parts as holes.
     partial: std.StringHashMapUnmanaged(ExprId) = .empty,
+    /// The value the pre-pass solved for an anonymous hole, by where the
+    /// hole is written (`placeOf`).
+    placed: std.AutoHashMapUnmanaged(usize, ExprId) = .empty,
     /// The statements the pre-pass read, by the address of their text:
     /// the walk takes them from here instead of reading them again.
     statements: std.AutoHashMapUnmanaged(usize, Holes.ParsedAssertion) = .empty,
@@ -54,6 +57,7 @@ pub const Unknowns = struct {
     pub fn deinit(self: *Unknowns, allocator: std.mem.Allocator) void {
         self.bound.deinit(allocator);
         self.partial.deinit(allocator);
+        self.placed.deinit(allocator);
         self.statements.deinit(allocator);
         self.open.deinit(allocator);
         self.var_surfaces.deinit(allocator);
@@ -197,27 +201,27 @@ pub const Unknowns = struct {
         parser: *const MM0Parser,
         surface: *const Expr,
     ) !*const Expr {
-        if (self.bound.count() == 0 and self.partial.count() == 0) return surface;
-        if (!hasNamed(surface)) return surface;
+        if (self.bound.count() == 0 and self.partial.count() == 0 and self.placed.count() == 0) return surface;
+        if (self.placed.count() == 0 and !hasNamed(surface)) return surface;
         try self.refreshVarSurfaces(allocator, theorem);
         return try self.substituteExpr(allocator, theorem, parser, surface);
     }
 
-    /// `surface` interned with each named hole written as its value: the
-    /// line it states once every name in it is bound. Null when a hole is
-    /// left: an anonymous one, a name with no value, or one whose value
-    /// holds a placeholder. The values go in as they are interned, so a
+    /// `surface` interned with each hole written as its value: the line it
+    /// states once every hole in it has one. Null when a hole is left: one
+    /// with no value, or a name whose value holds a placeholder. The values go in as they are interned, so a
     /// value shared between lines is never spelled out.
     pub fn internBound(
         self: *const Unknowns,
         theorem: *TheoremContext,
         surface: *const Expr,
     ) !?ExprId {
-        if (self.bound.count() == 0) return null;
+        if (self.bound.count() == 0 and self.placed.count() == 0) return null;
         switch (surface.*) {
             .variable => return try theorem.internParsedExpr(surface),
             .hole => |hole| {
-                const value = self.bound.get(hole.name orelse return null) orelse return null;
+                const name = hole.name orelse return self.placed.get(placeOf(hole) orelse return null);
+                const value = self.bound.get(name) orelse return null;
                 return if (theorem.containsPlaceholder(value)) null else value;
             },
             .term => |term| {
@@ -257,7 +261,10 @@ pub const Unknowns = struct {
         switch (expr.*) {
             .variable => return expr,
             .hole => |hole| {
-                const name = hole.name orelse return expr;
+                const name = hole.name orelse {
+                    const value = self.placed.get(placeOf(hole) orelse return expr) orelse return expr;
+                    return (try self.surfaceOf(allocator, theorem, parser, value, false)) orelse expr;
+                };
                 if (self.bound.get(name)) |value| {
                     return (try self.surfaceOf(allocator, theorem, parser, value, false)) orelse expr;
                 }
@@ -588,6 +595,13 @@ fn readFills(
 fn sameValue(canonicalizer: *Canonicalizer, lhs: ExprId, rhs: ExprId) !bool {
     if (lhs == rhs) return true;
     return (try canonicalizer.canonicalize(lhs)) == (try canonicalizer.canonicalize(rhs));
+}
+
+/// Where an anonymous hole is written, which tells it from every other
+/// through the pre-pass and the walk. Null for a hole no source wrote.
+pub fn placeOf(hole: ExprModule.Hole) ?usize {
+    if (hole.token_span == null) return null;
+    return @intFromPtr(hole.token.ptr);
 }
 
 /// Whether `expr` holds a named unknown.

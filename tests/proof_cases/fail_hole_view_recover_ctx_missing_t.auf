@@ -2,3 +2,4 @@ hole_view_recover_ctx_missing_t
 -------------------------------
 
 l1: $ nd _ctx _wff $ by all_elim [#1]
+l2: $ nd (join (hyp b) (hyp a)) (P u) $ by all_elim [#1]

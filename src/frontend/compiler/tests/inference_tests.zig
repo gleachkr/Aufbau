@@ -714,6 +714,7 @@ test "with no ACU unit law identical members split with neither side empty" {
         \\split
         \\-----
         \\l1: $ _c ==> u $ by weaken [#1]
+        \\l2: $ x , x , x ==> u $ by weaken [#1]
         \\
     ,
         "chosen bindings: g = join(join(hyp(v0), hyp(v0)), hyp(v0)); h = hyp(v0); d = hyp(v1)",
@@ -741,6 +742,7 @@ test "ACU covers with no unit law are counted without being listed" {
         \\many
         \\----
         \\l1: $ _c ==> u $ by frame8 [#1]
+        \\l2: $ a , b , c , d , e ==> u $ by frame8 [#1]
         \\
     ,
         "chosen bindings: g1 = join(join(join(join(hyp(v0), hyp(v1)), hyp(v2))...; g2 = hyp(v5); g3 = hyp(v6); +6 more",

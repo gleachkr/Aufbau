@@ -2,3 +2,4 @@ bad_multi_ctx
 -------------
 
 l1: $ rel _ctx _ctx a $ by ax_two_ctx []
+l2: $ rel (hyp a) (hyp a) a $ by ax_two_ctx []

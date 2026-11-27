@@ -88,14 +88,16 @@ test "a holey open goal line leaves the line unfinished" {
         \\t
         \\---
         \\l1: $ _wff -> q -> p $ by ?
-        \\l2: $ q -> p $ by mp [l1, #1]
+        \\l2: $ q -> p $ by ? [l1]
     ;
     var compiler = try analyzed(proof_src, true);
     try std.testing.expectEqual(@as(usize, 0), compiler.primaryDiagnostics().len);
     const warnings = compiler.warningDiagnostics();
-    try std.testing.expectEqual(@as(usize, 2), warnings.len);
+    // No rule application cites `l1`, so nothing fixes its hole.
+    try std.testing.expectEqual(@as(usize, 3), warnings.len);
     try expectOpenGoal(warnings[0], proof_src, "_wff -> q -> p");
     try std.testing.expectEqual(error.CitesUnfinishedLine, warnings[1].err);
+    try std.testing.expectEqual(error.OpenGoal, warnings[2].err);
 }
 
 test "an open goal takes no bindings" {
