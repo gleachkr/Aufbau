@@ -1157,6 +1157,55 @@ test "compiler explains proof holes that leave binders unsolved" {
     );
 }
 
+test "compiler names the binder a hole no line fixes leaves unsolved" {
+    // Nothing fixes the holes of `l1`, so the pre-pass leaves the line
+    // holey and its own check reports the binder.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\--| @hole _wff
+        \\provable sort wff;
+        \\term pair (a b: wff): wff;
+        \\axiom ax_pair (a b: wff): $ pair a b $;
+        \\theorem bad (a b: wff): $ pair a b $;
+    ;
+    const proof_src =
+        \\bad
+        \\---
+        \\l1: $ pair _wff _wff $ by ax_pair []
+        \\l2: $ pair a b $ by ax_pair []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.MissingBinderAssignment,
+        compiler.compileMmb(std.testing.allocator),
+    );
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(.missing_binder_assignment, diag.kind);
+    try std.testing.expectEqualStrings("l1", diag.line_label.?);
+    try std.testing.expectEqualStrings("a", diag.name.?);
+    const span = diag.span orelse return error.ExpectedDiagnosticSpan;
+    try std.testing.expectEqualStrings("_wff", proof_src[span.start..span.end]);
+    try std.testing.expectEqual(@as(usize, "l1: $ pair ".len + "bad\n---\n".len), span.start);
+    switch (diag.detail) {
+        .missing_binder_assignment => |detail| {
+            try std.testing.expectEqualStrings("a", detail.binder_name);
+            try std.testing.expectEqual(.holey_surface_match, detail.path);
+        },
+        else => return error.ExpectedMissingBinderDetail,
+    }
+    try std.testing.expectEqual(@as(usize, 1), diag.noteSlice().len);
+    try expectNoteText(
+        "holey assertion left binder a unsolved",
+        diag.noteSlice()[0],
+    );
+}
+
 test "compiler reports which binder assignment is missing" {
     const mm0_src =
         \\provable sort wff;

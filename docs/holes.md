@@ -643,7 +643,9 @@ partly solved shows its forced shape as a "partly inferred expression",
 with the parts still open printed as their own names or, when anonymous,
 as their sort's hole token (`_` for a sort without one). On
 a holey line it also offers a **Fill in the holes** code action, which
-replaces the whole assertion with the line's checked conclusion. It
+replaces the whole assertion with the line's checked conclusion. A line
+whose named unknowns earlier lines already bound counts as holey here: the
+action writes each name's value in its place. It
 reprints the whole assertion rather than splicing each filling, so the
 printer adds whatever parentheses the surrounding notation needs. The
 action is not offered when the conclusion mentions a variable with no
