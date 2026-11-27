@@ -10,7 +10,10 @@ comptime {
     _ = @import("./frontend/compiler/search/shape.zig");
     _ = @import("./frontend/compiler/search/ref_index.zig");
     _ = @import("./frontend/lsp/index.zig");
-    _ = @import("./frontend/lsp/tests.zig");
+    _ = @import("./frontend/lsp/snapshot_tests.zig");
+    _ = @import("./frontend/lsp/completion_tests.zig");
+    _ = @import("./frontend/lsp/holes_tests.zig");
+    _ = @import("./frontend/lsp/navigation_tests.zig");
     _ = @import("./frontend/lsp/rename_tests.zig");
     _ = @import("./frontend/pretty_print.zig");
     _ = @import("./frontend/text_util.zig");
