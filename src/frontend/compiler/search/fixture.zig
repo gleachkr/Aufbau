@@ -1,6 +1,6 @@
 //! Search fixture: the theory and target assertion a search runs against.
 //! The editor's search builds one with `fixtureForSourceTarget`, which runs
-//! the analysis walk up to the target (`Analyze.analyzeToBlock`); the
+//! the analysis walk up to the target (`Analyze.blockPoint`); the
 //! unit tests build theirs with the `.mm0`-only walks in `tests/helpers.zig`.
 //! Also the helpers both share (`parseGoal`, `searchContext`) and
 //! `readProofCase`.
@@ -47,15 +47,13 @@ pub fn fixtureForSourceTarget(
     target: SourceTarget,
     known_bodies: ?ProofScript.KnownBodies,
 ) !Fixture {
-    var sink = DiagnosticSink.init(mm0_src, proof_src);
-    var compiler = CompilerContext.init(mm0_src, proof_src, .none, &sink);
     // The analysis walk, which recovers from a broken statement or local
     // item by dropping it, so a broken statement earlier in the file
     // silences neither the analysis nor the search of a later theorem. It
     // checks no proof, so an unfinished one before the target is no trouble.
     // Its proof stream is lenient like the target's parse, so the target
     // lemma's span matches.
-    const point = try Analyze.analyzeToBlock(&compiler, allocator, target.block, known_bodies);
+    const point = try Analyze.blockPoint(allocator, mm0_src, proof_src, target.block, known_bodies);
     return .{
         .theory = point.theory,
         .assertion = point.assertion,

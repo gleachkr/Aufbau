@@ -167,9 +167,7 @@ fn blockPoint(
     block: ProofBlock,
     known_bodies: ?ProofScript.KnownBodies,
 ) std.mem.Allocator.Error!?Analyze.BlockPoint {
-    var diagnostics = DiagnosticSink.init(mm0_src, proof_src);
-    var context = CompilerContext.init(mm0_src, proof_src, .none, &diagnostics);
-    return Analyze.analyzeToBlock(&context, allocator, block, known_bodies) catch |err| switch (err) {
+    return Analyze.blockPoint(allocator, mm0_src, proof_src, block, known_bodies) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return null,
     };
@@ -186,11 +184,10 @@ fn checks(
     block: ProofBlock,
     sink: ?*InlineConclusionSink,
 ) std.mem.Allocator.Error!bool {
-    var diagnostics = DiagnosticSink.init(mm0_src, proof_src);
-    var context = CompilerContext.init(mm0_src, proof_src, .none, &diagnostics);
-    context.allow_search_placeholders = true;
-    context.inline_conclusion_sink = sink;
-    point.check(&context, allocator, block) catch |err| switch (err) {
+    point.checkAlone(allocator, mm0_src, proof_src, block, .{
+        .inline_conclusions = sink,
+        .placeholders = true,
+    }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return false,
     };

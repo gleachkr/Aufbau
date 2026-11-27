@@ -1251,22 +1251,11 @@ test "a check keeps no inline conclusion from an aborted fallback attempt" {
         .allocator = std.testing.allocator,
     };
     defer sink.deinit();
-    var diagnostics = mm0.CompilerSupport.DiagnosticSink.DiagnosticSink.init(
-        mm0_src,
-        proof_src,
-    );
-    var context = mm0.CompilerSupport.Context.CompilerContext.init(
-        mm0_src,
-        proof_src,
-        .none,
-        &diagnostics,
-    );
     const arena = arena_state.allocator();
     const inline_start = std.mem.indexOf(u8, proof_src, "top_i []").?;
     const block = (try mm0.ProofScript.blockTouching(arena, proof_src, inline_start)).?;
-    var point = try mm0.CompilerSupport.Analyze.analyzeToBlock(&context, arena, block, null);
-    context.inline_conclusion_sink = &sink;
-    try point.check(&context, arena, block);
+    var point = try mm0.CompilerSupport.Analyze.blockPoint(arena, mm0_src, proof_src, block, null);
+    try point.checkAlone(arena, mm0_src, proof_src, block, .{ .inline_conclusions = &sink });
 
     // `outer_bad` elaborates the inline `top_i []` before its hypothesis
     // mismatch aborts it; only the `outer_good` fallback's entry survives.

@@ -15,6 +15,9 @@ const CompilerVars = @import("../vars.zig");
 const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
 const KeepChecking = @import("../context.zig").KeepChecking;
+const HoleInferenceSink = @import("../context.zig").HoleInferenceSink;
+const InlineConclusionSink = @import("../context.zig").InlineConclusionSink;
+const DiagnosticSink = @import("../diagnostic_sink.zig").DiagnosticSink;
 const Recovery = @import("recovery.zig");
 const Common = @import("common.zig");
 const TheoryState = @import("../theory_state.zig").TheoryState;
@@ -126,17 +129,58 @@ pub const BlockPoint = struct {
     theory: TheoryState,
     assertion: AssertionStmt,
 
-    /// Check `block` as the statement's proof, which need not be the block
-    /// the walk stopped at. Fails at its first error.
-    pub fn check(
+    /// What a check of one proof alone collects and admits.
+    pub const Alone = struct {
+        holes: ?*HoleInferenceSink = null,
+        inline_conclusions: ?*InlineConclusionSink = null,
+        /// Admit search placeholders, as an editor's analysis does.
+        placeholders: bool = false,
+        /// Go on past a line that fails, as an analysis does. Either way
+        /// the check fails with the proof's first error.
+        past_failures: bool = false,
+    };
+
+    /// Check `block`, a block of `proof_src`, as the statement's proof. It
+    /// need not be the block the walk stopped at, nor `proof_src` the text
+    /// that was walked: a rewritten proof is checked in the same theory.
+    /// The check is the analysis's own (`analyzeBlock`) in a context of its
+    /// own, whose diagnostics are dropped: no check depends on another
+    /// proof, so this finds what a whole analysis finds here.
+    pub fn checkAlone(
         self: *BlockPoint,
-        context: *CompilerContext,
         allocator: std.mem.Allocator,
+        mm0_src: []const u8,
+        proof_src: []const u8,
         block: TheoremBlock,
+        alone: Alone,
     ) !void {
-        try analyzeBlock(context, allocator, &self.theory, self.assertion, block);
+        var diagnostics = DiagnosticSink.init(mm0_src, proof_src);
+        var context = CompilerContext.init(mm0_src, proof_src, .none, &diagnostics);
+        context.hole_inference_sink = alone.holes;
+        context.inline_conclusion_sink = alone.inline_conclusions;
+        context.allow_search_placeholders = alone.placeholders;
+        // Which failures a whole analysis would report does not matter
+        // here, so no rule counts as invalid.
+        const no_rules = std.StringHashMap(void).init(allocator);
+        if (alone.past_failures) context.keep_checking = .{ .invalid_rules = &no_rules };
+        try analyzeBlock(&context, allocator, &self.theory, self.assertion, block);
     }
 };
+
+/// `analyzeToBlock` over `mm0_src` and `proof_src` in a context of its own,
+/// for a caller that checks or searches the one proof and reads no
+/// diagnostic of the walk.
+pub fn blockPoint(
+    allocator: std.mem.Allocator,
+    mm0_src: []const u8,
+    proof_src: []const u8,
+    block: TheoremBlock,
+    known_bodies: ?ProofScript.KnownBodies,
+) !BlockPoint {
+    var diagnostics = DiagnosticSink.init(mm0_src, proof_src);
+    var context = CompilerContext.init(mm0_src, proof_src, .none, &diagnostics);
+    return analyzeToBlock(&context, allocator, block, known_bodies);
+}
 
 /// The analysis walk up to `block`, a block of the proof source: to before
 /// the statement of the theorem it names, or to the lemma itself. The walk

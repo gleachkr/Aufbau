@@ -40,21 +40,14 @@ pub fn ofBlock(
     var found: HoleInferenceSink = .{ .allocator = allocator, .fills = fills };
     errdefer found.deinit();
 
-    var walk_diagnostics = DiagnosticSink.init(mm0_src, proof_src);
-    var walk = CompilerContext.init(mm0_src, proof_src, .none, &walk_diagnostics);
-    var point = Analyze.analyzeToBlock(&walk, work, block, known_bodies) catch |err| switch (err) {
+    var point = Analyze.blockPoint(work, mm0_src, proof_src, block, known_bodies) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return found,
     };
-
-    var diagnostics = DiagnosticSink.init(mm0_src, proof_src);
-    var context = CompilerContext.init(mm0_src, proof_src, .none, &diagnostics);
-    context.hole_inference_sink = &found;
-    // Past a line that fails, as an analysis. Which failures it would report
-    // does not matter here.
-    const no_rules = std.StringHashMap(void).init(work);
-    context.keep_checking = .{ .invalid_rules = &no_rules };
-    point.check(&context, work, block) catch |err| switch (err) {
+    point.checkAlone(work, mm0_src, proof_src, block, .{
+        .holes = &found,
+        .past_failures = true,
+    }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => {},
     };
