@@ -1,0 +1,5 @@
+waits
+-----
+
+l1: $ ?Γa , ?Γb , ∀ y (P y) ⊢ q $ by same [#1]
+l2: $ G , allP ⊢ q $ by same [l1]

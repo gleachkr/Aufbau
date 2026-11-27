@@ -131,7 +131,13 @@ const Solver = struct {
     /// Bag equations not decided yet: retried while bindings are made.
     postponed: std.ArrayListUnmanaged([2]ExprId) = .empty,
     /// Bindings made so far, to tell whether a retry round made progress.
+    /// A variable minted during the round does not count: a waiting
+    /// equation that unfolds a definition mints its hidden variables anew
+    /// at every retry, and binding those tells no equation anything.
     progress: usize = 0,
+    /// The first expression id of the retry round under way; a variable
+    /// at or past it was minted during the round.
+    round_start: ExprId = std.math.maxInt(ExprId),
     /// The variables a trial bound, in order, so it can undo them.
     trail: std.ArrayListUnmanaged(ExprId) = .empty,
     /// Lines citing a `@fallback` chain, decided after the other lines.
@@ -245,8 +251,11 @@ const Solver = struct {
     /// bindings are made.
     fn settle(self: *Solver) !void {
         try self.drain();
+        const outer = self.round_start;
+        defer self.round_start = outer;
         while (self.postponed.items.len != 0) {
             const before = self.progress;
+            self.round_start = @intCast(self.inputs.theorem.interner.count());
             try self.work.appendSlice(self.inputs.allocator, self.postponed.items);
             self.postponed.clearRetainingCapacity();
             try self.drain();
@@ -665,7 +674,7 @@ const Solver = struct {
             try self.variables.put(self.inputs.allocator, narrowed, null);
             if (self.in_trial) try self.trail.append(self.inputs.allocator, resolved);
             self.variables.getPtr(resolved).?.* = narrowed;
-            self.progress += 1;
+            if (resolved < self.round_start) self.progress += 1;
             return;
         }
         switch (theorem.interner.node(resolved).*) {
@@ -1251,7 +1260,7 @@ const Solver = struct {
         if (allowed != std.math.maxInt(u55)) try self.restrict(value, allowed);
         if (self.in_trial) try self.trail.append(self.inputs.allocator, variable);
         self.variables.getPtr(variable).?.* = value;
-        self.progress += 1;
+        if (variable < self.round_start) self.progress += 1;
     }
 
     fn occurs(self: *Solver, variable: ExprId, expr: ExprId) !bool {

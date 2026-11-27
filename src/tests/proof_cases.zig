@@ -1109,6 +1109,10 @@ const proof_cases = [_]ProofCase{
     // search that cannot finish stops at its limit.
     .{ .stem = "pass_unknown_bag_same_line", .outcome = .pass },
     .{ .stem = "fail_unknown_bag_same_line_conflict", .outcome = .{ .fail = error.NamedUnknownConflict } },
+    // A bag equation that keeps waiting pairs its decided member with a
+    // definition at every retry; the hidden variable minted each time is
+    // no progress, so the pre-pass stops (it once ran without end).
+    .{ .stem = "fail_unknown_bag_def_waits", .outcome = .{ .fail = error.HoleConclusionMismatch } },
     // A name's forced shape is written into its line; the line binds the
     // whole name (the conflict comes from its full value, not the shape).
     .{ .stem = "pass_unknown_partial_shape", .outcome = .pass },
