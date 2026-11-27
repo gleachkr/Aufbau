@@ -489,6 +489,44 @@ pub const Parser = struct {
         return self.current_block_name;
     }
 
+    /// Whether the next item starts like a proof-local one (a lemma, a local
+    /// def, a notation item), read off its first line without parsing it.
+    pub fn nextItemLooksLocal(self: *const Parser) bool {
+        const src = self.src;
+        var pos = self.pos;
+        while (pos < src.len) {
+            while (pos < src.len and
+                (src[pos] == ' ' or src[pos] == '\t' or src[pos] == '\r' or
+                    src[pos] == '\n'))
+            {
+                pos += 1;
+            }
+            if (pos + 1 < src.len and src[pos] == '-' and src[pos + 1] == '-') {
+                while (pos < src.len and src[pos] != '\n') pos += 1;
+                continue;
+            }
+            break;
+        }
+        const word_start = pos;
+        while (pos < src.len and isIdentChar(src[pos])) pos += 1;
+        const word = src[word_start..pos];
+        if (std.mem.eql(u8, word, "lemma")) return true;
+        if (isNotationKeyword(word)) {
+            // A notation item names its term on the same line; a theorem block
+            // that happens to be called `prefix` has nothing after the name.
+            while (pos < src.len and (src[pos] == ' ' or src[pos] == '\t')) pos += 1;
+            return pos < src.len and isIdentChar(src[pos]);
+        }
+        if (!std.mem.eql(u8, word, "def")) return false;
+
+        while (pos < src.len and (src[pos] == ' ' or src[pos] == '\t')) pos += 1;
+        while (pos < src.len and isIdentChar(src[pos])) pos += 1;
+        const tail_start = pos;
+        while (pos < src.len and src[pos] != '=' and src[pos] != '\n') pos += 1;
+        if (pos >= src.len or src[pos] != '=') return false;
+        return std.mem.trim(u8, src[tail_start..pos], " \t\r").len != 0;
+    }
+
     pub fn recoverToNextItemBoundary(self: *Parser) bool {
         self.current_block_name = null;
         self.current_block_name_span = null;

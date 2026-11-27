@@ -27,7 +27,6 @@ const WarningSnapshot = Recovery.WarningSnapshot;
 const TermRecoverySnapshot = Recovery.TermRecoverySnapshot;
 const AssertionRecoverySnapshot = Recovery.AssertionRecoverySnapshot;
 const ProofItemStream = Common.ProofItemStream;
-const anchorMatches = Common.anchorMatches;
 const analyzeBlock = Common.analyzeBlock;
 const isLocalProofItem = Common.isLocalProofItem;
 const processAssertion = Common.processAssertion;
@@ -40,11 +39,9 @@ const FilledPublicDef = Common.FilledPublicDef;
 const InvalidRuleSet = std.StringHashMap(void);
 
 const ProofAnalysisState = struct {
-    allocator: std.mem.Allocator,
     invalid_rules: InvalidRuleSet,
     invalid_terms: InvalidRuleSet,
-    parser: ProofScriptParser,
-    pending: std.ArrayListUnmanaged(TopLevelItem) = .empty,
+    stream: ProofItemStream,
     exhausted: bool = false,
     stream_aborted: bool = false,
 
@@ -53,7 +50,6 @@ const ProofAnalysisState = struct {
         source: []const u8,
     ) ProofAnalysisState {
         return .{
-            .allocator = allocator,
             .invalid_rules = InvalidRuleSet.init(allocator),
             .invalid_terms = InvalidRuleSet.init(allocator),
             // Lenient: a broken proof line becomes a `ProofLine.incomplete`
@@ -61,19 +57,8 @@ const ProofAnalysisState = struct {
             // instead of abandoning the whole item, so the block's other
             // lines keep their diagnostics and editor state. The compile
             // path (`run.zig`) stays strict.
-            .parser = ProofScriptParser.initLenient(allocator, source),
+            .stream = ProofItemStream.initLenient(allocator, source),
         };
-    }
-
-    fn nextItem(self: *ProofAnalysisState) !?TopLevelItem {
-        if (self.pending.items.len > 0) {
-            return self.pending.pop().?;
-        }
-        return try self.parser.nextItem();
-    }
-
-    fn putBack(self: *ProofAnalysisState, item: TopLevelItem) void {
-        self.pending.append(self.allocator, item) catch unreachable;
     }
 };
 
@@ -92,17 +77,13 @@ const AnalysisState = struct {
         allocator: std.mem.Allocator,
         source: []const u8,
         proof_source: ?[]const u8,
-        comptime with_proof: bool,
     ) AnalysisState {
         return .{
             .theory = TheoryState.init(allocator, source),
             .invalid_assertions = InvalidRuleSet.init(allocator),
             .invalid_terms = InvalidRuleSet.init(allocator),
-            .proof = if (with_proof)
-                if (proof_source) |proof|
-                    ProofAnalysisState.init(allocator, proof)
-                else
-                    null
+            .proof = if (proof_source) |proof|
+                ProofAnalysisState.init(allocator, proof)
             else
                 null,
         };
@@ -113,14 +94,14 @@ pub fn analyze(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
 ) !void {
-    try analyzeInternal(self, allocator, true);
+    try analyzeInternal(self, allocator, self.proof_source);
 }
 
 pub fn analyzeMm0(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
 ) !void {
-    try analyzeInternal(self, allocator, false);
+    try analyzeInternal(self, allocator, null);
 }
 
 /// Where `analyzeToBlock` stops: the theory a block's proof is checked in,
@@ -201,11 +182,10 @@ pub fn analyzeToBlock(
         allocator,
         self.source,
         self.proof_source,
-        true,
     );
-    if (state.proof) |*proof| proof.parser.known_bodies = known_bodies;
+    if (state.proof) |*proof| proof.stream.parser.known_bodies = known_bodies;
     state.stop = block;
-    walk(self, allocator, &state, true) catch |err| {
+    walk(self, allocator, &state) catch |err| {
         if (err != error.BlockReached) return err;
         return .{ .theory = state.theory, .assertion = state.reached.? };
     };
@@ -218,18 +198,13 @@ pub fn analyzeToBlock(
 fn analyzeInternal(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
-    comptime with_proof: bool,
+    proof_source: ?[]const u8,
 ) !void {
-    var state = AnalysisState.init(
-        allocator,
-        self.source,
-        self.proof_source,
-        with_proof,
-    );
+    var state = AnalysisState.init(allocator, self.source, proof_source);
     if (self.editor.memo) |memo| {
         memo.beginRun(self);
         if (memo.active) if (state.proof) |*proof| {
-            proof.parser.known_bodies = memo.knownBodies();
+            proof.stream.parser.known_bodies = memo.knownBodies();
         };
     }
     // Only a walk that reached the end knows which recorded checks the
@@ -241,7 +216,7 @@ fn analyzeInternal(
     defer if (self.statement_sink) |sink|
         sink.capture(&state.theory.parser, &state.theory.env);
     if (self.unknown_value_sink) |sink| sink.reset();
-    try walk(self, allocator, &state, with_proof);
+    try walk(self, allocator, &state);
     walked = true;
 }
 
@@ -249,7 +224,6 @@ fn walk(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
     state: *AnalysisState,
-    comptime with_proof: bool,
 ) !void {
     if (state.proof) |*proof| {
         self.keep_checking = .{ .invalid_rules = &proof.invalid_rules };
@@ -264,13 +238,7 @@ fn walk(
             if (!recoverFromMm0ParseFailure(self, state, err)) return;
             continue :parse_loop;
         };
-        if (with_proof) {
-            try analyzeDrainAnchoredLocalProofItems(
-                self,
-                allocator,
-                state,
-            );
-        }
+        try analyzeDrainAnchoredLocalProofItems(self, allocator, state);
         const header = state.theory.parser.peekNextPublicStmtHeader();
         const next_stmt = Common.nextPublicStatement(
             self,
@@ -404,6 +372,9 @@ fn stopAtLemma(
     return error.BlockReached;
 }
 
+/// The recovering form of `Common.drainAnchoredLocalProofItems`: a local
+/// item that fails to parse is reported and passed over, and one that fails
+/// to check is handled by `analyzeLocalProofItem`.
 fn analyzeDrainAnchoredLocalProofItems(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
@@ -411,105 +382,40 @@ fn analyzeDrainAnchoredLocalProofItems(
 ) !void {
     const proof = if (state.proof) |*actual| actual else return;
     const header = state.theory.parser.peekNextPublicStmtHeader() orelse return;
-    if (!analysisProofStreamLooksLocal(proof)) return;
+    // Only local items are read ahead: a theorem's block is parsed when its
+    // theorem is reached, which reports what is wrong with it there.
+    if (!proof.stream.nextLooksLocal()) return;
 
     var locals = std.ArrayListUnmanaged(TopLevelItem).empty;
     defer locals.deinit(allocator);
 
     while (true) {
-        const item = proof.nextItem() catch |err| {
+        const found = Common.collectAnchoredLocalProofItems(
+            allocator,
+            header,
+            &proof.stream,
+            &locals,
+        ) catch |err| {
             self.addPrimaryDiagnostic(CompilerDiag.proofParserDiagnostic(
-                &proof.parser,
+                &proof.stream.parser,
                 header.name,
                 err,
             ));
-            if (!proof.parser.recoverToNextItemBoundary()) {
+            if (!proof.stream.parser.recoverToNextItemBoundary()) {
                 proof.exhausted = true;
-                putBackAnalysisItems(proof, locals.items);
+                proof.stream.putBackAll(locals.items);
                 return;
             }
             continue;
-        } orelse {
-            proof.exhausted = true;
-            putBackAnalysisItems(proof, locals.items);
-            return;
         };
-
-        if (isLocalProofItem(item)) {
-            try locals.append(allocator, item);
-            continue;
-        }
-
-        const matches = locals.items.len > 0 and anchorMatches(header, item);
-        if (!matches) {
-            proof.putBack(item);
-            putBackAnalysisItems(proof, locals.items);
-            return;
-        }
-
-        proof.putBack(item);
-        for (locals.items) |local| {
-            try analyzeLocalProofItem(self, allocator, state, proof, local);
+        switch (found) {
+            .anchored => for (locals.items) |local| {
+                try analyzeLocalProofItem(self, allocator, state, proof, local);
+            },
+            .unanchored => {},
+            .exhausted => proof.exhausted = true,
         }
         return;
-    }
-}
-
-fn analysisProofStreamLooksLocal(proof: *const ProofAnalysisState) bool {
-    if (proof.pending.items.len > 0) {
-        return isLocalProofItem(proof.pending.items[proof.pending.items.len - 1]);
-    }
-    return proofNextItemLooksLocal(&proof.parser);
-}
-
-fn proofNextItemLooksLocal(parser: *const ProofScriptParser) bool {
-    const src = parser.src;
-    var pos = parser.pos;
-    while (pos < src.len) {
-        while (pos < src.len and
-            (src[pos] == ' ' or src[pos] == '\t' or src[pos] == '\r' or
-                src[pos] == '\n'))
-        {
-            pos += 1;
-        }
-        if (pos + 1 < src.len and src[pos] == '-' and src[pos + 1] == '-') {
-            while (pos < src.len and src[pos] != '\n') pos += 1;
-            continue;
-        }
-        break;
-    }
-    const word_start = pos;
-    while (pos < src.len and isProofIdentChar(src[pos])) pos += 1;
-    const word = src[word_start..pos];
-    if (std.mem.eql(u8, word, "lemma")) return true;
-    if (ProofScript.isNotationKeyword(word)) {
-        // A notation item names its term on the same line; a theorem block
-        // that happens to be called `prefix` has nothing after the name.
-        while (pos < src.len and (src[pos] == ' ' or src[pos] == '\t')) pos += 1;
-        return pos < src.len and isProofIdentChar(src[pos]);
-    }
-    if (!std.mem.eql(u8, word, "def")) return false;
-
-    while (pos < src.len and (src[pos] == ' ' or src[pos] == '\t')) pos += 1;
-    while (pos < src.len and isProofIdentChar(src[pos])) pos += 1;
-    const tail_start = pos;
-    while (pos < src.len and src[pos] != '=' and src[pos] != '\n') pos += 1;
-    if (pos >= src.len or src[pos] != '=') return false;
-    return std.mem.trim(u8, src[tail_start..pos], " \t\r").len != 0;
-}
-
-fn isProofIdentChar(ch: u8) bool {
-    return std.ascii.isAlphanumeric(ch) or ch == '_';
-}
-
-fn putBackAnalysisItems(
-    proof: *ProofAnalysisState,
-    items: []const TopLevelItem,
-) void {
-    var idx = items.len;
-    while (idx > 0) {
-        idx -= 1;
-        proof.putBack(items[idx]);
     }
 }
 
@@ -797,13 +703,13 @@ fn analyzeFillPublicDefBody(
         return null;
     };
 
-    const item = proof.nextItem() catch |err| {
+    const item = proof.stream.next() catch |err| {
         self.setDiagnostic(CompilerDiag.proofParserDiagnostic(
-            &proof.parser,
+            &proof.stream.parser,
             term_stmt.name,
             err,
         ));
-        if (!proof.parser.recoverToNextItemBoundary()) {
+        if (!proof.stream.parser.recoverToNextItemBoundary()) {
             proof.exhausted = true;
         }
         return null;
@@ -826,7 +732,7 @@ fn analyzeFillPublicDefBody(
             ) catch null;
         },
         .block, .notation => {
-            proof.putBack(item);
+            proof.stream.putBack(item);
             self.setDiagnostic(CompilerDiag.missingPublicDefBodyDiagnostic(
                 term_stmt.name,
                 CompilerDiag.mathSpanToSpan(term_stmt.name_span),
@@ -935,15 +841,15 @@ fn analyzeAssertionStatement(
 /// A walk to a block keeps every theorem before it in scope, proved or not:
 /// the theorem's proof block is skipped unchecked when it comes next.
 fn skipTheoremProof(proof: *ProofAnalysisState, assertion: AssertionStmt) void {
-    const item = proof.nextItem() catch {
+    const item = proof.stream.next() catch {
         // Skipped unchecked, malformed or not; recovering keeps every block
         // after it in reach.
-        if (!proof.parser.recoverToNextItemBoundary()) proof.exhausted = true;
+        if (!proof.stream.parser.recoverToNextItemBoundary()) proof.exhausted = true;
         return;
     } orelse return;
     if (item == .block and item.block.kind == .theorem and
         std.mem.eql(u8, item.block.name, assertion.name)) return;
-    proof.putBack(item);
+    proof.stream.putBack(item);
 }
 
 fn markAssertionInvalid(
@@ -970,7 +876,7 @@ fn analyzeTheoremProof(
     if (proof.stream_aborted) {
         return WarningSnapshot.capture(self);
     }
-    if (proof.exhausted and proof.pending.items.len == 0) {
+    if (proof.exhausted and proof.stream.pending.items.len == 0) {
         self.addPrimaryDiagnostic(CompilerDiag.missingProofBlockDiagnostic(
             assertion.name,
             theorem_name_span,
@@ -985,7 +891,7 @@ fn analyzeTheoremProof(
     // is reported once and consumed, not offered to every later theorem.
     var stray: ?TheoremBlock = null;
     while (true) {
-        const item = proof.nextItem() catch |err| {
+        const item = proof.stream.next() catch |err| {
             if (stray) |extra| {
                 self.addPrimaryDiagnostic(CompilerDiag.extraProofBlockDiagnostic(
                     extra.name,
@@ -994,20 +900,20 @@ fn analyzeTheoremProof(
                 stray = null;
             }
             const suppressed = shouldSuppressProofParseFailure(
-                &proof.parser,
+                &proof.stream.parser,
                 &proof.invalid_rules,
             );
             if (!suppressed) {
                 self.addPrimaryDiagnostic(
                     CompilerDiag.proofParserDiagnostic(
-                        &proof.parser,
+                        &proof.stream.parser,
                         assertion.name,
                         err,
                     ),
                 );
                 saw_parse_error = true;
             }
-            if (!proof.parser.recoverToNextItemBoundary()) {
+            if (!proof.stream.parser.recoverToNextItemBoundary()) {
                 proof.exhausted = true;
                 if (suppressed) {
                     self.addPrimaryDiagnostic(
@@ -1078,7 +984,7 @@ fn analyzeTheoremProof(
                     }
                     // The block is left for a later theorem. This theorem's
                     // own is the held one under a wrong name, or missing.
-                    proof.putBack(item);
+                    proof.stream.putBack(item);
                     if (!saw_parse_error) {
                         reportMisnamedBlock(self, assertion, stray orelse block);
                     }
@@ -1132,23 +1038,23 @@ fn analyzeExtraProofBlocks(
     state: *AnalysisState,
     proof: *ProofAnalysisState,
 ) !void {
-    if (proof.exhausted and proof.pending.items.len == 0) return;
+    if (proof.exhausted and proof.stream.pending.items.len == 0) return;
 
     while (true) {
-        const item = proof.nextItem() catch |err| {
+        const item = proof.stream.next() catch |err| {
             if (!shouldSuppressProofParseFailure(
-                &proof.parser,
+                &proof.stream.parser,
                 &proof.invalid_rules,
             )) {
                 self.addPrimaryDiagnostic(
                     CompilerDiag.proofParserDiagnostic(
-                        &proof.parser,
+                        &proof.stream.parser,
                         null,
                         err,
                     ),
                 );
             }
-            if (!proof.parser.recoverToNextItemBoundary()) {
+            if (!proof.stream.parser.recoverToNextItemBoundary()) {
                 return;
             }
             continue;

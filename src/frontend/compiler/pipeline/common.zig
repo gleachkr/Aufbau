@@ -63,6 +63,15 @@ pub const ProofItemStream = struct {
         };
     }
 
+    /// A stream whose parser recovers per proof line
+    /// (`ProofScriptParser.initLenient`).
+    pub fn initLenient(allocator: std.mem.Allocator, source: []const u8) ProofItemStream {
+        return .{
+            .allocator = allocator,
+            .parser = ProofScriptParser.initLenient(allocator, source),
+        };
+    }
+
     pub fn next(self: *ProofItemStream) !?TopLevelItem {
         if (self.pending.items.len > 0) {
             return self.pending.pop().?;
@@ -72,6 +81,22 @@ pub const ProofItemStream = struct {
 
     pub fn putBack(self: *ProofItemStream, item: TopLevelItem) void {
         self.pending.append(self.allocator, item) catch unreachable;
+    }
+
+    /// Put `items` back so that they come out again in the order given.
+    pub fn putBackAll(self: *ProofItemStream, items: []const TopLevelItem) void {
+        var idx = items.len;
+        while (idx > 0) {
+            idx -= 1;
+            self.putBack(items[idx]);
+        }
+    }
+
+    /// Whether the next item is proof-local, judged without parsing it
+    /// when it has not been read yet.
+    pub fn nextLooksLocal(self: *const ProofItemStream) bool {
+        if (self.pending.getLastOrNull()) |item| return isLocalProofItem(item);
+        return self.parser.nextItemLooksLocal();
     }
 };
 
@@ -619,35 +644,38 @@ pub fn setExtraProofItemDiagnostic(self: *CompilerContext, item: TopLevelItem) a
     }
 }
 
-/// The proof-local items (lemmas, local defs, notation) that precede the
-/// next public proof item, when that item anchors to the upcoming `.mm0`
-/// statement (the parser must be prepared, see `prepareNextPublicStatement`).
-/// The anchor is put back; the items come out in source order for the
-/// caller to process under its own error policy. Anything not anchored is
-/// put back too and the slice is empty.
+/// What `collectAnchoredLocalProofItems` found before the next public
+/// proof item.
+pub const AnchoredLocals = enum {
+    /// Local items, and the public item after them anchors to the upcoming
+    /// `.mm0` statement.
+    anchored,
+    /// None, or the public item after them belongs to a later statement.
+    unanchored,
+    /// The proof stream ended first.
+    exhausted,
+};
+
+/// Read into `locals` the proof-local items (lemmas, local defs, notation)
+/// that precede the next public proof item, when that item anchors to the
+/// upcoming `.mm0` statement, whose `header` the caller has peeked (see
+/// `prepareNextPublicStatement`). The anchor is put back; the items are in
+/// source order for the caller to process under its own error policy.
+/// Otherwise everything is put back and `locals` is left empty.
+///
+/// On a parse failure `locals` keeps the items read so far: the caller
+/// either gives up, or recovers the parser and calls again to carry on.
 pub fn collectAnchoredLocalProofItems(
-    ctx: *CompilerContext,
     allocator: std.mem.Allocator,
-    parser: *const MM0Parser,
-    proof_stream: *?ProofItemStream,
-) ![]const TopLevelItem {
-    const proofs = if (proof_stream.*) |*actual| actual else return &.{};
-    const header = parser.peekNextPublicStmtHeader() orelse return &.{};
-
-    var locals = std.ArrayListUnmanaged(TopLevelItem).empty;
-    defer locals.deinit(allocator);
-
+    header: PublicStmtHeader,
+    proofs: *ProofItemStream,
+    locals: *std.ArrayListUnmanaged(TopLevelItem),
+) !AnchoredLocals {
     while (true) {
-        const item = proofs.next() catch |err| {
-            ctx.setDiagnostic(CompilerDiag.proofParserDiagnostic(
-                &proofs.parser,
-                header.name,
-                err,
-            ));
-            return err;
-        } orelse {
-            putBackItems(proofs, locals.items);
-            return &.{};
+        const item = try proofs.next() orelse {
+            proofs.putBackAll(locals.items);
+            locals.clearRetainingCapacity();
+            return .exhausted;
         };
 
         if (isLocalProofItem(item)) {
@@ -657,10 +685,11 @@ pub fn collectAnchoredLocalProofItems(
 
         proofs.putBack(item);
         if (locals.items.len == 0 or !anchorMatches(header, item)) {
-            putBackItems(proofs, locals.items);
-            return &.{};
+            proofs.putBackAll(locals.items);
+            locals.clearRetainingCapacity();
+            return .unanchored;
         }
-        return try locals.toOwnedSlice(allocator);
+        return .anchored;
     }
 }
 
@@ -673,14 +702,25 @@ pub fn drainAnchoredLocalProofItems(
     proof_stream: *?ProofItemStream,
     emit: ?*Output,
 ) !void {
-    const locals = try collectAnchoredLocalProofItems(
-        self,
+    const proofs = if (proof_stream.*) |*actual| actual else return;
+    const header = theory.parser.peekNextPublicStmtHeader() orelse return;
+
+    var locals = std.ArrayListUnmanaged(TopLevelItem).empty;
+    defer locals.deinit(allocator);
+    _ = collectAnchoredLocalProofItems(
         allocator,
-        &theory.parser,
-        proof_stream,
-    );
-    defer allocator.free(locals);
-    for (locals) |local| {
+        header,
+        proofs,
+        &locals,
+    ) catch |err| {
+        self.setDiagnostic(CompilerDiag.proofParserDiagnostic(
+            &proofs.parser,
+            header.name,
+            err,
+        ));
+        return err;
+    };
+    for (locals.items) |local| {
         try processLocalProofItem(
             self,
             allocator,
@@ -688,14 +728,6 @@ pub fn drainAnchoredLocalProofItems(
             local,
             emit,
         );
-    }
-}
-
-fn putBackItems(proofs: *ProofItemStream, items: []const TopLevelItem) void {
-    var idx = items.len;
-    while (idx > 0) {
-        idx -= 1;
-        proofs.putBack(items[idx]);
     }
 }
 

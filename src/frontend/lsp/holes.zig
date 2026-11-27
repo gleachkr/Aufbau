@@ -90,7 +90,7 @@ pub fn fillAt(
         if (!lineTakes(filled.line, offset, proof_text)) continue;
         return .{
             .assertion = filled.assertion,
-            .replacement = try std.fmt.allocPrint(allocator, "$ {s} $", .{filled.text}),
+            .replacement = try filled.replacement(allocator),
         };
     }
     return null;

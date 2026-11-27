@@ -38,6 +38,11 @@ pub const FilledAssertion = struct {
     assertion: Span,
     /// The filled math text, without delimiters.
     text: []const u8,
+
+    /// The text that replaces `assertion` in the proof.
+    pub fn replacement(self: FilledAssertion, allocator: std.mem.Allocator) ![]const u8 {
+        return std.fmt.allocPrint(allocator, "$ {s} $", .{self.text});
+    }
 };
 
 pub const HoleInferenceSink = struct {

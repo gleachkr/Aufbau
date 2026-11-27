@@ -509,7 +509,7 @@ fn fillHoleValues(
                     .start = shift(filled.assertion.start, entry.growth),
                     .end = shift(filled.assertion.end, entry.growth),
                 },
-                .text = try std.fmt.allocPrint(out, "$ {s} $", .{filled.text}),
+                .text = try filled.replacement(out),
             };
             break;
         }
