@@ -5,11 +5,10 @@
 //! its mtime: a unit built while either is unchanged shares the text earlier
 //! units read.
 //!
-//! Every unit releases what it holds: a navigation cache entry when it is
-//! dropped, an analysis that joined its own unit when it ends. Those are the
-//! only units: the handler answers one message at a time and an analysis
-//! runs between messages, so no other unit outlives the call that built it.
-//! Code that keeps a unit anywhere else has to hold its texts too.
+//! Every unit releases what it holds: the one kept for a root when it is
+//! dropped (`UnitState.destroy`), the one the analysis of a lone `.mm0`
+//! joins when that analysis ends. Those are the only units: code that keeps
+//! a unit anywhere else has to hold its texts too.
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;

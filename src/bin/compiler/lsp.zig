@@ -79,45 +79,6 @@ const NavigationDocumentState = struct {
     }
 };
 
-/// Evict the entry stored under `key` (an owned URI string that aliases the
-/// entry's own key), freeing both the value and its key. Shared by every
-/// document-keyed cache in this file. `V` must expose `deinit(allocator)`.
-fn removeCacheEntry(
-    comptime V: type,
-    map: *std.StringHashMapUnmanaged(V),
-    allocator: std.mem.Allocator,
-    key: []const u8,
-) void {
-    if (map.fetchRemove(key)) |removed| {
-        var entry = removed.value;
-        entry.deinit(allocator);
-    }
-}
-
-/// Evict every entry whose `matches(value, uri)` predicate holds. The scan
-/// restarts after each removal because removing invalidates the live iterator;
-/// the caches hold a handful of entries, so this is not a hot path.
-fn invalidateCacheContaining(
-    comptime V: type,
-    map: *std.StringHashMapUnmanaged(V),
-    allocator: std.mem.Allocator,
-    uri: []const u8,
-    comptime matches: fn (V, []const u8) bool,
-) void {
-    while (true) {
-        var it = map.iterator();
-        var found: ?[]const u8 = null;
-        while (it.next()) |entry| {
-            if (matches(entry.value_ptr.*, uri)) {
-                found = entry.key_ptr.*;
-                break;
-            }
-        }
-        const key = found orelse break;
-        removeCacheEntry(V, map, allocator, key);
-    }
-}
-
 /// One file of an analysis unit: an open document (with its version) or a
 /// file read from disk (with its mtime), keyed by its path.
 const UnitFile = struct {
@@ -244,31 +205,6 @@ const Unit = struct {
         return false;
     }
 
-    /// The document states of every file, `.mm0` side then proof side: the
-    /// key of what is cached from the unit apart from its navigation entry.
-    fn states(
-        self: *const Unit,
-        allocator: std.mem.Allocator,
-    ) ![]NavigationDocumentState {
-        const proof_len = if (self.proof) |proof| proof.files.len else 0;
-        const out = try allocator.alloc(
-            NavigationDocumentState,
-            self.mm0.files.len + proof_len,
-        );
-        var index: usize = 0;
-        for (self.mm0.files) |file| {
-            out[index] = file.state();
-            index += 1;
-        }
-        if (self.proof) |proof| {
-            for (proof.files) |file| {
-                out[index] = file.state();
-                index += 1;
-            }
-        }
-        return out;
-    }
-
     fn diagnosticContext(self: *const Unit) DiagnosticContext {
         return .{
             .mm0 = diagnosticDocument(self.mm0.rootFile()),
@@ -329,88 +265,128 @@ const Unit = struct {
     }
 };
 
-/// The states of every file a unit was built from, owned by the handler
-/// allocator. What analyses and searches found is kept under one: an edit to
-/// any file of the unit (a version bump for an open document, an mtime change
-/// on disk) makes it stale.
-const UnitKey = struct {
-    states: []NavigationDocumentState,
-
-    fn init(
-        allocator: std.mem.Allocator,
-        states: []const NavigationDocumentState,
-    ) !UnitKey {
-        const owned = try allocator.alloc(NavigationDocumentState, states.len);
-        var filled: usize = 0;
-        errdefer {
-            for (owned[0..filled]) |state| state.freeUri(allocator);
-            allocator.free(owned);
-        }
-        for (states, 0..) |state, index| {
-            owned[index] = try state.dupe(allocator);
-            filled = index + 1;
-        }
-        return .{ .states = owned };
-    }
-
-    fn deinit(self: *UnitKey, allocator: std.mem.Allocator) void {
-        for (self.states) |state| state.freeUri(allocator);
-        allocator.free(self.states);
-        self.* = undefined;
-    }
-
-    fn eql(self: UnitKey, states: []const NavigationDocumentState) bool {
-        if (self.states.len != states.len) return false;
-        for (self.states, states) |mine, other| {
-            if (!mine.eql(other)) return false;
-        }
-        return true;
-    }
-
-    fn containsUri(self: UnitKey, uri: []const u8) bool {
-        for (self.states) |state| {
-            if (std.mem.eql(u8, state.uri, uri)) return true;
-        }
-        return false;
-    }
-};
-
-const NavigationCacheEntry = struct {
-    /// The root `.mm0` URI; aliases the map key.
-    uri: []const u8,
-    /// The root proof file's URI, whether or not there is such a file.
-    proof_uri: []const u8,
-    /// Backs `unit`: its joined texts and file records.
-    unit_arena: ArenaAllocator,
+/// The unit joined for a root and what has been found in it: the index
+/// requests read, the holes its last analysis inferred, and what the
+/// searches in it found. It stands while every file its join looked up is
+/// as the join found it (`Handler.currentUnit`). All it holds is of those
+/// texts and goes with it, so none of it is compared with them again.
+const UnitState = struct {
+    allocator: std.mem.Allocator,
+    /// Backs `unit` (its joined texts and file records) and the names
+    /// below.
+    arena: ArenaAllocator,
     unit: Unit,
     /// Where `unit` holds its file texts from.
     texts: *FileTexts,
-    snapshot: LspIndex.Snapshot,
+    /// The root `.mm0` URI: the key it is kept under.
+    mm0_uri: []const u8,
+    /// The root proof file's URI, whether or not there is such a file.
+    proof_uri: []const u8,
+    /// The index over the joined texts, built when a request first reads
+    /// it.
+    snapshot: ?LspIndex.Snapshot = null,
+    /// The holes the last analysis found.
+    holes: ?HoleInferenceSink = null,
+    /// What the last search found.
+    search: ?SearchResults = null,
+    /// The outcome of each search run, by the marker it ran for.
+    outcomes: std.ArrayListUnmanaged(PlaceholderOutcome) = .empty,
 
-    fn deinit(
-        self: *NavigationCacheEntry,
-        allocator: std.mem.Allocator,
-    ) void {
+    fn destroy(self: *UnitState) void {
+        const allocator = self.allocator;
         // The snapshot may index a root's own text, when nothing is joined
         // to it.
-        self.snapshot.deinit();
+        if (self.snapshot) |*snapshot| snapshot.deinit();
+        if (self.holes) |*holes| holes.deinit();
+        if (self.search) |*search| search.deinit(allocator);
+        for (self.outcomes.items) |outcome| allocator.free(outcome.detail);
+        self.outcomes.deinit(allocator);
         self.unit.release(self.texts);
-        self.unit_arena.deinit();
-        allocator.free(self.uri);
-        self.* = undefined;
+        var arena = self.arena;
+        arena.deinit();
+        allocator.destroy(self);
+    }
+
+    fn lookedUp(self: *const UnitState, uri: []const u8, path: ?[]const u8) bool {
+        for (self.unit.lookups) |lookup| {
+            if (std.mem.eql(u8, lookup.state.uri, uri)) return true;
+            if (path) |changed| if (std.mem.eql(u8, lookup.path, changed)) return true;
+        }
+        return false;
+    }
+
+    /// Keep `holes` (owned from here on) as what the last analysis found.
+    fn keepHoles(self: *UnitState, holes: HoleInferenceSink) void {
+        if (self.holes) |*old| old.deinit();
+        self.holes = holes;
+    }
+
+    /// Keep copies of `suggestions`, what a search for the marker at
+    /// `target_span` found, in place of the last search's. The copies stay
+    /// until the next search or the unit goes.
+    fn keepSearch(
+        self: *UnitState,
+        target_span: Search.Span,
+        suggestions: []const Search.SourceSuggestion,
+    ) ![]const Search.SourceSuggestion {
+        const allocator = self.allocator;
+        const owned = try allocator.alloc(Search.SourceSuggestion, suggestions.len);
+        var filled: usize = 0;
+        errdefer {
+            for (owned[0..filled]) |suggestion| {
+                allocator.free(suggestion.title);
+                allocator.free(suggestion.replacement);
+            }
+            allocator.free(owned);
+        }
+        for (suggestions, 0..) |suggestion, index| {
+            const title = try allocator.dupe(u8, suggestion.title);
+            errdefer allocator.free(title);
+            owned[index] = .{
+                .title = title,
+                .replacement = try allocator.dupe(u8, suggestion.replacement),
+                .replace_span = suggestion.replace_span,
+                .cursor = suggestion.cursor,
+            };
+            filled = index + 1;
+        }
+        if (self.search) |*old| old.deinit(allocator);
+        self.search = .{ .target_span = target_span, .suggestions = owned };
+        return owned;
+    }
+
+    /// Record how the search for the marker at `target_span` ended, in
+    /// place of what an earlier search for it recorded.
+    fn recordOutcome(
+        self: *UnitState,
+        target_span: Search.Span,
+        status: Search.SearchStatus,
+        detail: []const u8,
+    ) !void {
+        const allocator = self.allocator;
+        const outcome: PlaceholderOutcome = .{
+            .target_span = target_span,
+            .status = status,
+            .detail = try allocator.dupe(u8, detail),
+        };
+        errdefer allocator.free(outcome.detail);
+        for (self.outcomes.items) |*existing| {
+            if (existing.target_span.start == target_span.start and
+                existing.target_span.end == target_span.end)
+            {
+                allocator.free(existing.detail);
+                existing.* = outcome;
+                return;
+            }
+        }
+        try self.outcomes.append(allocator, outcome);
     }
 };
-
-fn navEntryContainsUri(entry: NavigationCacheEntry, uri: []const u8) bool {
-    for (entry.unit.lookups) |lookup| {
-        if (std.mem.eql(u8, lookup.state.uri, uri)) return true;
-    }
-    return false;
-}
 
 /// A navigation request's view of its unit: the index over the joined
 /// texts plus which file of the unit the request document is.
 const NavigationSnapshot = struct {
+    state: *UnitState,
     snapshot: *LspIndex.Snapshot,
     unit: *const Unit,
     document: LspIndex.DocumentId,
@@ -483,26 +459,15 @@ const AnalysisOutcome = enum {
     own_checked,
 };
 
-/// The holes found by an analysis of a unit in the states `key` names.
-const AnalysisHoles = struct {
-    key: UnitKey,
-    holes: HoleInferenceSink,
-
-    fn deinit(self: *AnalysisHoles, allocator: std.mem.Allocator) void {
-        self.key.deinit(allocator);
-        self.holes.deinit();
-        self.* = undefined;
-    }
-};
-
-/// What an analysis of one root touched: the other files it read (so the
-/// root is re-analysed when one of them changes) and the closed files it
-/// published diagnostics for (so those are cleared when they drop out).
-const UnitRecord = struct {
+/// What the analysis of one open document touched: the other files it read
+/// (so the document is analysed again when one of them changes) and the
+/// closed files it published diagnostics for (so those are cleared when they
+/// drop out).
+const Report = struct {
     deps: []const []const u8,
     published: []const []const u8,
 
-    fn deinit(self: *UnitRecord, allocator: std.mem.Allocator) void {
+    fn deinit(self: *Report, allocator: std.mem.Allocator) void {
         freeUriList(allocator, self.deps);
         freeUriList(allocator, self.published);
         self.* = undefined;
@@ -538,48 +503,38 @@ fn uriListContains(uris: []const []const u8, uri: []const u8) bool {
 // Proof-search results (`exact?`/`auto?`/`conversion?` code-action suggestions) are
 // expensive to compute and editors fire `textDocument/codeAction` repeatedly
 // around the same proof step (lightbulb, quick-fix menu, cursor settle/drift).
-// This caches the last result per proof document, keyed by the states of
-// every file of the unit; a single result serves every cursor offset that
+// A unit keeps its last search's; they serve every cursor offset that
 // resolves to the same placeholder (the search's `target_span`), so cursor
-// movement within a step still hits. A document edit changes its
-// version/mtime, so a stale key never matches.
-const SearchCacheEntry = struct {
-    /// The root proof URI; aliases the map key.
-    uri: []const u8,
-    key: UnitKey,
+// movement within a step still hits.
+const SearchResults = struct {
     // The placeholder span (in the joined proof text) these suggestions
     // resolve to: a lookup hits only when the requested offset falls inside
     // it (inclusive), so every offset within one proof step reuses this
     // result.
     target_span: Search.Span,
-    // Owned by the handler allocator (deep copies of the arena-allocated search
-    // output), so the slices stay valid across requests. An empty slice is a
-    // cached "no suggestions" result, which is the most expensive search to repeat.
+    // Owned copies. An empty slice is a kept "no suggestions" result, which
+    // is the most expensive search to repeat.
     suggestions: []Search.SourceSuggestion,
 
-    fn matchesOffset(self: SearchCacheEntry, offset: usize) bool {
+    fn matchesOffset(self: SearchResults, offset: usize) bool {
         return offset >= self.target_span.start and offset <= self.target_span.end;
     }
 
-    fn deinit(self: *SearchCacheEntry, allocator: std.mem.Allocator) void {
+    fn deinit(self: *SearchResults, allocator: std.mem.Allocator) void {
         for (self.suggestions) |suggestion| {
             allocator.free(suggestion.title);
             allocator.free(suggestion.replacement);
         }
         allocator.free(self.suggestions);
-        self.key.deinit(allocator);
-        allocator.free(self.uri);
         self.* = undefined;
     }
 };
 
-fn searchEntryContainsUri(entry: SearchCacheEntry, uri: []const u8) bool {
-    return entry.key.containsUri(uri);
-}
-
 // The recorded outcome of one placeholder's search, backing that placeholder's
 // status diagnostic (info on success, error on failure). Placeholders with no
-// recorded outcome publish as a "not yet searched" warning.
+// recorded outcome publish as a "not yet searched" warning. A unit gathers
+// them across its placeholders (`UnitState.outcomes`), so an edit to any of
+// its files returns every one to that warning.
 const PlaceholderOutcome = struct {
     // The search's catchment span (`SourceSuggestions.target_span`, in the
     // joined proof text): the whole proof line for a top-level placeholder,
@@ -587,38 +542,10 @@ const PlaceholderOutcome = struct {
     // its outcome by span containment.
     target_span: Search.Span,
     status: Search.SearchStatus,
-    // Owned by the handler allocator. The first suggestion's replacement text
+    // Owned by the unit's allocator. The first suggestion's replacement text
     // on success, empty otherwise.
     detail: []const u8,
 };
-
-// Per-proof-document search outcomes, accumulated across placeholders while
-// every file of the unit stays unchanged (unlike the search cache, which
-// keeps only the most recent search's suggestions). Keyed like the search
-// cache: any edit makes the key stale, degrading every recorded outcome back
-// to the "not yet searched" warning even if the sweep in
-// `invalidateCachesForUri` hasn't freed the entry (e.g. an unopened file
-// changing on disk, which never fires a didChange).
-const SearchStatusEntry = struct {
-    /// The root proof URI; aliases the map key.
-    uri: []const u8,
-    key: UnitKey,
-    statuses: std.ArrayListUnmanaged(PlaceholderOutcome),
-
-    fn deinit(self: *SearchStatusEntry, allocator: std.mem.Allocator) void {
-        for (self.statuses.items) |outcome| {
-            allocator.free(outcome.detail);
-        }
-        self.statuses.deinit(allocator);
-        self.key.deinit(allocator);
-        allocator.free(self.uri);
-        self.* = undefined;
-    }
-};
-
-fn statusEntryContainsUri(entry: SearchStatusEntry, uri: []const u8) bool {
-    return entry.key.containsUri(uri);
-}
 
 // A placeholder is matched to a recorded outcome by containment in the
 // outcome's catchment span (equal spans for a nested placeholder, the
@@ -752,15 +679,12 @@ pub const Handler = struct {
     docs: std.StringHashMapUnmanaged(OpenDocument),
     /// The file texts units are built from, one copy of each across them.
     texts: FileTexts,
-    nav_cache: std.StringHashMapUnmanaged(NavigationCacheEntry),
-    search_cache: std.StringHashMapUnmanaged(SearchCacheEntry),
-    search_status: std.StringHashMapUnmanaged(SearchStatusEntry),
-    /// What the last analysis of each root document read and published,
+    /// The unit joined for each root, keyed by the root's `.mm0` URI
+    /// (`UnitState.mm0_uri`), with what was found in it.
+    units: std.StringHashMapUnmanaged(*UnitState),
+    /// What the last analysis of each open document read and published,
     /// keyed by the analysed URI (owned).
-    units: std.StringHashMapUnmanaged(UnitRecord),
-    /// The holes of each root's last analysis, keyed by its `.mm0` URI
-    /// (owned), as the navigation cache is.
-    analysis_holes: std.StringHashMapUnmanaged(AnalysisHoles),
+    reports: std.StringHashMapUnmanaged(Report),
     /// Proof-block check outcomes shared by every analysis this handler
     /// runs, so an edit re-checks only what it can affect. It keeps what
     /// each root's last analysis used.
@@ -796,11 +720,8 @@ pub const Handler = struct {
             .host = host,
             .docs = .empty,
             .texts = FileTexts.init(allocator),
-            .nav_cache = .empty,
-            .search_cache = .empty,
-            .search_status = .empty,
             .units = .empty,
-            .analysis_holes = .empty,
+            .reports = .empty,
             .check_memo = mm0.CheckMemo.init(allocator),
             .pending = .empty,
             .offset_encoding = .@"utf-16",
@@ -821,38 +742,17 @@ pub const Handler = struct {
         }
         self.docs.deinit(self.allocator);
 
-        var cache_it = self.nav_cache.iterator();
-        while (cache_it.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
-        }
-        self.nav_cache.deinit(self.allocator);
+        var units_it = self.units.valueIterator();
+        while (units_it.next()) |state| state.*.destroy();
+        self.units.deinit(self.allocator);
         self.texts.deinit();
 
-        var search_it = self.search_cache.iterator();
-        while (search_it.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
-        }
-        self.search_cache.deinit(self.allocator);
-
-        var status_it = self.search_status.iterator();
-        while (status_it.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
-        }
-        self.search_status.deinit(self.allocator);
-
-        var units_it = self.units.iterator();
-        while (units_it.next()) |entry| {
+        var reports_it = self.reports.iterator();
+        while (reports_it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
             entry.value_ptr.deinit(self.allocator);
         }
-        self.units.deinit(self.allocator);
-
-        var holes_it = self.analysis_holes.iterator();
-        while (holes_it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            entry.value_ptr.deinit(self.allocator);
-        }
-        self.analysis_holes.deinit(self.allocator);
+        self.reports.deinit(self.allocator);
         for (self.pending.keys()) |uri| self.allocator.free(uri);
         self.pending.deinit(self.allocator);
         self.check_memo.deinit();
@@ -980,7 +880,7 @@ pub const Handler = struct {
             params.textDocument.text,
             params.textDocument.version,
         );
-        self.invalidateCachesForUri(arena, params.textDocument.uri);
+        self.dropUnitsOf(arena, params.textDocument.uri);
         try self.analyzeSoon(arena, params.textDocument.uri);
         try self.analyzeDependentsSoon(arena, params.textDocument.uri);
     }
@@ -1022,7 +922,7 @@ pub const Handler = struct {
         doc.text = new_text;
         doc.version = params.textDocument.version;
 
-        self.invalidateCachesForUri(arena, params.textDocument.uri);
+        self.dropUnitsOf(arena, params.textDocument.uri);
         try self.analyzeSoon(arena, params.textDocument.uri);
         try self.analyzeDependentsSoon(arena, params.textDocument.uri);
     }
@@ -1033,7 +933,7 @@ pub const Handler = struct {
         params: types.DidCloseTextDocumentParams,
     ) !void {
         const uri = params.textDocument.uri;
-        self.invalidateCachesForUri(arena, uri);
+        self.dropUnitsOf(arena, uri);
         try self.dropPending(uri);
         try self.removeDocument(uri);
         try self.clearDiagnostics(arena, uri, null);
@@ -1077,7 +977,7 @@ pub const Handler = struct {
             params.position,
             self.offset_encoding,
         ) orelse return null;
-        const hover = try self.holeHover(arena, nav, offset) orelse
+        const hover = try holeHover(arena, nav, offset) orelse
             try nav.snapshot.hoverAt(nav.document, offset) orelse
             return null;
         return .{
@@ -1096,13 +996,14 @@ pub const Handler = struct {
 
     /// The value of the hole at `offset`.
     fn holeHover(
-        self: *Handler,
         arena: std.mem.Allocator,
         nav: NavigationSnapshot,
         offset: usize,
     ) !?LspIndex.HoverResult {
         if (nav.document != .proof) return null;
-        const found = try self.analysisHoles(arena, nav) orelse checked: {
+        const analysed: ?*const HoleInferenceSink =
+            if (nav.state.holes) |*holes| holes else null;
+        const found = analysed orelse checked: {
             if (!nav.snapshot.isHoleAt(offset)) return null;
             const block = try nav.snapshot.blockTouching(arena, offset) orelse return null;
             break :checked try blockHoles(arena, nav, block, false);
@@ -1346,17 +1247,15 @@ pub const Handler = struct {
     /// Return the search suggestions for the unit at `offset` (in the joined
     /// proof text), or the actions on the open goal there, plus the retry
     /// edit after a miss that larger limits might fix, serving the
-    /// per-proof cache when every file's state matches and the offset falls
-    /// within the cached result's placeholder span, and recomputing
-    /// otherwise. The returned slice is owned by the
-    /// cache entry (handler allocator) and stays valid until the entry is
-    /// evicted, which never happens within one request. Returns null only
-    /// when the search itself fails (a cached empty result is a non-null
-    /// empty slice).
+    /// unit's last search when the offset falls within its placeholder
+    /// span, and searching otherwise. The returned slice is the unit's and
+    /// stays valid until its next search or until it goes, neither of
+    /// which happens within one request. Returns null only when the search
+    /// itself fails (a kept empty result is a non-null empty slice).
     ///
-    /// A recomputed search also records its outcome in `search_status` and
+    /// A search that ran also records its outcome in the unit and
     /// re-publishes the proof document's diagnostics, upgrading the target
-    /// placeholder's "not yet searched" warning; a cache hit, or an open
+    /// placeholder's "not yet searched" warning; a kept result, or an open
     /// goal, which runs no search, changes nothing, so it publishes nothing.
     fn suggestionsForUnit(
         self: *Handler,
@@ -1367,11 +1266,8 @@ pub const Handler = struct {
     ) !?[]const Search.SourceSuggestion {
         const proof_side = nav.side();
         const proof_uri = proof_side.rootFile().uri;
-        const states = try nav.unit.states(arena);
-        if (self.search_cache.getPtr(proof_uri)) |entry| {
-            if (entry.key.eql(states) and entry.matchesOffset(offset)) {
-                return entry.suggestions;
-            }
+        if (nav.state.search) |kept| {
+            if (kept.matchesOffset(offset)) return kept.suggestions;
         }
 
         const suggestions = Search.suggestionsAtSourceOffset(
@@ -1398,7 +1294,7 @@ pub const Handler = struct {
             else => return null,
         };
 
-        // No placeholder at this offset → nothing worth caching (the search
+        // No placeholder at this offset → nothing worth keeping (the search
         // already short-circuited cheaply); just hand back the empty result.
         const target_span = suggestions.target_span orelse return suggestions.items;
 
@@ -1412,12 +1308,7 @@ pub const Handler = struct {
             })
         else
             suggestions.items;
-        const stored = try self.storeSearchSuggestions(
-            proof_uri,
-            states,
-            target_span,
-            actions,
-        );
+        const stored = try nav.state.keepSearch(target_span, actions);
 
         // An open goal's actions come from no search, so there is no outcome
         // to show.
@@ -1426,10 +1317,8 @@ pub const Handler = struct {
         // A fresh search just concluded: record its outcome and re-publish the
         // proof document's diagnostics so this placeholder's "not yet searched"
         // warning upgrades to info (success) or error (failure) immediately.
-        // Cache hits skip this — their outcome is already recorded.
-        try self.recordSearchOutcome(
-            proof_uri,
-            states,
+        // Kept results skip this — their outcome is already recorded.
+        try nav.state.recordOutcome(
             target_span,
             suggestions.status,
             if (suggestions.items.len > 0)
@@ -1439,138 +1328,6 @@ pub const Handler = struct {
         );
         try self.analyzeSoon(arena, proof_uri);
         return stored;
-    }
-
-    /// Record the outcome of a freshly-run placeholder search under the
-    /// unit's document states, updating the placeholder's previous outcome
-    /// in place (same `target_span`) or appending a new one. A recorded list
-    /// whose key no longer matches (any file changed) is dropped and
-    /// restarted rather than mixed with outcomes from other document states.
-    fn recordSearchOutcome(
-        self: *Handler,
-        proof_uri: []const u8,
-        states: []const NavigationDocumentState,
-        target_span: Search.Span,
-        status: Search.SearchStatus,
-        detail: []const u8,
-    ) !void {
-        const detail_owned = try self.allocator.dupe(u8, detail);
-        errdefer self.allocator.free(detail_owned);
-        const outcome: PlaceholderOutcome = .{
-            .target_span = target_span,
-            .status = status,
-            .detail = detail_owned,
-        };
-
-        if (self.search_status.getPtr(proof_uri)) |entry| {
-            if (entry.key.eql(states)) {
-                for (entry.statuses.items) |*existing| {
-                    if (existing.target_span.start == target_span.start and
-                        existing.target_span.end == target_span.end)
-                    {
-                        self.allocator.free(existing.detail);
-                        existing.* = outcome;
-                        return;
-                    }
-                }
-                try entry.statuses.append(self.allocator, outcome);
-                return;
-            }
-            removeCacheEntry(
-                SearchStatusEntry,
-                &self.search_status,
-                self.allocator,
-                proof_uri,
-            );
-        }
-
-        var owned_key = try UnitKey.init(self.allocator, states);
-        errdefer owned_key.deinit(self.allocator);
-        const owned_uri = try self.allocator.dupe(u8, proof_uri);
-        errdefer self.allocator.free(owned_uri);
-        var statuses = std.ArrayListUnmanaged(PlaceholderOutcome).empty;
-        errdefer statuses.deinit(self.allocator);
-        try statuses.append(self.allocator, outcome);
-        try self.search_status.put(self.allocator, owned_uri, .{
-            .uri = owned_uri,
-            .key = owned_key,
-            .statuses = statuses,
-        });
-    }
-
-    /// Deep-copy `suggestions` (arena-owned) into the handler allocator and store
-    /// them in the per-proof search cache, evicting any prior entry. Returns the
-    /// stored slice.
-    fn storeSearchSuggestions(
-        self: *Handler,
-        proof_uri: []const u8,
-        states: []const NavigationDocumentState,
-        target_span: Search.Span,
-        suggestions: []const Search.SourceSuggestion,
-    ) ![]const Search.SourceSuggestion {
-        const owned = try self.allocator.alloc(
-            Search.SourceSuggestion,
-            suggestions.len,
-        );
-        var filled: usize = 0;
-        errdefer {
-            for (owned[0..filled]) |suggestion| {
-                self.allocator.free(suggestion.title);
-                self.allocator.free(suggestion.replacement);
-            }
-            self.allocator.free(owned);
-        }
-        for (suggestions, 0..) |suggestion, idx| {
-            const title = try self.allocator.dupe(u8, suggestion.title);
-            errdefer self.allocator.free(title);
-            const replacement = try self.allocator.dupe(u8, suggestion.replacement);
-            owned[idx] = .{
-                .title = title,
-                .replacement = replacement,
-                .replace_span = suggestion.replace_span,
-                .cursor = suggestion.cursor,
-            };
-            filled = idx + 1;
-        }
-
-        var owned_key = try UnitKey.init(self.allocator, states);
-        errdefer owned_key.deinit(self.allocator);
-        const owned_uri = try self.allocator.dupe(u8, proof_uri);
-        errdefer self.allocator.free(owned_uri);
-
-        self.removeSearchCacheByProofUri(proof_uri);
-        try self.search_cache.put(self.allocator, owned_uri, .{
-            .uri = owned_uri,
-            .key = owned_key,
-            .target_span = target_span,
-            .suggestions = owned,
-        });
-        return owned;
-    }
-
-    fn removeSearchCacheByProofUri(
-        self: *Handler,
-        proof_uri: []const u8,
-    ) void {
-        removeCacheEntry(
-            SearchCacheEntry,
-            &self.search_cache,
-            self.allocator,
-            proof_uri,
-        );
-    }
-
-    fn invalidateSearchContainingUri(
-        self: *Handler,
-        uri: []const u8,
-    ) void {
-        invalidateCacheContaining(
-            SearchCacheEntry,
-            &self.search_cache,
-            self.allocator,
-            uri,
-            searchEntryContainsUri,
-        );
     }
 
     fn searchCodeAction(
@@ -2038,19 +1795,6 @@ pub const Handler = struct {
         return std.Io.Clock.awake.now(self.io).nanoseconds;
     }
 
-    /// The holes the last analysis of `nav`'s unit found, if it saw these
-    /// texts.
-    fn analysisHoles(
-        self: *const Handler,
-        arena: std.mem.Allocator,
-        nav: NavigationSnapshot,
-    ) !?*const HoleInferenceSink {
-        const kept = self.analysis_holes.getPtr(nav.unit.mm0.rootFile().uri) orelse
-            return null;
-        if (!kept.key.eql(try nav.unit.states(arena))) return null;
-        return &kept.holes;
-    }
-
     /// The holes of `block`, a proof of `nav`'s unit, by a check of it alone,
     /// with `fills` its holey lines filled in.
     fn blockHoles(
@@ -2185,46 +1929,28 @@ pub const Handler = struct {
             .proof_path = proof_path,
         };
         // A request may have joined the same files already, say the one that
-        // stopped this analysis. The entry outlives the analysis: only
-        // requests and document changes replace it.
-        var built: ?Unit = null;
-        defer if (built) |*own| own.release(&self.texts);
-        const unit: *const Unit = if (self.currentNavigation(roots)) |entry|
-            &entry.unit
-        else blk: {
-            built = self.buildUnit(
-                arena,
-                roots.mm0_uri,
-                mm0_path,
-                proof_uri,
-                proof_path,
-            ) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => {
-                    try self.publishTheoryUnreadable(
-                        arena,
-                        roots,
-                        proof_version,
-                        proof_text,
-                        err,
-                    );
-                    return .checked;
-                },
-            };
-            break :blk &built.?;
+        // stopped this analysis; if not, the next request reads this join.
+        const state = self.unitFor(roots) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {
+                try self.publishTheoryUnreadable(
+                    arena,
+                    roots,
+                    proof_version,
+                    proof_text,
+                    err,
+                );
+                return .checked;
+            },
         };
-        const states = try unit.states(arena);
+        const unit: *const Unit = &state.unit;
         try self.recordUnitFiles(arena, proof_uri, unit);
 
         // One status diagnostic per search placeholder (warning until searched,
         // then info/error from the recorded outcome), published together with
         // the compiler diagnostics: publishDiagnostics replaces the full set
         // per document, so they must go out in the same payload.
-        const search_diagnostics = try self.searchStatusDiagnostics(
-            arena,
-            unit,
-            states,
-        );
+        const search_diagnostics = try self.searchStatusDiagnostics(arena, state);
 
         // The handler's allocator, not the request's arena: the analysis
         // frees each theorem's work once it is checked, which an arena
@@ -2272,7 +1998,7 @@ pub const Handler = struct {
         // about open files.
         const outcome: AnalysisOutcome = if (scope.skipped != 0) .own_checked else .checked;
         holes_owned = false;
-        try self.keepAnalysisHoles(roots.mm0_uri, states, holes);
+        state.keepHoles(holes);
         analyzed catch |err| {
             if (hasDiagnostics(&compiler)) {
                 try self.publishUnitDiagnostics(
@@ -2447,28 +2173,6 @@ pub const Handler = struct {
         return &self.check_memo;
     }
 
-    /// Keep `holes` (owned from here on) as the last analysis of the unit
-    /// rooted at `mm0_uri` in `states`.
-    fn keepAnalysisHoles(
-        self: *Handler,
-        mm0_uri: []const u8,
-        states: []const NavigationDocumentState,
-        holes: HoleInferenceSink,
-    ) !void {
-        var owned = holes;
-        errdefer owned.deinit();
-        var key = try UnitKey.init(self.allocator, states);
-        errdefer key.deinit(self.allocator);
-        const gop = try self.analysis_holes.getOrPut(self.allocator, mm0_uri);
-        if (gop.found_existing) {
-            gop.value_ptr.deinit(self.allocator);
-        } else {
-            errdefer _ = self.analysis_holes.remove(mm0_uri);
-            gop.key_ptr.* = try self.allocator.dupe(u8, mm0_uri);
-        }
-        gop.value_ptr.* = .{ .key = key, .holes = owned };
-    }
-
     fn hasDiagnostics(compiler: *const mm0.Compiler) bool {
         return compiler.diagnostics.last_diagnostic != null or
             compiler.primaryDiagnostics().len != 0 or
@@ -2478,10 +2182,9 @@ pub const Handler = struct {
     fn searchStatusDiagnostics(
         self: *Handler,
         arena: std.mem.Allocator,
-        unit: *const Unit,
-        states: []const NavigationDocumentState,
+        state: *const UnitState,
     ) ![]const LocatedDiagnostic {
-        const proof_side = unit.proof orelse return &.{};
+        const proof_side = state.unit.proof orelse return &.{};
         // The memo knows where the bodies it checked end, so the scan
         // parses only the bodies that spell a placeholder and those it does
         // not know.
@@ -2496,10 +2199,7 @@ pub const Handler = struct {
             .encoding = self.offset_encoding,
         };
 
-        var outcomes: []const PlaceholderOutcome = &.{};
-        if (self.search_status.getPtr(proof_side.rootFile().uri)) |entry| {
-            if (entry.key.eql(states)) outcomes = entry.statuses.items;
-        }
+        const outcomes = state.outcomes.items;
 
         var diagnostics = std.ArrayListUnmanaged(LocatedDiagnostic).empty;
         for (notices) |notice| {
@@ -2830,13 +2530,13 @@ pub const Handler = struct {
 
         // The closed files published for before stay so until the check of
         // the rest says otherwise.
-        if (outcome == .own_checked) if (self.units.get(record_uri)) |record| {
+        if (outcome == .own_checked) if (self.reports.get(record_uri)) |record| {
             for (record.published) |uri| {
                 if (uriListContains(published.items, uri)) continue;
                 try published.append(arena, uri);
             }
         };
-        try self.storeUnitRecord(
+        try self.storeReport(
             arena,
             record_uri,
             try unitDeps(arena, unit),
@@ -2886,13 +2586,13 @@ pub const Handler = struct {
         unit: *const Unit,
     ) !void {
         const published: []const []const u8 =
-            if (self.units.get(root_uri)) |record| record.published else &.{};
-        try self.storeUnitRecord(arena, root_uri, try unitDeps(arena, unit), published);
+            if (self.reports.get(root_uri)) |record| record.published else &.{};
+        try self.storeReport(arena, root_uri, try unitDeps(arena, unit), published);
     }
 
     /// Replace the record for `root_uri`, clearing diagnostics on files the
     /// previous analysis published for but this one did not.
-    fn storeUnitRecord(
+    fn storeReport(
         self: *Handler,
         arena: std.mem.Allocator,
         root_uri: []const u8,
@@ -2904,7 +2604,7 @@ pub const Handler = struct {
         const owned_published = try dupeUriList(self.allocator, published);
         errdefer freeUriList(self.allocator, owned_published);
 
-        const gop = try self.units.getOrPut(self.allocator, root_uri);
+        const gop = try self.reports.getOrPut(self.allocator, root_uri);
         if (gop.found_existing) {
             for (gop.value_ptr.published) |old| {
                 if (uriListContains(published, old)) continue;
@@ -2912,7 +2612,7 @@ pub const Handler = struct {
             }
             gop.value_ptr.deinit(self.allocator);
         } else {
-            errdefer _ = self.units.remove(root_uri);
+            errdefer _ = self.reports.remove(root_uri);
             gop.key_ptr.* = try self.allocator.dupe(u8, root_uri);
         }
         gop.value_ptr.* = .{ .deps = owned_deps, .published = owned_published };
@@ -2924,7 +2624,7 @@ pub const Handler = struct {
         arena: std.mem.Allocator,
         root_uri: []const u8,
     ) !void {
-        const removed = self.units.fetchRemove(root_uri) orelse return;
+        const removed = self.reports.fetchRemove(root_uri) orelse return;
         var record = removed.value;
         defer {
             record.deinit(self.allocator);
@@ -2937,7 +2637,7 @@ pub const Handler = struct {
 
     /// Is `uri` read by some root's analysis?
     fn isDependency(self: *Handler, uri: []const u8) bool {
-        var it = self.units.iterator();
+        var it = self.reports.iterator();
         while (it.next()) |entry| {
             if (uriListContains(entry.value_ptr.deps, uri)) return true;
         }
@@ -2952,7 +2652,7 @@ pub const Handler = struct {
         uri: []const u8,
     ) ![]const []const u8 {
         var roots = std.ArrayListUnmanaged([]const u8).empty;
-        var it = self.units.iterator();
+        var it = self.reports.iterator();
         while (it.next()) |entry| {
             if (!uriListContains(entry.value_ptr.deps, uri)) continue;
             try roots.append(arena, try arena.dupe(u8, entry.key_ptr.*));
@@ -3006,154 +2706,125 @@ pub const Handler = struct {
         return null;
     }
 
-    /// The navigation entry for the unit at `roots`, if every file its join
-    /// looked up is as the join found it.
-    fn currentNavigation(self: *const Handler, roots: UnitRoots) ?*NavigationCacheEntry {
-        const entry = self.nav_cache.getPtr(roots.mm0_uri) orelse return null;
-        if (!std.mem.eql(u8, entry.proof_uri, roots.proof_uri)) return null;
-        for (entry.unit.lookups) |lookup| {
+    /// The unit kept for `roots`, if every file its join looked up is as the
+    /// join found it.
+    fn currentUnit(self: *const Handler, roots: UnitRoots) ?*UnitState {
+        const state = self.units.get(roots.mm0_uri) orelse return null;
+        if (!std.mem.eql(u8, state.proof_uri, roots.proof_uri)) return null;
+        for (state.unit.lookups) |lookup| {
             if (!self.lookupCurrent(lookup)) return null;
         }
-        return entry;
+        return state;
     }
 
-    /// Opening, changing or closing a document drops every entry that looked
-    /// it up (`invalidateCachesForUri`), so only what was read from disk is
-    /// checked here.
+    /// Opening, changing or closing a document drops every unit that looked
+    /// it up (`dropUnitsOf`), so only what was read from disk is checked
+    /// here.
     fn lookupCurrent(self: *const Handler, lookup: UnitLookup) bool {
         const state = lookup.state;
         return state.version != null or
             state.mtime == fileMtime(self.io, lookup.path);
     }
 
-    /// The cached index over the unit at `roots`, rebuilt when a file of the
-    /// unit changed, viewed from `request_uri`.
+    /// The unit at `roots`, joined anew when a file of the one kept
+    /// changed. Fails when its `.mm0` cannot be loaded.
+    fn unitFor(self: *Handler, roots: UnitRoots) !*UnitState {
+        return self.currentUnit(roots) orelse try self.joinUnit(roots);
+    }
+
+    fn joinUnit(self: *Handler, roots: UnitRoots) !*UnitState {
+        var arena = ArenaAllocator.init(self.allocator);
+        errdefer arena.deinit();
+        // Joined before the old unit goes, so that the texts it holds of
+        // files that did not change are taken over rather than read again.
+        const unit = try self.buildUnit(
+            arena.allocator(),
+            roots.mm0_uri,
+            roots.mm0_path,
+            roots.proof_uri,
+            roots.proof_path,
+        );
+        errdefer unit.release(&self.texts);
+        const mm0_uri = try arena.allocator().dupe(u8, roots.mm0_uri);
+        const proof_uri = try arena.allocator().dupe(u8, roots.proof_uri);
+        const state = try self.allocator.create(UnitState);
+        errdefer self.allocator.destroy(state);
+        try self.units.ensureUnusedCapacity(self.allocator, 1);
+        self.dropUnit(roots.mm0_uri);
+        state.* = .{
+            .allocator = self.allocator,
+            .arena = arena,
+            .unit = unit,
+            .texts = &self.texts,
+            .mm0_uri = mm0_uri,
+            .proof_uri = proof_uri,
+        };
+        self.units.putAssumeCapacity(mm0_uri, state);
+        return state;
+    }
+
+    /// The index over `state`'s joined texts, built when first asked for.
+    fn snapshotOf(self: *Handler, state: *UnitState) !*LspIndex.Snapshot {
+        if (state.snapshot == null) {
+            const unit = &state.unit;
+            state.snapshot = try LspIndex.Snapshot.build(self.allocator, .{
+                .mm0_uri = state.mm0_uri,
+                .mm0_text = unit.mm0.joined.text,
+                .proof_uri = if (unit.proof) |proof| proof.rootFile().uri else null,
+                .proof_text = if (unit.proof) |proof| proof.joined.text else null,
+                .check_memo = self.checkMemoFor(state.mm0_uri),
+            });
+        }
+        return &state.snapshot.?;
+    }
+
+    /// The index over the unit at `roots`, viewed from `request_uri`. Null
+    /// when the unit's `.mm0` cannot be loaded or the unit has no such
+    /// file.
     fn navigationSnapshotForRoot(
         self: *Handler,
         request_uri: []const u8,
         roots: UnitRoots,
     ) !?NavigationSnapshot {
-        const entry = self.currentNavigation(roots) orelse
-            try self.buildNavigation(roots) orelse return null;
+        const state = self.unitFor(roots) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return null,
+        };
+        const found = state.unit.find(request_uri) orelse return null;
+        const snapshot = try self.snapshotOf(state);
         if (self.requestCancelled()) return error.RequestCancelled;
-        const found = entry.unit.find(request_uri) orelse return null;
         return .{
-            .snapshot = &entry.snapshot,
-            .unit = &entry.unit,
+            .state = state,
+            .snapshot = snapshot,
+            .unit = &state.unit,
             .document = found.document,
             .file_index = found.file_index,
         };
     }
 
-    /// Index the unit at `roots` anew. Null when its `.mm0` cannot be loaded.
-    fn buildNavigation(
-        self: *Handler,
-        roots: UnitRoots,
-    ) !?*NavigationCacheEntry {
-        var unit_arena = ArenaAllocator.init(self.allocator);
-        errdefer unit_arena.deinit();
-        // Built before the old entry goes, so that the texts it holds of
-        // files that did not change are taken over rather than read again.
-        const unit = self.buildUnit(
-            unit_arena.allocator(),
-            roots.mm0_uri,
-            roots.mm0_path,
-            roots.proof_uri,
-            roots.proof_path,
-        ) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => {
-                unit_arena.deinit();
-                return null;
-            },
-        };
-        errdefer unit.release(&self.texts);
-        self.removeNavigationCacheByMm0Uri(roots.mm0_uri);
-        const proof_uri = try unit_arena.allocator().dupe(u8, roots.proof_uri);
-        var snapshot = try LspIndex.Snapshot.build(self.allocator, .{
-            .mm0_uri = roots.mm0_uri,
-            .mm0_text = unit.mm0.joined.text,
-            .proof_uri = if (unit.proof) |proof| proof.rootFile().uri else null,
-            .proof_text = if (unit.proof) |proof| proof.joined.text else null,
-            .check_memo = self.checkMemoFor(roots.mm0_uri),
-        });
-        errdefer snapshot.deinit();
-        const owned_uri = try self.allocator.dupe(u8, roots.mm0_uri);
-        errdefer self.allocator.free(owned_uri);
-        try self.nav_cache.put(self.allocator, owned_uri, .{
-            .uri = owned_uri,
-            .proof_uri = proof_uri,
-            .unit_arena = unit_arena,
-            .unit = unit,
-            .texts = &self.texts,
-            .snapshot = snapshot,
-        });
-        return self.nav_cache.getPtr(owned_uri).?;
+    fn dropUnit(self: *Handler, mm0_uri: []const u8) void {
+        const removed = self.units.fetchRemove(mm0_uri) orelse return;
+        removed.value.destroy();
     }
 
-    fn removeNavigationCacheByMm0Uri(
-        self: *Handler,
-        mm0_uri: []const u8,
-    ) void {
-        removeCacheEntry(
-            NavigationCacheEntry,
-            &self.nav_cache,
-            self.allocator,
-            mm0_uri,
-        );
-    }
-
-    /// Single invalidation chokepoint for every document-keyed cache, called from
-    /// didOpen/didChange/didClose. New caches hook their sweep in here.
-    fn invalidateCachesForUri(
-        self: *Handler,
-        arena: std.mem.Allocator,
-        uri: []const u8,
-    ) void {
-        // A stale search-cache key never matches (its version/mtime differ), but
-        // free the memory promptly on edit/close rather than waiting for the next
-        // search on the same proof to evict it. Same for the recorded search
-        // outcomes: dropping them returns the document's placeholders to the
-        // "not yet searched" warning. Every key lists all files of its unit,
-        // so an edited import or include sweeps the roots that read it too.
-        self.invalidateSearchContainingUri(uri);
-        invalidateCacheContaining(
-            SearchStatusEntry,
-            &self.search_status,
-            self.allocator,
-            uri,
-            statusEntryContainsUri,
-        );
-        const path = uriToPath(arena, uri) catch {
-            self.invalidateNavigationContainingUri(uri);
+    /// Drop every unit whose join looked up the document `uri`: what it
+    /// holds is of texts that no longer stand. Called when a document is
+    /// opened, changed or closed; a file that changes on disk is seen when
+    /// its unit is next asked for (`currentUnit`).
+    fn dropUnitsOf(self: *Handler, arena: std.mem.Allocator, uri: []const u8) void {
+        // The join keys a file by its path, which several URIs may spell.
+        const path: ?[]const u8 = uriToPath(arena, uri) catch null;
+        // Removing invalidates the iterator, so the scan starts over; there
+        // are a handful of units.
+        scan: while (true) {
+            var it = self.units.valueIterator();
+            while (it.next()) |state| {
+                if (!state.*.lookedUp(uri, path)) continue;
+                self.dropUnit(state.*.mm0_uri);
+                continue :scan;
+            }
             return;
-        };
-
-        switch (documentKind(path)) {
-            .mm0 => self.removeNavigationCacheByMm0Uri(uri),
-            .proof => {
-                if (siblingPathForProof(arena, path)) |mm0_path| {
-                    if (pathToUri(arena, mm0_path)) |mm0_uri| {
-                        self.removeNavigationCacheByMm0Uri(mm0_uri);
-                    } else |_| {}
-                } else |_| {}
-            },
-            .other => {},
         }
-        self.invalidateNavigationContainingUri(uri);
-    }
-
-    fn invalidateNavigationContainingUri(
-        self: *Handler,
-        uri: []const u8,
-    ) void {
-        invalidateCacheContaining(
-            NavigationCacheEntry,
-            &self.nav_cache,
-            self.allocator,
-            uri,
-            navEntryContainsUri,
-        );
     }
 
     fn publishMessageDiagnostic(

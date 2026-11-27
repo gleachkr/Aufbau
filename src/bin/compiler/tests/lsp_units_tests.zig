@@ -105,16 +105,21 @@ test "LSP re-analyses importers when an imported document changes" {
         .position = try testLastPosition(lsp_import_proof_text, "top_i"),
     });
     try std.testing.expect(first_hover != null);
-    try std.testing.expectEqual(@as(usize, 1), session.indexedRoots());
+    try std.testing.expectEqual(@as(usize, 1), session.keptUnits());
 
     session.transport.clearMessages();
-    try session.change(lib_uri, 2, "provable sort wff;\nterm top: wff;\n");
+    const changed_lib_text = "provable sort wff;\nterm top: wff;\n";
+    try session.change(lib_uri, 2, changed_lib_text);
     // The library's own set, then the proof re-checked against it.
     try std.testing.expect(session.transport.publishedNone(lib_uri));
     try std.testing.expect(session.transport.containsMessage(proof_uri));
     try std.testing.expect(session.transport.containsMessage("top_i"));
-    // The unit's index was keyed on the library too.
-    try std.testing.expectEqual(@as(usize, 0), session.indexedRoots());
+    // The unit had looked the library up, so the one kept is of its new
+    // text.
+    try std.testing.expectEqualStrings(
+        changed_lib_text,
+        try session.theoryFileText(mm0_uri, lib_uri),
+    );
 }
 
 test "LSP check memo replays library blocks across roots" {

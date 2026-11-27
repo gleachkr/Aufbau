@@ -220,33 +220,59 @@ pub const Session = struct {
         return self.handler.docs.get(uri).?.text;
     }
 
+    /// The unit kept for the root whose proof file is `proof_uri`.
+    fn unitOfProof(self: *const Session, proof_uri: []const u8) ?*const UnitState {
+        var it = self.handler.units.valueIterator();
+        while (it.next()) |state| {
+            if (std.mem.eql(u8, state.*.proof_uri, proof_uri)) return state.*;
+        }
+        return null;
+    }
+
     /// Where the search results kept for `proof_uri` lie; null when none
     /// are kept. Two requests answered from one search see one address.
     pub fn searchResults(self: *const Session, proof_uri: []const u8) ?[*]const Suggestion {
-        const entry = self.handler.search_cache.getPtr(proof_uri) orelse return null;
-        return entry.suggestions.ptr;
+        const state = self.unitOfProof(proof_uri) orelse return null;
+        const kept = state.search orelse return null;
+        return kept.suggestions.ptr;
     }
 
     /// How many markers of `proof_uri` have a search outcome recorded.
     pub fn searchOutcomes(self: *const Session, proof_uri: []const u8) usize {
-        const entry = self.handler.search_status.getPtr(proof_uri) orelse return 0;
-        return entry.statuses.items.len;
+        const state = self.unitOfProof(proof_uri) orelse return 0;
+        return state.outcomes.items.len;
     }
 
     /// The first search outcome recorded for `proof_uri`.
     pub fn searchOutcome(self: *const Session, proof_uri: []const u8) SearchStatus {
-        return self.handler.search_status.getPtr(proof_uri).?.statuses.items[0].status;
+        return self.unitOfProof(proof_uri).?.outcomes.items[0].status;
     }
+
+    /// The roots with a unit kept.
+    pub fn keptUnits(self: *const Session) usize {
+        return self.handler.units.count();
+    }
+
+    /// The proof checks so far: run, replayed from the memo, and kept in it.
+    pub fn checks(self: *const Session) Checks {
+        const memo = &self.handler.check_memo;
+        return .{ .run = memo.misses, .replayed = memo.hits, .kept = memo.entries.count() };
+    }
+
+    const Suggestion = mm0.CompilerSupport.Search.SourceSuggestion;
+    const SearchStatus = mm0.CompilerSupport.Search.SearchStatus;
+    const Checks = struct { run: usize, replayed: usize, kept: usize };
+    const UnitState = @typeInfo(@FieldType(@FieldType(Handler, "units").KV, "value")).pointer.child;
 
     /// Where the joined theory that requests on the root `mm0_uri` read lies.
     pub fn joinedTheory(self: *const Session, mm0_uri: []const u8) *const u8 {
-        return &self.handler.nav_cache.get(mm0_uri).?.unit.mm0.joined.text[0];
+        return &self.handler.units.get(mm0_uri).?.unit.mm0.joined.text[0];
     }
 
     /// The text of the theory file `file_uri` that requests on the root
     /// `mm0_uri` read.
     pub fn theoryFileText(self: *const Session, mm0_uri: []const u8, file_uri: []const u8) ![]const u8 {
-        for (self.handler.nav_cache.get(mm0_uri).?.unit.mm0.files) |file| {
+        for (self.handler.units.get(mm0_uri).?.unit.mm0.files) |file| {
             if (std.mem.eql(u8, file.uri, file_uri)) return file.text;
         }
         return error.FileNotInUnit;
@@ -267,21 +293,6 @@ pub const Session = struct {
     pub fn neverStop(_: *anyopaque) bool {
         return false;
     }
-
-    /// The roots with a navigation index.
-    pub fn indexedRoots(self: *const Session) usize {
-        return self.handler.nav_cache.count();
-    }
-
-    /// The proof checks so far: run, replayed from the memo, and kept in it.
-    pub fn checks(self: *const Session) Checks {
-        const memo = &self.handler.check_memo;
-        return .{ .run = memo.misses, .replayed = memo.hits, .kept = memo.entries.count() };
-    }
-
-    const Suggestion = mm0.CompilerSupport.Search.SourceSuggestion;
-    const SearchStatus = mm0.CompilerSupport.Search.SearchStatus;
-    const Checks = struct { run: usize, replayed: usize, kept: usize };
 };
 
 pub fn testPosition(text: []const u8, needle: []const u8) !types.Position {

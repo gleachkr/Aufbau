@@ -535,10 +535,14 @@ test "LSP navigation cache invalidates changed mm0 sibling" {
         .position = try testLastPosition(lsp_navigation_proof_text, "keep"),
     });
     try std.testing.expect(first_hover != null);
-    try std.testing.expectEqual(@as(usize, 1), session.indexedRoots());
+    try std.testing.expectEqual(@as(usize, 1), session.keptUnits());
 
     try session.change(mm0_uri, 2, changed_mm0_text);
-    try std.testing.expectEqual(@as(usize, 0), session.indexedRoots());
+    // The unit kept is of the new text: the analysis joined it again.
+    try std.testing.expectEqualStrings(
+        changed_mm0_text,
+        try session.theoryFileText(mm0_uri, mm0_uri),
+    );
 
     const hover_result = try session.handler.@"textDocument/hover"(arena, .{
         .textDocument = .{ .uri = proof_uri },
@@ -573,10 +577,10 @@ test "LSP navigation cache invalidates closed proof sibling" {
         .position = try testLastPosition(lsp_navigation_proof_text, "keep"),
     });
     try std.testing.expect(hover_result != null);
-    try std.testing.expectEqual(@as(usize, 1), session.indexedRoots());
+    try std.testing.expectEqual(@as(usize, 1), session.keptUnits());
 
     try session.close(proof_uri);
-    try std.testing.expectEqual(@as(usize, 0), session.indexedRoots());
+    try std.testing.expectEqual(@as(usize, 0), session.keptUnits());
 }
 
 test "LSP proof unknown rule has hover but no definition" {
