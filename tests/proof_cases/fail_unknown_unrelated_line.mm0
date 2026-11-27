@@ -1,0 +1,10 @@
+delimiter $ ( ) $;
+--| @hole _
+--| @unknown ?
+provable sort wff;
+term imp (a b: wff): wff;
+infixr imp: $->$ prec 25;
+axiom mp (a b: wff): $ a -> b $ > $ a $ > $ b $;
+axiom ax1 (a b: wff): $ a -> b -> a $;
+--| l3 is wrong and no hole reaches it: the error is its own, and ?c is solved
+theorem use_fixes (p q: wff): $ p $ > $ q -> p $;

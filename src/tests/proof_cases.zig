@@ -1127,6 +1127,10 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "fail_unknown_pairing_limit", .outcome = .{ .fail = error.NamedUnknownPairingLimit } },
     // Equations that clash solve nothing; the walk reports the mismatch.
     .{ .stem = "fail_unknown_later_clash", .outcome = .{ .fail = error.ConclusionMismatch } },
+    // A wrong line that no hole reaches (it holds none and cites no line
+    // that does) takes no part in the pre-pass: its error is its own, and
+    // the names are still solved.
+    .{ .stem = "fail_unknown_unrelated_line", .outcome = .{ .fail = error.ExpectedTermApp } },
     // A `@fallback` line: when one rule of the chain is left that can
     // check, its equations are committed (also inline, and when another
     // rule's premise count rules it out); with several, only the values

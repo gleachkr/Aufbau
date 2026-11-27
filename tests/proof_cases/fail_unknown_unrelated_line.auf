@@ -1,0 +1,7 @@
+use_fixes
+---------
+
+l1: $ ?c $ by ax1 []
+l2: $ q -> p $ by mp [l1, #1]
+l3: $ p $ by ax1 []
+l4: $ q -> p $ by mp [l1, #1]

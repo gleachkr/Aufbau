@@ -65,7 +65,7 @@ pub const Inputs = struct {
 /// Solve the block's named unknowns and bind the solved ones in `out`.
 pub fn solve(inputs: Inputs, out: *Unknowns.Unknowns) !void {
     if (!mayNameUnknowns(&inputs.theory.parser, inputs.lines)) return;
-    var solver = Solver{ .inputs = inputs };
+    var solver = Solver{ .inputs = inputs, .read = &out.statements };
     defer solver.deinit();
     // A clash, or anything else the pass cannot read, solves nothing.
     solver.run() catch |err| switch (err) {
@@ -110,7 +110,7 @@ fn reportClash(inputs: Inputs, out: *Unknowns.Unknowns) !void {
         var prefix = inputs;
         prefix.lines = inputs.lines[0..len];
         if (len < inputs.lines.len) prefix.conclusion = null;
-        var solver = Solver{ .inputs = prefix };
+        var solver = Solver{ .inputs = prefix, .read = &out.statements };
         defer solver.deinit();
         solver.run() catch |err| switch (err) {
             error.OutOfMemory => return err,
@@ -122,15 +122,30 @@ fn reportClash(inputs: Inputs, out: *Unknowns.Unknowns) !void {
 
 const Solver = struct {
     inputs: Inputs,
+    /// The statements read, by the address of their text, for the walk.
+    read: *std.AutoHashMapUnmanaged(usize, Holes.ParsedAssertion),
     /// Each name's variable.
     names: std.StringArrayHashMapUnmanaged(ExprId) = .empty,
     /// The pass's own variables, and what each is bound to.
-    variables: std.AutoHashMapUnmanaged(ExprId, ?ExprId) = .empty,
+    variables: std.AutoHashMapUnmanaged(ExprId, Slot) = .empty,
+    /// Counts the waiting equations made outside a trial (`Slot.touched`).
+    epoch: u32 = 0,
+    /// Set while the variables a rewrite step looks at are noted.
+    reads: ?*Reads = null,
+    /// Counts the note-taking spans (`Slot.read`).
+    read_spans: u32 = 0,
+    /// The rewrite steps that forced nothing, by waiting equation.
+    idle_steps: std.AutoHashMapUnmanaged([2]ExprId, IdleStep) = .empty,
     /// Each line's statement, by label.
     statements: std.StringHashMapUnmanaged(ExprId) = .empty,
     work: std.ArrayListUnmanaged([2]ExprId) = .empty,
     /// Bag equations not decided yet: retried while bindings are made.
     postponed: std.ArrayListUnmanaged(Waiting) = .empty,
+    /// The waiting equations as they were before the trial under way.
+    postponed_saved: std.ArrayListUnmanaged(Waiting) = .empty,
+    /// Scratch of `postpone`.
+    mentioned: std.ArrayListUnmanaged(ExprId) = .empty,
+    mentioned_seen: std.AutoHashMapUnmanaged(ExprId, void) = .empty,
     /// Owns the `Waiting.vars` lists.
     waiting_arena: ?std.heap.ArenaAllocator = null,
     /// Bindings made so far, to tell whether deciding the chains and the
@@ -151,6 +166,35 @@ const Solver = struct {
     clash_terms: ?[2]ExprId = null,
     /// Equations a rewrite step was committed for, so it is not again.
     steps_done: std.ArrayListUnmanaged([2]ExprId) = .empty,
+
+    const Slot = struct {
+        binding: ?ExprId = null,
+        /// `epoch` when a waiting equation that mentions the variable was
+        /// last made outside a trial.
+        touched: u32 = 0,
+        /// The note-taking span that last saw the variable unbound.
+        read: u32 = 0,
+    };
+
+    /// The unbound variables looked at since note-taking began.
+    const Reads = struct {
+        allocator: std.mem.Allocator,
+        span: u32,
+        vars: std.ArrayListUnmanaged(ExprId) = .empty,
+        /// A variable could not be noted, so the notes are no use.
+        lost: bool = false,
+    };
+
+    /// A rewrite step that was tried and forced nothing. What it found
+    /// depends only on the unbound variables it looked at and the waiting
+    /// equations on them, so it stands until one of the variables is bound
+    /// or a waiting equation that mentions one is made. (Trying every
+    /// waiting equation's rules again whenever anything was bound made the
+    /// pass quadratic in the lines of a long proof.)
+    const IdleStep = struct {
+        epoch: u32,
+        vars: []const ExprId,
+    };
 
     /// An equation that waits for more bindings.
     const Waiting = struct {
@@ -177,9 +221,13 @@ const Solver = struct {
         const allocator = self.inputs.allocator;
         self.names.deinit(allocator);
         self.variables.deinit(allocator);
+        self.idle_steps.deinit(allocator);
         self.statements.deinit(allocator);
         self.work.deinit(allocator);
         self.postponed.deinit(allocator);
+        self.postponed_saved.deinit(allocator);
+        self.mentioned.deinit(allocator);
+        self.mentioned_seen.deinit(allocator);
         if (self.waiting_arena) |*arena| arena.deinit();
         self.trail.deinit(allocator);
         for (self.choices.items) |choice| allocator.free(choice.rules);
@@ -189,51 +237,81 @@ const Solver = struct {
     }
 
     fn run(self: *Solver) !void {
-        const theory = self.inputs.theory;
-        // Statements first: a reference may name any earlier line.
-        var any_named = false;
+        const allocator = self.inputs.allocator;
+        const parser = &self.inputs.theory.parser;
         // The walk stops at an incomplete line; so does the pass.
         const lines = for (self.inputs.lines, 0..) |line, idx| {
             if (line.incomplete) break self.inputs.lines[0..idx];
         } else self.inputs.lines;
+
+        // Statements first, in line order: a reference may name any
+        // earlier line.
+        var holey: std.StringHashMapUnmanaged(void) = .empty;
+        defer holey.deinit(allocator);
+        var any_named = false;
         for (lines) |line| {
-            const parsed = Holes.parseAssertion(
-                &theory.parser,
-                self.inputs.theorem,
-                self.inputs.theorem_vars,
-                &theory.sort_vars,
-                line.assertion.text,
-            ) catch |err| switch (err) {
-                error.OutOfMemory => return err,
-                else => continue,
-            };
-            const statement = switch (parsed) {
-                .concrete => |expr| expr,
-                .holey => |surface| blk: {
-                    if (Unknowns.hasNamed(surface)) any_named = true;
-                    break :blk (try self.internSurface(surface)) orelse continue;
+            switch (try self.readStatement(line)) {
+                .plain => {},
+                .holey => try holey.put(allocator, line.label, {}),
+                .named => {
+                    try holey.put(allocator, line.label, {});
+                    any_named = true;
                 },
-            };
-            try self.statements.put(self.inputs.allocator, line.label, statement);
-            if (applicationMayName(&theory.parser, line.application)) any_named = true;
+            }
+            if (applicationMayName(parser, line.application)) any_named = true;
         }
         if (!any_named) return;
 
-        var last: ?ExprId = null;
+        // Only a line with a hole, one that cites such a line, or one that
+        // names an unknown in a binding says anything about a hole: any
+        // other line's equations are between its own rule's binders and
+        // statements without holes.
         for (lines) |line| {
-            const statement = self.statements.get(line.label) orelse {
-                last = null;
-                continue;
-            };
-            last = statement;
+            if (!holey.contains(line.label) and !citesAny(line.application, &holey) and
+                !applicationMayName(parser, line.application)) continue;
+            const statement = self.statements.get(line.label) orelse continue;
             try self.application(line.application, statement);
         }
         // The last line meets the conclusion only when the block is whole.
-        if (lines.len == self.inputs.lines.len) if (last) |statement| if (self.inputs.conclusion) |conclusion| {
-            try self.equate(statement, conclusion);
-        };
+        if (lines.len != 0 and lines.len == self.inputs.lines.len and holey.contains(lines[lines.len - 1].label)) {
+            if (self.statements.get(lines[lines.len - 1].label)) |statement| {
+                if (self.inputs.conclusion) |conclusion| try self.equate(statement, conclusion);
+            }
+        }
         try self.settle();
         try self.decideChoices();
+    }
+
+    /// What a line's statement holds: no hole (or it could not be read), a
+    /// hole, or a named one.
+    const Statement = enum { plain, holey, named };
+
+    /// Read `line`'s statement, and keep it for the walk. A statement that
+    /// cannot be read is left out.
+    fn readStatement(self: *Solver, line: ProofLine) !Statement {
+        const theory = self.inputs.theory;
+        const parsed = Holes.parseAssertion(
+            &theory.parser,
+            self.inputs.theorem,
+            self.inputs.theorem_vars,
+            &theory.sort_vars,
+            line.assertion.text,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return .plain,
+        };
+        try self.read.put(self.inputs.allocator, @intFromPtr(line.assertion.text.ptr), parsed);
+        switch (parsed) {
+            .concrete => |expr| {
+                try self.statements.put(self.inputs.allocator, line.label, expr);
+                return .plain;
+            },
+            .holey => |surface| {
+                const expr = (try self.internSurface(surface)) orelse return .plain;
+                try self.statements.put(self.inputs.allocator, line.label, expr);
+                return if (Unknowns.hasNamed(surface)) .named else .holey;
+            },
+        }
     }
 
     /// Tell the walk that the lines up to `line` clash, as this solver
@@ -282,7 +360,7 @@ const Solver = struct {
     /// Whether a variable `waiting` waits on has been bound.
     fn woken(self: *const Solver, waiting: Waiting) bool {
         for (waiting.vars) |variable| {
-            if (self.variables.get(variable).? != null) return true;
+            if (self.variables.get(variable).?.binding != null) return true;
         }
         return false;
     }
@@ -290,12 +368,15 @@ const Solver = struct {
     /// Make `lhs = rhs` wait for one of its unbound variables.
     fn postpone(self: *Solver, lhs: ExprId, rhs: ExprId) !void {
         const allocator = self.inputs.allocator;
-        var vars: std.ArrayListUnmanaged(ExprId) = .empty;
-        defer vars.deinit(allocator);
-        var seen: std.AutoHashMapUnmanaged(ExprId, void) = .empty;
-        defer seen.deinit(allocator);
-        try self.collectVariables(lhs, &vars, &seen);
-        try self.collectVariables(rhs, &vars, &seen);
+        const vars = &self.mentioned;
+        vars.clearRetainingCapacity();
+        self.mentioned_seen.clearRetainingCapacity();
+        try self.collectVariables(lhs, vars, &self.mentioned_seen);
+        try self.collectVariables(rhs, vars, &self.mentioned_seen);
+        if (!self.in_trial) {
+            self.epoch += 1;
+            for (vars.items) |variable| self.variables.getPtr(variable).?.touched = self.epoch;
+        }
         if (self.waiting_arena == null) self.waiting_arena = std.heap.ArenaAllocator.init(allocator);
         try self.postponed.append(allocator, .{
             .pair = .{ lhs, rhs },
@@ -466,52 +547,64 @@ const Solver = struct {
     }
 
     /// What trying each of `attempts` forces: the index of the only one
-    /// that can check, or else the values every one that can check gives
-    /// the names known now (a trial may add names, and those stay open);
-    /// a clash when none can.
-    const Verdict = union(enum) { one: usize, agreed: []?ExprId };
+    /// that can check, or else the bindings every one that can check
+    /// makes; a clash when none can.
+    const Verdict = union(enum) { one: usize, agreed: []Binding };
+
+    /// A variable a trial bound, and its value.
+    const Binding = struct { variable: ExprId, value: ExprId };
 
     fn weigh(self: *Solver, attempts: []const Attempt) !Verdict {
         const allocator = self.inputs.allocator;
-        const name_count = self.names.count();
-        var agreed: ?[]?ExprId = null;
-        errdefer if (agreed) |values| allocator.free(values);
+        var agreed: std.ArrayListUnmanaged(Binding) = .empty;
+        errdefer agreed.deinit(allocator);
         var survivor: usize = 0;
         var survivors: usize = 0;
         for (attempts, 0..) |attempt, i| {
-            const values = (try self.trial(attempt, name_count)) orelse continue;
+            const bindings = (try self.trial(attempt)) orelse continue;
+            defer allocator.free(bindings);
             survivors += 1;
             survivor = i;
-            if (agreed) |previous| {
-                defer allocator.free(values);
-                for (previous, values) |*value, theirs| {
-                    if (value.* != theirs) value.* = null;
-                }
-            } else agreed = values;
+            if (survivors == 1) {
+                try agreed.appendSlice(allocator, bindings);
+                continue;
+            }
+            var kept: usize = 0;
+            for (agreed.items) |binding| {
+                const same = for (bindings) |theirs| {
+                    if (theirs.variable == binding.variable) break theirs.value == binding.value;
+                } else false;
+                if (!same) continue;
+                agreed.items[kept] = binding;
+                kept += 1;
+            }
+            agreed.shrinkRetainingCapacity(kept);
+            // Two can check and agree on nothing: no later one changes that.
+            if (kept == 0) break;
         }
         if (survivors == 0) return error.Clash;
         if (survivors == 1) {
-            allocator.free(agreed.?);
+            agreed.deinit(allocator);
             return .{ .one = survivor };
         }
-        return .{ .agreed = agreed.? };
+        return .{ .agreed = try agreed.toOwnedSlice(allocator) };
     }
 
-    /// Give each name the value every surviving attempt agreed on, and
-    /// free `agreed`.
-    fn commitAgreed(self: *Solver, agreed: []?ExprId) !void {
+    /// Make the bindings every surviving attempt agreed on, and free
+    /// `agreed`.
+    fn commitAgreed(self: *Solver, agreed: []Binding) !void {
         defer self.inputs.allocator.free(agreed);
-        for (agreed, self.names.values()[0..agreed.len]) |value, variable| {
-            if (value) |agreed_value| try self.equate(variable, agreed_value);
-        }
+        for (agreed) |binding| try self.equate(binding.variable, binding.value);
         try self.settle();
     }
 
-    /// Try `attempt` and undo it: the values of the first `name_count`
-    /// names when it can check, null when it clashes. Caller frees.
-    fn trial(self: *Solver, attempt: Attempt, name_count: usize) !?[]?ExprId {
+    /// Try `attempt` and undo it: when it can check, the bindings it made
+    /// of the variables there were before it; null when it clashes. A
+    /// value that mentions a variable of the trial's own is left out, as
+    /// no other attempt can agree with it. Caller frees.
+    fn trial(self: *Solver, attempt: Attempt) !?[]Binding {
         const allocator = self.inputs.allocator;
-        std.debug.assert(self.work.items.len == 0);
+        std.debug.assert(self.work.items.len == 0 and !self.in_trial);
         switch (attempt) {
             .chain => |chain| {
                 const rule: *const RuleDecl = &self.inputs.theory.env.rules.items[chain.rule_id];
@@ -519,19 +612,21 @@ const Solver = struct {
             },
             .step => {},
         }
+        const first_new: ExprId = @intCast(self.inputs.theorem.interner.count());
         const trail_mark = self.trail.items.len;
         const progress_mark = self.progress;
-        const postponed = try allocator.dupe(Waiting, self.postponed.items);
-        defer allocator.free(postponed);
+        // Trials do not nest, so one saved copy serves them all.
+        self.postponed_saved.clearRetainingCapacity();
+        try self.postponed_saved.appendSlice(allocator, self.postponed.items);
         defer {
             for (self.trail.items[trail_mark..]) |variable| {
-                self.variables.getPtr(variable).?.* = null;
+                self.variables.getPtr(variable).?.binding = null;
             }
             self.trail.shrinkRetainingCapacity(trail_mark);
             self.work.clearRetainingCapacity();
             self.postponed.clearRetainingCapacity();
             // Restores what was copied out; capacity is already there.
-            self.postponed.appendSliceAssumeCapacity(postponed);
+            self.postponed.appendSliceAssumeCapacity(self.postponed_saved.items);
             self.progress = progress_mark;
             self.in_trial = false;
         }
@@ -548,12 +643,28 @@ const Solver = struct {
             break :blk true;
         };
         if (!checks) return null;
-        const values = try allocator.alloc(?ExprId, name_count);
-        errdefer allocator.free(values);
-        for (self.names.values()[0..name_count], values) |variable, *value| {
-            value.* = try self.resolveFully(variable);
+        var bindings: std.ArrayListUnmanaged(Binding) = .empty;
+        errdefer bindings.deinit(allocator);
+        for (self.trail.items[trail_mark..]) |variable| {
+            if (variable >= first_new) continue;
+            const value = try self.resolveFully(variable);
+            if (self.mentionsFrom(value, first_new)) continue;
+            try bindings.append(allocator, .{ .variable = variable, .value = value });
         }
-        return values;
+        return try bindings.toOwnedSlice(allocator);
+    }
+
+    /// Whether `expr` mentions a pass variable made at `first` or later.
+    /// A term over one was itself made later.
+    fn mentionsFrom(self: *const Solver, expr: ExprId, first: ExprId) bool {
+        if (expr < first) return false;
+        if (self.isVariable(expr)) return true;
+        return switch (self.inputs.theorem.interner.node(expr).*) {
+            .app => |app| for (app.args) |arg| {
+                if (self.mentionsFrom(arg, first)) break true;
+            } else false,
+            else => false,
+        };
     }
 
     /// One way a line or an equation may check, tried on a trail.
@@ -586,14 +697,51 @@ const Solver = struct {
         const pending = try allocator.dupe(Waiting, self.postponed.items);
         defer allocator.free(pending);
         for (pending) |waiting| {
-            const lhs = try self.normalForm(waiting.pair[0]);
-            const rhs = try self.normalForm(waiting.pair[1]);
-            if (self.stuckHead(lhs) != null and self.rigid(rhs, lhs)) {
-                try self.decideStep(lhs, rhs);
-            } else if (self.stuckHead(rhs) != null and self.rigid(lhs, rhs)) {
-                try self.decideStep(rhs, lhs);
-            }
+            if (self.idleStepStands(waiting.pair)) continue;
+            const first_new: ExprId = @intCast(self.inputs.theorem.interner.count());
+            self.read_spans += 1;
+            var reads = Reads{ .allocator = allocator, .span = self.read_spans };
+            defer reads.vars.deinit(allocator);
+            self.reads = &reads;
+            defer self.reads = null;
+            if (try self.stepPair(waiting.pair)) continue;
+            self.reads = null;
+            if (!reads.lost) try self.rememberIdleStep(waiting.pair, reads.vars.items, first_new);
         }
+    }
+
+    /// Step the waiting equation `pair` if one side is stuck against a
+    /// rigid other; whether that forced anything.
+    fn stepPair(self: *Solver, pair: [2]ExprId) !bool {
+        const lhs = try self.normalForm(pair[0]);
+        const rhs = try self.normalForm(pair[1]);
+        if (self.stuckHead(lhs) != null and self.rigid(rhs, lhs)) return self.decideStep(lhs, rhs);
+        if (self.stuckHead(rhs) != null and self.rigid(lhs, rhs)) return self.decideStep(rhs, lhs);
+        return false;
+    }
+
+    fn idleStepStands(self: *const Solver, pair: [2]ExprId) bool {
+        const idle = self.idle_steps.get(pair) orelse return false;
+        for (idle.vars) |variable| {
+            const slot = self.variables.get(variable).?;
+            if (slot.binding != null or slot.touched > idle.epoch) return false;
+        }
+        return true;
+    }
+
+    /// Stepping `pair` forced nothing, having looked at `vars`; the ones
+    /// made at `first_new` or later were its trials' own.
+    fn rememberIdleStep(self: *Solver, pair: [2]ExprId, vars: []const ExprId, first_new: ExprId) !void {
+        const allocator = self.inputs.allocator;
+        if (self.waiting_arena == null) self.waiting_arena = std.heap.ArenaAllocator.init(allocator);
+        const kept = try self.waiting_arena.?.allocator().alloc(ExprId, vars.len);
+        var count: usize = 0;
+        for (vars) |variable| {
+            if (variable >= first_new) continue;
+            kept[count] = variable;
+            count += 1;
+        }
+        try self.idle_steps.put(allocator, pair, .{ .epoch = self.epoch, .vars = kept[0..count] });
     }
 
     /// The `@rewrite` head of `expr`, when only its rewrites can change
@@ -625,10 +773,11 @@ const Solver = struct {
         };
     }
 
-    fn decideStep(self: *Solver, stuck: ExprId, other: ExprId) !void {
+    /// Whether trying the rewrite rules of `stuck`'s head forced anything.
+    fn decideStep(self: *Solver, stuck: ExprId, other: ExprId) !bool {
         const allocator = self.inputs.allocator;
         for (self.steps_done.items) |done| {
-            if (done[0] == stuck and done[1] == other) return;
+            if (done[0] == stuck and done[1] == other) return false;
         }
         const rules = self.inputs.theory.registry.getRewriteRules(self.stuckHead(stuck).?);
         const attempts = try allocator.alloc(Attempt, rules.len);
@@ -640,7 +789,7 @@ const Solver = struct {
             error.Clash => return self.clash(stuck, other),
             // A rule the pass cannot read could be the one that fires, so
             // the equation forces nothing.
-            error.Unreadable => return,
+            error.Unreadable => return false,
             else => return err,
         };
         switch (verdict) {
@@ -648,14 +797,19 @@ const Solver = struct {
                 // A right side under a rewrite head again would wait as a
                 // new equation, and could be stepped without end.
                 switch (rules[i].rhs) {
-                    .app => |app| if (self.rewriteOnly(app.term_id)) return,
+                    .app => |app| if (self.rewriteOnly(app.term_id)) return false,
                     .binder => {},
                 }
                 try self.steps_done.append(allocator, .{ stuck, other });
                 try self.apply(attempts[i]);
                 try self.settle();
+                return true;
             },
-            .agreed => |agreed| try self.commitAgreed(agreed),
+            .agreed => |agreed| {
+                const any = agreed.len != 0;
+                try self.commitAgreed(agreed);
+                return any;
+            },
         }
     }
 
@@ -727,9 +881,9 @@ const Solver = struct {
             if (deps & ~allowed == 0) return;
             const sort_name = try SurfaceExpr.exprIdSortName(theorem, &self.inputs.theory.env, resolved);
             const narrowed = try theorem.addRestrictedLineHolePlaceholder(sort_name, deps & allowed);
-            try self.variables.put(self.inputs.allocator, narrowed, null);
+            try self.variables.put(self.inputs.allocator, narrowed, .{});
             if (self.in_trial) try self.trail.append(self.inputs.allocator, resolved);
-            self.variables.getPtr(resolved).?.* = narrowed;
+            self.variables.getPtr(resolved).?.binding = narrowed;
             self.progress += 1;
             return;
         }
@@ -773,7 +927,7 @@ const Solver = struct {
     /// its open parts as ordinary holes (`Unknowns.substitute`).
     fn mint(self: *Solver, sort_name: []const u8) !ExprId {
         const variable = try self.inputs.theorem.addUnrestrictedLineHolePlaceholder(sort_name);
-        try self.variables.put(self.inputs.allocator, variable, null);
+        try self.variables.put(self.inputs.allocator, variable, .{});
         return variable;
     }
 
@@ -783,8 +937,16 @@ const Solver = struct {
 
     fn resolve(self: *const Solver, id: ExprId) ExprId {
         var current = id;
-        while (self.variables.get(current)) |binding| {
-            current = binding orelse return current;
+        while (self.variables.getPtr(current)) |slot| {
+            current = slot.binding orelse {
+                if (self.reads) |reads| if (slot.read != reads.span) {
+                    slot.read = reads.span;
+                    reads.vars.append(reads.allocator, current) catch {
+                        reads.lost = true;
+                    };
+                };
+                return current;
+            };
         }
         return current;
     }
@@ -1332,7 +1494,7 @@ const Solver = struct {
         }
         if (allowed != std.math.maxInt(u55)) try self.restrict(value, allowed);
         if (self.in_trial) try self.trail.append(self.inputs.allocator, variable);
-        self.variables.getPtr(variable).?.* = value;
+        self.variables.getPtr(variable).?.binding = value;
         self.progress += 1;
     }
 
@@ -1411,6 +1573,16 @@ pub fn mayNameUnknowns(parser: *const MM0Parser, lines: []const ProofLine) bool 
             return true;
         }
     }
+    return false;
+}
+
+/// Whether `app` or one of its inline sub-proofs cites a line in `labels`.
+fn citesAny(app: RuleApplication, labels: *const std.StringHashMapUnmanaged(void)) bool {
+    for (app.refs) |ref| switch (ref) {
+        .hyp => {},
+        .line => |label| if (labels.contains(label.label)) return true,
+        .application => |child| if (citesAny(child, labels)) return true,
+    };
     return false;
 }
 

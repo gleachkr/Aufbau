@@ -529,7 +529,7 @@ pub const LineWalk = struct {
             return error.DuplicateLabel;
         }
 
-        const written_assertion = try parseProofLineAssertion(
+        const written_assertion = self.unknowns.statements.get(@intFromPtr(line.assertion.text.ptr)) orelse try parseProofLineAssertion(
             compiler,
             &self.theory.parser,
             self.theorem,

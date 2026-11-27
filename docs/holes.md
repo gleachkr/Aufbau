@@ -143,6 +143,10 @@ pre-pass solves the names from all the lines at once: each rule
 application's conclusion equals its statement, each premise equals what
 its reference states, each explicit binding equals its binder, and the
 last line equals the theorem's conclusion.
+Only the lines a hole reaches take part: a line that holds a hole, a line
+that cites one, and a line that names an unknown in a binding. Any other
+line says nothing about a name, so a mistake in it is reported as that
+line's own error.
 The pre-pass unifies these first-order and commits only what every
 successful check must agree with:
 

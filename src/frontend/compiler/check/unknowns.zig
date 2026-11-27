@@ -30,6 +30,9 @@ pub const Unknowns = struct {
     /// open parts as placeholders. `substitute` writes it into a line with
     /// those parts as holes.
     partial: std.StringHashMapUnmanaged(ExprId) = .empty,
+    /// The statements the pre-pass read, by the address of their text:
+    /// the walk takes them from here instead of reading them again.
+    statements: std.AutoHashMapUnmanaged(usize, Holes.ParsedAssertion) = .empty,
     /// The name each open placeholder in a `partial` value stands for.
     open: std.AutoHashMapUnmanaged(PlaceholderId, []const u8) = .empty,
     /// Theorem variables by id, to write a value back as surface syntax.
@@ -51,6 +54,7 @@ pub const Unknowns = struct {
     pub fn deinit(self: *Unknowns, allocator: std.mem.Allocator) void {
         self.bound.deinit(allocator);
         self.partial.deinit(allocator);
+        self.statements.deinit(allocator);
         self.open.deinit(allocator);
         self.var_surfaces.deinit(allocator);
         self.* = undefined;
