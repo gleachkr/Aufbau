@@ -63,20 +63,6 @@ pub const ProofItemStream = struct {
         };
     }
 
-    /// Editor-facing variant: broken proof lines become
-    /// `ProofLine.incomplete` entries instead of ending the stream. The
-    /// compile path must keep using `init` — an incomplete line is an error
-    /// there.
-    pub fn initLenient(
-        allocator: std.mem.Allocator,
-        source: []const u8,
-    ) ProofItemStream {
-        return .{
-            .allocator = allocator,
-            .parser = ProofScriptParser.initLenient(allocator, source),
-        };
-    }
-
     pub fn next(self: *ProofItemStream) !?TopLevelItem {
         if (self.pending.items.len > 0) {
             return self.pending.pop().?;
@@ -640,7 +626,7 @@ pub fn setExtraProofItemDiagnostic(self: *CompilerContext, item: TopLevelItem) a
 /// caller to process under its own error policy. Anything not anchored is
 /// put back too and the slice is empty.
 pub fn collectAnchoredLocalProofItems(
-    ctx: ?*CompilerContext,
+    ctx: *CompilerContext,
     allocator: std.mem.Allocator,
     parser: *const MM0Parser,
     proof_stream: *?ProofItemStream,
@@ -653,13 +639,11 @@ pub fn collectAnchoredLocalProofItems(
 
     while (true) {
         const item = proofs.next() catch |err| {
-            if (ctx) |c| {
-                c.setDiagnostic(CompilerDiag.proofParserDiagnostic(
-                    &proofs.parser,
-                    header.name,
-                    err,
-                ));
-            }
+            ctx.setDiagnostic(CompilerDiag.proofParserDiagnostic(
+                &proofs.parser,
+                header.name,
+                err,
+            ));
             return err;
         } orelse {
             putBackItems(proofs, locals.items);
@@ -1225,7 +1209,7 @@ fn releaseTheoremScratch(self: *const CompilerContext) void {
 
 /// Check `block` as `assertion`'s proof for the analysis, which wants what
 /// the check reports and not its lines. With an active check memo
-/// (`CompilerContext.check_memo`), a hit replays the recorded outcome and
+/// (`EditorHooks.memo`), a hit replays the recorded outcome and
 /// output, without the theorem being built or the block's lines parsed; a
 /// check the memo recorded is followed by a look at the interrupt, whose
 /// `AnalysisInterrupted` is the run's, not the block's. A block the memo
@@ -1240,7 +1224,7 @@ pub fn analyzeBlock(
     const scratch = theoremAllocator(self, allocator);
     defer releaseTheoremScratch(self);
 
-    const memo: ?*CheckMemo = if (self.check_memo) |found|
+    const memo: ?*CheckMemo = if (self.editor.memo) |found|
         if (found.active) found else null
     else
         null;
@@ -1255,11 +1239,11 @@ pub fn analyzeBlock(
             return;
         }
     }
-    if (self.check_scope) |scope| if (!scope.covers(block.span.start)) {
+    if (self.editor.scope) |scope| if (!scope.covers(block.span.start)) {
         scope.skipped += 1;
         return;
     };
-    if (self.progress) |progress| progress.checking(block.span.start);
+    if (self.editor.progress) |progress| progress.checking(block.span.start);
     const active = memo orelse
         return checkUnmemoized(self, scratch, theory, assertion, block);
     const proof = self.proof_source.?;
@@ -1270,7 +1254,7 @@ pub fn analyzeBlock(
     // A stop after a check the memo could not keep would throw the check
     // away, and the next run would check it again, and stop again.
     const kept = active.finishRecording(self, recording, key, outcome, proof, parsed);
-    if (kept) if (self.interrupt) |interrupt| {
+    if (kept) if (self.editor.interrupt) |interrupt| {
         if (interrupt.stopRequested()) return error.AnalysisInterrupted;
     };
     if (outcome) |err| return err;

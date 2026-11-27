@@ -16,7 +16,6 @@ const Types = @import("types.zig");
 pub const DocumentId = Types.DocumentId;
 pub const SnapshotInput = Types.SnapshotInput;
 pub const SourceRange = Types.SourceRange;
-pub const DefinitionResult = Types.DefinitionResult;
 pub const HoverResult = Types.HoverResult;
 pub const CompletionOptions = Types.CompletionOptions;
 pub const CompletionKind = Types.CompletionKind;
@@ -49,9 +48,7 @@ pub const Snapshot = struct {
     /// Backs `body`.
     body_arena: ArenaAllocator,
     body: ?struct { block_index: usize, body: ProofBody } = null,
-    mm0_uri: []const u8,
     mm0_text: []const u8,
-    proof_uri: ?[]const u8,
     proof_text: ?[]const u8,
     declarations: []const Declaration,
     decl_by_name: NameTable,
@@ -85,7 +82,7 @@ pub const Snapshot = struct {
         if (input.proof_text) |text| {
             try builder.indexProof(
                 text,
-                if (input.check_memo) |memo| memo.knownBodies() else null,
+                input.known_bodies,
             );
             // A body's lines are parsed again when a request needs them.
             for (builder.proof_blocks.items) |*info| info.source = info.source.withoutLines(text);
@@ -104,9 +101,7 @@ pub const Snapshot = struct {
         var snapshot: Snapshot = .{
             .arena = undefined,
             .body_arena = ArenaAllocator.init(allocator),
-            .mm0_uri = try keep.copy([]const u8, input.mm0_uri),
             .mm0_text = input.mm0_text,
-            .proof_uri = try keep.copy(?[]const u8, input.proof_uri),
             .proof_text = input.proof_text,
             .declarations = try keep.copy([]const Declaration, builder.declarations.items),
             .decl_by_name = try keep.nameTable(builder.decl_by_name),
@@ -204,23 +199,19 @@ pub const Snapshot = struct {
         self: *Snapshot,
         document: DocumentId,
         offset: usize,
-    ) !?DefinitionResult {
+    ) !?SourceRange {
         const hit = try self.lookupAt(document, offset) orelse return null;
-        const target_range = hit.target_range orelse return null;
-        return self.locationForRange(target_range);
+        return hit.target_range;
     }
 
     pub fn implementationAt(
         self: *const Snapshot,
         document: DocumentId,
         offset: usize,
-    ) ?DefinitionResult {
+    ) ?SourceRange {
         if (document != .mm0) return null;
         const decl_index = self.theoremDeclarationAt(offset) orelse return null;
-        const target_range = self.proofBlockForTheorem(decl_index) orelse {
-            return null;
-        };
-        return self.locationForRange(target_range);
+        return self.proofBlockForTheorem(decl_index);
     }
 
     pub fn referencesAt(
@@ -406,11 +397,7 @@ pub const Snapshot = struct {
         const block = info.source;
         if (!block.self_contained) return null;
         if (block.header_span.start != header.start or block.header_span.end != header.end) return null;
-        return .{
-            .len = block.body_end - header.end,
-            .hash = block.known_body orelse
-                KnownBodies.bodyHash(text[header.end..block.body_end]),
-        };
+        return block.body(text);
     }
 
     /// The index of a block's body, valid until another block's is asked
@@ -427,27 +414,6 @@ pub const Snapshot = struct {
         const body = try indexBody(self.body_arena.allocator(), self, block_index);
         self.body = .{ .block_index = block_index, .body = body };
         return body;
-    }
-
-    pub fn uriForDocument(
-        self: *const Snapshot,
-        document: DocumentId,
-    ) ?[]const u8 {
-        return switch (document) {
-            .mm0 => self.mm0_uri,
-            .proof => self.proof_uri,
-        };
-    }
-
-    fn locationForRange(
-        self: *const Snapshot,
-        range: SourceRange,
-    ) ?DefinitionResult {
-        return .{
-            .uri = self.uriForDocument(range.document) orelse return null,
-            .range = range,
-            .selection_range = range,
-        };
     }
 
     fn theoremDeclarationAt(

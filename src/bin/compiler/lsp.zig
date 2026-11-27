@@ -896,7 +896,7 @@ pub const Handler = struct {
             offset,
         ) orelse return null;
         const location = nav.unit.rangeLocator().toLocation(
-            definition.selection_range,
+            definition,
             self.offset_encoding,
         ) orelse return null;
         return .{ .definition = .{ .location = location } };
@@ -920,7 +920,7 @@ pub const Handler = struct {
             offset,
         ) orelse return null;
         const location = nav.unit.rangeLocator().toLocation(
-            implementation.selection_range,
+            implementation,
             self.offset_encoding,
         ) orelse return null;
         return .{ .definition = .{ .location = location } };
@@ -1242,11 +1242,9 @@ pub const Handler = struct {
         if (state.snapshot == null) {
             const unit = &state.unit;
             state.snapshot = try LspIndex.Snapshot.build(self.allocator, .{
-                .mm0_uri = state.mm0_uri,
                 .mm0_text = unit.mm0.joined.text,
-                .proof_uri = if (unit.proof) |proof| proof.rootFile().uri else null,
                 .proof_text = if (unit.proof) |proof| proof.joined.text else null,
-                .check_memo = self.checkMemoFor(state.mm0_uri),
+                .known_bodies = self.checkMemoFor(state.mm0_uri).knownBodies(),
             });
         }
         return &state.snapshot.?;

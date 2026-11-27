@@ -182,7 +182,7 @@ fn analyzeInternal(
         self.proof_source,
         with_proof,
     );
-    if (self.check_memo) |memo| {
+    if (self.editor.memo) |memo| {
         memo.beginRun(self);
         if (memo.active) if (state.proof) |*proof| {
             proof.parser.known_bodies = memo.knownBodies();
@@ -191,7 +191,7 @@ fn analyzeInternal(
     // Only a walk that reached the end knows which recorded checks the
     // unit still uses.
     var walked = false;
-    defer if (self.check_memo) |memo| memo.endRun(walked);
+    defer if (self.editor.memo) |memo| memo.endRun(walked);
     // Snapshot pretty-printed statements on every exit path (recovery bails
     // early in several places), while the parser and env are still alive.
     defer if (self.statement_sink) |sink|

@@ -385,8 +385,8 @@ fn analyzeProofDocument(
     var holes_owned = true;
     defer if (holes_owned) holes.deinit();
     compiler.hole_inference_sink = &holes;
-    compiler.check_memo = self.checkMemoFor(roots.mm0_uri);
-    compiler.interrupt = self.host.interrupt();
+    compiler.editor.memo = self.checkMemoFor(roots.mm0_uri);
+    compiler.editor.interrupt = self.host.interrupt();
     // The editor shows the open files, so a queued host has their
     // proofs checked first and their diagnostics published, then the
     // rest.
@@ -394,15 +394,15 @@ fn analyzeProofDocument(
     const own: []const mm0.CompilerDiagnosticSpan =
         if (own_first) try ownProofSpans(self, arena, unit) else &.{};
     var scope: mm0.CheckScope = .{ .spans = own };
-    if (own_first and !pending.own_checked) compiler.check_scope = &scope;
+    if (own_first and !pending.own_checked) compiler.editor.scope = &scope;
     var progress: CheckProgress = .{
         .handler = self,
         .pending = pending,
         .side = &unit.proof.?,
         .own = own,
-        .own_pass = compiler.check_scope != null,
+        .own_pass = compiler.editor.scope != null,
     };
-    if (showsProgress(self)) compiler.progress = progress.hook();
+    if (showsProgress(self)) compiler.editor.progress = progress.hook();
     const analyzed = compiler.analyze();
     if (progress.failure) |err| return err;
     // A stopped analysis saw part of the unit: what it found is neither

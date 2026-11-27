@@ -404,6 +404,22 @@ pub const AnalysisProgress = struct {
     }
 };
 
+/// What an editor host adds to an analysis; the compile path has none of
+/// it. The memo comes first in every sense: the interrupt is asked only
+/// after a proof the memo checked and kept, the scope leaves out only what
+/// the memo does not replay, and progress is told only of real checks
+/// (`pipeline/common.zig` `analyzeBlock`).
+pub const EditorHooks = struct {
+    /// Memo of block check outcomes across analyses. See `check_memo.zig`.
+    memo: ?*CheckMemo = null,
+    /// Null runs to the end. See `AnalysisInterrupt`.
+    interrupt: ?AnalysisInterrupt = null,
+    /// Null checks every proof. See `CheckScope`.
+    scope: ?*CheckScope = null,
+    /// Null reports nothing. See `AnalysisProgress`.
+    progress: ?AnalysisProgress = null,
+};
+
 pub const CompilerContext = struct {
     source: []const u8,
     proof_source: ?[]const u8,
@@ -430,16 +446,7 @@ pub const CompilerContext = struct {
     /// generation call; every inference solver constructed under it polls
     /// it (`expr.zig` `WorkBudget`). Null on the compile path.
     work_budget: ?ExprModule.WorkBudget = null,
-    /// Memo of block check outcomes for editor re-analysis; null on the
-    /// compile path. See `check_memo.zig`.
-    check_memo: ?*CheckMemo = null,
-    /// Asked between the proofs of an analysis with an active check memo;
-    /// null runs to the end. See `AnalysisInterrupt`.
-    interrupt: ?AnalysisInterrupt = null,
-    /// Null checks every proof. See `CheckScope`.
-    check_scope: ?*CheckScope = null,
-    /// Null reports nothing. See `AnalysisProgress`.
-    progress: ?AnalysisProgress = null,
+    editor: EditorHooks = .{},
     /// The per-theorem arena: a theorem's check and its proof's emission
     /// allocate here, and it is reset once the theorem is done (its MMB
     /// records copied out, or its failure recorded), so a run holds the
@@ -538,12 +545,12 @@ pub const CompilerContext = struct {
         self: *CompilerContext,
         diag: Diagnostic,
     ) void {
-        if (self.check_memo) |memo| memo.noteDiagnostic(.primary, diag);
+        if (self.editor.memo) |memo| memo.noteDiagnostic(.primary, diag);
         self.diagnostics.addPrimaryDiagnostic(diag);
     }
 
     pub fn addWarning(self: *CompilerContext, diag: Diagnostic) void {
-        if (self.check_memo) |memo| memo.noteDiagnostic(.warning, diag);
+        if (self.editor.memo) |memo| memo.noteDiagnostic(.warning, diag);
         self.diagnostics.addWarning(diag);
     }
 

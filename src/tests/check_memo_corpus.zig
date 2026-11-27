@@ -81,9 +81,11 @@ fn analyzeDumpWith(
     compiler.allow_search_placeholders = true;
     compiler.hole_inference_sink = &holes;
     if (options.unknowns_sink) compiler.unknown_value_sink = &unknowns;
-    compiler.check_memo = options.memo;
-    compiler.interrupt = options.interrupt;
-    compiler.check_scope = options.scope;
+    compiler.editor = .{
+        .memo = options.memo,
+        .interrupt = options.interrupt,
+        .scope = options.scope,
+    };
 
     var out: std.Io.Writer.Allocating = .init(arena);
     const writer = &out.writer;
@@ -684,9 +686,7 @@ test "a proof checked alone has the holes an analysis finds in it" {
         var assertions: []const Context.FilledAssertion = found.assertions.items;
         // The editor's walk to a block passes over the bodies its index knows.
         var snapshot = try mm0.Frontend.LspIndex.Snapshot.build(allocator, .{
-            .mm0_uri = "file:///corpus.mm0",
             .mm0_text = pair.mm0.text,
-            .proof_uri = "file:///corpus.auf",
             .proof_text = proof_text,
         });
         defer snapshot.deinit();

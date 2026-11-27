@@ -20,10 +20,10 @@ test "definition lookup resolves declaration and simple global use" {
     const decl_def = try snapshot.definitionAt(.mm0, decl_offset) orelse {
         return error.MissingDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.mm0", decl_def.uri);
+    try std.testing.expectEqual(Index.DocumentId.mm0, decl_def.document);
     try std.testing.expectEqualStrings(
         "imp",
-        snapshot.mm0_text[decl_def.range.start..decl_def.range.end],
+        snapshot.mm0_text[decl_def.start..decl_def.end],
     );
 
     const use_offset =
@@ -31,8 +31,8 @@ test "definition lookup resolves declaration and simple global use" {
     const use_def = try snapshot.definitionAt(.mm0, use_offset) orelse {
         return error.MissingDefinition;
     };
-    try std.testing.expectEqual(decl_def.range.start, use_def.range.start);
-    try std.testing.expectEqual(decl_def.range.end, use_def.range.end);
+    try std.testing.expectEqual(decl_def.start, use_def.start);
+    try std.testing.expectEqual(decl_def.end, use_def.end);
 }
 
 test "hover returns markdown and source token range" {
@@ -160,10 +160,10 @@ test "sort references in signatures resolve explicitly" {
     const def = try snapshot.definitionAt(.mm0, offset) orelse {
         return error.MissingSortDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
+    try std.testing.expectEqual(Index.DocumentId.mm0, def.document);
     try std.testing.expectEqualStrings(
         "wff",
-        snapshot.mm0_text[def.range.start..def.range.end],
+        snapshot.mm0_text[def.start..def.end],
     );
 
     const hover = try snapshot.hoverAt(.mm0, offset) orelse {
@@ -212,10 +212,10 @@ test "proof block header resolves to matching theorem" {
     const def = try snapshot.definitionAt(.proof, offset) orelse {
         return error.MissingDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
+    try std.testing.expectEqual(Index.DocumentId.mm0, def.document);
     try std.testing.expectEqualStrings(
         "main",
-        snapshot.mm0_text[def.range.start..def.range.end],
+        snapshot.mm0_text[def.start..def.end],
     );
 }
 
@@ -239,10 +239,10 @@ test "implementation lookup resolves theorem declarations to proof blocks" {
     const implementation = snapshot.implementationAt(.mm0, offset) orelse {
         return error.MissingImplementation;
     };
-    try std.testing.expectEqualStrings("file:///test.auf", implementation.uri);
+    try std.testing.expectEqual(Index.DocumentId.proof, implementation.document);
     try std.testing.expectEqualStrings(
         "main",
-        snapshot.proof_text.?[implementation.range.start..implementation.range.end],
+        snapshot.proof_text.?[implementation.start..implementation.end],
     );
 
     const axiom_offset =
@@ -448,10 +448,10 @@ test "proof rule and line references resolve" {
     const rule_def = try snapshot.definitionAt(.proof, rule_offset) orelse {
         return error.MissingRuleDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.mm0", rule_def.uri);
+    try std.testing.expectEqual(Index.DocumentId.mm0, rule_def.document);
     try std.testing.expectEqualStrings(
         "keep",
-        snapshot.mm0_text[rule_def.range.start..rule_def.range.end],
+        snapshot.mm0_text[rule_def.start..rule_def.end],
     );
 
     const ref_offset =
@@ -459,10 +459,10 @@ test "proof rule and line references resolve" {
     const ref_def = try snapshot.definitionAt(.proof, ref_offset) orelse {
         return error.MissingLineDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.auf", ref_def.uri);
+    try std.testing.expectEqual(Index.DocumentId.proof, ref_def.document);
     try std.testing.expectEqualStrings(
         "l1",
-        snapshot.proof_text.?[ref_def.range.start..ref_def.range.end],
+        snapshot.proof_text.?[ref_def.start..ref_def.end],
     );
 }
 
@@ -490,11 +490,11 @@ test "local lemma rule resolves in later proof block" {
     const def = try snapshot.definitionAt(.proof, rule_offset) orelse {
         return error.MissingDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.auf", def.uri);
+    try std.testing.expectEqual(Index.DocumentId.proof, def.document);
     const decl_start = std.mem.indexOf(u8, proof_text, "helper") orelse {
         return error.MissingLemmaHeader;
     };
-    try std.testing.expectEqual(decl_start, def.range.start);
+    try std.testing.expectEqual(decl_start, def.start);
 }
 
 test "local proof defs navigate, hover, complete, and outline" {
@@ -532,11 +532,11 @@ test "local proof defs navigate, hover, complete, and outline" {
     const def = try snapshot.definitionAt(.proof, use_offset) orelse {
         return error.MissingLocalDefDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.auf", def.uri);
+    try std.testing.expectEqual(Index.DocumentId.proof, def.document);
     const decl_offset = std.mem.indexOf(u8, proof_text, "local_top") orelse {
         return error.MissingLocalDefDecl;
     };
-    try std.testing.expectEqual(decl_offset, def.range.start);
+    try std.testing.expectEqual(decl_offset, def.start);
 
     const hover = try snapshot.hoverAt(.proof, use_offset) orelse {
         return error.MissingLocalDefHover;
@@ -573,10 +573,10 @@ test "local proof def binders navigate from bodies" {
     const dummy_offset = std.mem.indexOf(u8, proof_text, ".d") orelse {
         return error.MissingLocalDummyDecl;
     };
-    try std.testing.expectEqual(dummy_offset + 1, def.range.start);
+    try std.testing.expectEqual(dummy_offset + 1, def.start);
     try std.testing.expectEqualStrings(
         "d",
-        snapshot.proof_text.?[def.range.start..def.range.end],
+        snapshot.proof_text.?[def.start..def.end],
     );
 }
 
@@ -597,10 +597,10 @@ test "public proof def bodies navigate to mm0 declarations" {
     const name_def = try snapshot.definitionAt(.proof, name_offset) orelse {
         return error.MissingPublicDefBodyDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.mm0", name_def.uri);
+    try std.testing.expectEqual(Index.DocumentId.mm0, name_def.document);
     try std.testing.expectEqualStrings(
         "hold",
-        snapshot.mm0_text[name_def.range.start..name_def.range.end],
+        snapshot.mm0_text[name_def.start..name_def.end],
     );
 
     const body_offset = std.mem.indexOf(u8, proof_text, "x") orelse {
@@ -609,10 +609,10 @@ test "public proof def bodies navigate to mm0 declarations" {
     const binder_def = try snapshot.definitionAt(.proof, body_offset) orelse {
         return error.MissingPublicDefBodyBinderDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.mm0", binder_def.uri);
+    try std.testing.expectEqual(Index.DocumentId.mm0, binder_def.document);
     try std.testing.expectEqualStrings(
         "x",
-        snapshot.mm0_text[binder_def.range.start..binder_def.range.end],
+        snapshot.mm0_text[binder_def.start..binder_def.end],
     );
 }
 
@@ -656,11 +656,11 @@ test "hypothesis refs hover and jump to exact theorem hypothesis" {
     const second_hyp = std.mem.lastIndexOf(u8, mm0_text, "$ second $") orelse {
         return error.MissingSecondHypothesis;
     };
-    try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
-    try std.testing.expectEqual(second_hyp + 1, def.range.start);
+    try std.testing.expectEqual(Index.DocumentId.mm0, def.document);
+    try std.testing.expectEqual(second_hyp + 1, def.start);
     try std.testing.expectEqualStrings(
         " second ",
-        snapshot.mm0_text[def.range.start..def.range.end],
+        snapshot.mm0_text[def.start..def.end],
     );
 }
 
@@ -703,10 +703,10 @@ test "named hypothesis refs validate and jump to the theorem binder" {
     const def = try snapshot.definitionAt(.proof, named_offset) orelse {
         return error.MissingDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
+    try std.testing.expectEqual(Index.DocumentId.mm0, def.document);
     try std.testing.expectEqualStrings(
         "h2",
-        snapshot.mm0_text[def.range.start..def.range.end],
+        snapshot.mm0_text[def.start..def.end],
     );
 
     const unknown_offset =
@@ -788,7 +788,7 @@ test "multi-name hypothesis groups pair with their own formula" {
     };
     try std.testing.expectEqualStrings(
         "h2",
-        snapshot.mm0_text[h2_def.range.start..h2_def.range.end],
+        snapshot.mm0_text[h2_def.start..h2_def.end],
     );
 
     // The hypothesis after the group keeps its own formula.
@@ -904,12 +904,12 @@ test "named hypothesis refs resolve in lemma headers" {
     const def = try snapshot.definitionAt(.proof, ref_offset) orelse {
         return error.MissingDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.auf", def.uri);
+    try std.testing.expectEqual(Index.DocumentId.proof, def.document);
     const header_binder = std.mem.indexOf(u8, proof_text, "hf") orelse {
         return error.MissingHeaderBinder;
     };
-    try std.testing.expectEqual(header_binder, def.range.start);
-    try std.testing.expectEqual(header_binder + "hf".len, def.range.end);
+    try std.testing.expectEqual(header_binder, def.start);
+    try std.testing.expectEqual(header_binder + "hf".len, def.end);
 }
 
 test "unresolved proof symbols still hover" {
@@ -995,10 +995,10 @@ test "explicit proof bindings resolve to rule binders" {
     const def = try snapshot.definitionAt(.proof, binding_offset) orelse {
         return error.MissingBindingDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
+    try std.testing.expectEqual(Index.DocumentId.mm0, def.document);
     try std.testing.expectEqualStrings(
         "x",
-        snapshot.mm0_text[def.range.start..def.range.end],
+        snapshot.mm0_text[def.start..def.end],
     );
 
     const free_offset =
@@ -1030,10 +1030,10 @@ test "math notation tokens resolve to defining terms" {
     const def = try snapshot.definitionAt(.mm0, offset) orelse {
         return error.MissingNotationDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
+    try std.testing.expectEqual(Index.DocumentId.mm0, def.document);
     try std.testing.expectEqualStrings(
         "imp",
-        snapshot.mm0_text[def.range.start..def.range.end],
+        snapshot.mm0_text[def.start..def.end],
     );
 
     const hover = try snapshot.hoverAt(.mm0, offset) orelse {
@@ -1064,7 +1064,7 @@ test "general notation tokens resolve to defining terms" {
     };
     try std.testing.expectEqualStrings(
         "top",
-        snapshot.mm0_text[def.range.start..def.range.end],
+        snapshot.mm0_text[def.start..def.end],
     );
 }
 
@@ -1091,10 +1091,10 @@ test "proof math term definitions use mm0 declaration scope" {
     const def = try snapshot.definitionAt(.proof, offset) orelse {
         return error.MissingProofTermDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
+    try std.testing.expectEqual(Index.DocumentId.mm0, def.document);
     try std.testing.expectEqualStrings(
         "top",
-        snapshot.mm0_text[def.range.start..def.range.end],
+        snapshot.mm0_text[def.start..def.end],
     );
 }
 
@@ -1122,10 +1122,10 @@ test "proof math notation definitions use mm0 declaration scope" {
     const def = try snapshot.definitionAt(.proof, offset) orelse {
         return error.MissingProofNotationDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
+    try std.testing.expectEqual(Index.DocumentId.mm0, def.document);
     try std.testing.expectEqualStrings(
         "imp",
-        snapshot.mm0_text[def.range.start..def.range.end],
+        snapshot.mm0_text[def.start..def.end],
     );
 }
 
@@ -1181,10 +1181,10 @@ test "proof math binder references resolve to theorem binders" {
     const def = try snapshot.definitionAt(.proof, offset) orelse {
         return error.MissingBinderDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
+    try std.testing.expectEqual(Index.DocumentId.mm0, def.document);
     try std.testing.expectEqualStrings(
         "p",
-        snapshot.mm0_text[def.range.start..def.range.end],
+        snapshot.mm0_text[def.start..def.end],
     );
 
     const hover = try snapshot.hoverAt(.proof, offset) orelse {
@@ -1236,14 +1236,14 @@ test "proof @vars dummies hover and jump to pool token" {
     const def = try snapshot.definitionAt(.proof, proof_token) orelse {
         return error.MissingVarsDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
+    try std.testing.expectEqual(Index.DocumentId.mm0, def.document);
     const vars_token = std.mem.indexOf(u8, mm0_text, "x y") orelse {
         return error.MissingVarsAnnotation;
     };
-    try std.testing.expectEqual(vars_token, def.range.start);
+    try std.testing.expectEqual(vars_token, def.start);
     try std.testing.expectEqualStrings(
         "x",
-        snapshot.mm0_text[def.range.start..def.range.end],
+        snapshot.mm0_text[def.start..def.end],
     );
 
     const decl_hover = try snapshot.hoverAt(.mm0, vars_token) orelse {
@@ -1558,6 +1558,6 @@ test "a line reference means the nearest earlier line with its label" {
     const in_last = std.mem.lastIndexOf(u8, proof_text, "l1]").?;
     for ([_]usize{ in_second, in_last }, [_]usize{ first, second }) |use, line| {
         const def = (try snapshot.definitionAt(.proof, use)).?;
-        try std.testing.expectEqual(line, def.range.start);
+        try std.testing.expectEqual(line, def.start);
     }
 }

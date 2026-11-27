@@ -53,7 +53,7 @@
 //! parser passes over them. It needs the body's length before any key can
 //! be had, hence the index by header alone (`by_header`).
 //!
-//! The memo is opt-in through `CompilerContext.check_memo`; the compile
+//! The memo is opt-in through `CompilerContext.editor`; the compile
 //! path never sets it, so MMB output is untouched.
 
 const std = @import("std");
@@ -208,16 +208,57 @@ pub const CheckMemo = struct {
         self.added = null;
     }
 
+    /// How what a run may collect bears on the memo. An entry records the
+    /// diagnostics and the hole inferences of one block's check and no
+    /// more, so a run that collects anything else from the checks cannot be
+    /// served by replays.
+    const Collected = enum {
+        /// Recorded with each check and replayed.
+        recorded,
+        /// Not recorded: a run that collects it checks every block.
+        unrecorded,
+        /// Collected outside the block checks, which a replay leaves be.
+        apart,
+    };
+
+    /// Every collector of `CompilerContext`, classed. A sink added there
+    /// has to be classed here before the memo compiles.
+    const collectors = .{
+        .hole_inference_sink = Collected.recorded,
+        .inline_conclusion_sink = Collected.unrecorded,
+        .binding_oracle = Collected.unrecorded,
+        .unknown_value_sink = Collected.unrecorded,
+        .inference_stats_sink = Collected.unrecorded,
+        .work_budget = Collected.unrecorded,
+        .statement_sink = Collected.apart,
+    };
+
+    comptime {
+        for (std.meta.fieldNames(CompilerContext)) |name| {
+            if (!std.mem.endsWith(u8, name, "_sink")) continue;
+            if (!@hasField(@TypeOf(collectors), name)) {
+                @compileError("check_memo.zig: class `" ++ name ++ "` in `collectors`");
+            }
+        }
+    }
+
+    /// Whether `ctx` collects only what an entry records.
+    fn replayable(ctx: *const CompilerContext) bool {
+        inline for (comptime std.meta.fieldNames(@TypeOf(collectors))) |name| {
+            if (@field(collectors, name) == .unrecorded and
+                @field(ctx, name) != null) return false;
+        }
+        // Filled lines are hole inferences an entry leaves out.
+        const holes = ctx.hole_inference_sink orelse return false;
+        return !holes.fills;
+    }
+
     /// Start a run over `ctx`'s sources. The memo stays inactive, and every
     /// block is checked, unless the run collects exactly what an entry
-    /// records: hole inferences, and neither filled lines, named unknowns'
-    /// values nor solver stats (whose running maximum cannot be replayed).
+    /// records (`replayable`).
     pub fn beginRun(self: *CheckMemo, ctx: *const CompilerContext) void {
         self.run +%= 1;
-        const holes_only = if (ctx.hole_inference_sink) |sink| !sink.fills else false;
-        self.active = holes_only and
-            ctx.unknown_value_sink == null and
-            ctx.inference_stats_sink == null;
+        self.active = replayable(ctx);
         self.fingerprint = 0;
         self.mm0_cursor = 0;
         self.proof_cursor = 0;
@@ -305,8 +346,7 @@ pub const CheckMemo = struct {
         if (block_end > self.proof_cursor) self.proof_cursor = block_end;
         return .{
             .fingerprint = self.fingerprint,
-            .body = block.known_body orelse
-                KnownBodies.bodyHash(proof[block.header_span.end..block.body_end]),
+            .body = block.body(proof).hash,
         };
     }
 
@@ -450,7 +490,7 @@ pub const CheckMemo = struct {
             .outcome = outcome,
             .block = block,
             .header = headerHash(proof[header.start..header.end]),
-            .body_len = proof_block.body_end - header.end,
+            .body_len = proof_block.bodyText(proof).len,
             .body = key.body,
             .primary = added.primary.items,
             .warnings = added.warnings.items,

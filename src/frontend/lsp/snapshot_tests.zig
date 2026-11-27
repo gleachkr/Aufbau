@@ -14,7 +14,6 @@ test "snapshot build propagates allocation failure" {
     try std.testing.expectError(error.OutOfMemory, Snapshot.build(
         fixed.allocator(),
         .{
-            .mm0_uri = "file:///test.mm0",
             .mm0_text = "provable sort wff;",
         },
     ));
@@ -43,16 +42,15 @@ test "malformed sources still index parsed prefixes" {
     const def = try snapshot.definitionAt(.proof, rule_offset) orelse {
         return error.MissingPrefixDefinition;
     };
-    try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
+    try std.testing.expectEqual(Index.DocumentId.mm0, def.document);
     try std.testing.expectEqualStrings(
         "top_i",
-        snapshot.mm0_text[def.range.start..def.range.end],
+        snapshot.mm0_text[def.start..def.end],
     );
 }
 
 test "snapshot indexes global mm0 declarations" {
     var snapshot = try Snapshot.build(std.testing.allocator, .{
-        .mm0_uri = "file:///test.mm0",
         .mm0_text =
         \\provable sort wff;
         \\term imp (a b: wff): wff;
@@ -169,12 +167,12 @@ test "a proof body sees only the names declared before it" {
         try std.testing.expect(try snapshot.hoverAt(.proof, before) == null);
         const after = std.mem.indexOfPos(u8, proof_text, second, use).?;
         const def = (try snapshot.definitionAt(.proof, after)).?;
-        try std.testing.expectEqual(local_def, def.range.start);
+        try std.testing.expectEqual(local_def, def.start);
     }
     for ([_]usize{ first, second }, [_]usize{ lemma_one, lemma_two }) |from, lemma| {
         const use = std.mem.indexOfPos(u8, proof_text, from, "tl []").?;
         const def = (try snapshot.definitionAt(.proof, use)).?;
-        try std.testing.expectEqual(lemma, def.range.start);
+        try std.testing.expectEqual(lemma, def.start);
     }
     const unknown = std.mem.indexOfPos(u8, proof_text, first, "later []").?;
     const hover = (try snapshot.hoverAt(.proof, unknown)).?;
@@ -207,7 +205,7 @@ test "a snapshot with known bodies answers as one that parsed them" {
     defer holes.deinit();
     var compiler = CompilerModule.Compiler.initWithProof(allocator, mm0_text, proof_text);
     compiler.hole_inference_sink = &holes;
-    compiler.check_memo = &memo;
+    compiler.editor.memo = &memo;
     try compiler.analyze();
 
     const broken_text = proof_text ++ "l2: $ top $ by\n";
@@ -218,14 +216,12 @@ test "a snapshot with known bodies answers as one that parsed them" {
         [_]bool{ true, true, false },
     ) |text, whole| {
         var input: Index.SnapshotInput = .{
-            .mm0_uri = "file:///test.mm0",
             .mm0_text = mm0_text,
-            .proof_uri = "file:///test.auf",
             .proof_text = text,
         };
         var parsed = try Snapshot.build(allocator, input);
         defer parsed.deinit();
-        input.check_memo = &memo;
+        input.known_bodies = memo.knownBodies();
         var known = try Snapshot.build(allocator, input);
         defer known.deinit();
 
@@ -327,9 +323,7 @@ test "a snapshot tells a parser of its own proof text where the bodies end" {
         \\
     ;
     var snapshot = try Snapshot.build(allocator, .{
-        .mm0_uri = "file:///test.mm0",
         .mm0_text = mm0_text,
-        .proof_uri = "file:///test.auf",
         .proof_text = proof_text,
     });
     defer snapshot.deinit();

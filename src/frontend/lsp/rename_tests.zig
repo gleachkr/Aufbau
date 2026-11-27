@@ -22,9 +22,7 @@ const Texts = struct {
 
 fn build(arena: std.mem.Allocator, texts: Texts) !Snapshot {
     return Snapshot.build(arena, .{
-        .mm0_uri = "file:///test.mm0",
         .mm0_text = texts.mm0,
-        .proof_uri = "file:///test.auf",
         .proof_text = texts.proof,
     });
 }

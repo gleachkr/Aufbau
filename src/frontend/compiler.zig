@@ -19,6 +19,7 @@ pub const StatementSink = @import("./statement_sink.zig").StatementSink;
 pub const UnknownValueSink = Context.UnknownValueSink;
 pub const CheckMemo = @import("./compiler/check_memo.zig").CheckMemo;
 pub const AnalysisInterrupt = Context.AnalysisInterrupt;
+pub const EditorHooks = Context.EditorHooks;
 pub const AnalysisProgress = Context.AnalysisProgress;
 pub const CheckScope = Context.CheckScope;
 
@@ -41,15 +42,8 @@ pub const Compiler = struct {
     /// Search work ceiling for every inference solver this compiler
     /// constructs (`CompilerContext.work_budget`); null on the compile path.
     work_budget: ?ExprModule.WorkBudget = null,
-    /// Memo of proof-block check outcomes across analyses (editor hosts).
-    check_memo: ?*CheckMemo = null,
-    /// Lets an editor host stop an analysis whose result it no longer
-    /// wants (`AnalysisInterrupt`).
-    interrupt: ?AnalysisInterrupt = null,
-    /// Limits the proofs an analysis checks (`CheckScope`).
-    check_scope: ?*CheckScope = null,
-    /// Told of each proof an analysis checks (`AnalysisProgress`).
-    progress: ?AnalysisProgress = null,
+    /// What an editor host adds to an analysis (`EditorHooks`).
+    editor: EditorHooks = .{},
 
     const PipelineOutput = Pipeline.Output;
 
@@ -271,10 +265,7 @@ pub const Compiler = struct {
         result.unknown_value_sink = self.unknown_value_sink;
         result.inference_stats_sink = self.inference_stats_sink;
         result.work_budget = self.work_budget;
-        result.check_memo = self.check_memo;
-        result.interrupt = self.interrupt;
-        result.check_scope = self.check_scope;
-        result.progress = self.progress;
+        result.editor = self.editor;
         return result;
     }
 };

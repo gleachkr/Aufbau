@@ -1,4 +1,4 @@
-const CheckMemo = @import("../compiler/check_memo.zig").CheckMemo;
+const KnownBodies = @import("../proof_script.zig").KnownBodies;
 
 pub const DocumentId = enum {
     mm0,
@@ -7,13 +7,11 @@ pub const DocumentId = enum {
 
 /// The texts must outlive the snapshot, which indexes proof bodies on demand.
 pub const SnapshotInput = struct {
-    mm0_uri: []const u8,
     mm0_text: []const u8,
-    proof_uri: ?[]const u8 = null,
     proof_text: ?[]const u8 = null,
-    /// What earlier analyses of the unit found (`compiler/check_memo.zig`).
-    /// The proof parse passes over the bodies it knows.
-    check_memo: ?*CheckMemo = null,
+    /// The proof bodies earlier analyses of the unit checked
+    /// (`CheckMemo.knownBodies`): the proof parse passes over them.
+    known_bodies: ?KnownBodies = null,
 };
 
 pub const SourceRange = struct {
@@ -41,12 +39,6 @@ pub const SourceRange = struct {
         if (a.document != b.document) return a.document == .mm0;
         return if (a.start != b.start) a.start < b.start else a.end < b.end;
     }
-};
-
-pub const DefinitionResult = struct {
-    uri: []const u8,
-    range: SourceRange,
-    selection_range: SourceRange,
 };
 
 pub const HoverResult = struct {

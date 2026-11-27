@@ -138,7 +138,7 @@ fn runPeak(kind: Kind, run: Run, count: usize) !usize {
                 .allocator = allocator,
             };
             defer holes.deinit();
-            compiler.check_memo = &memo;
+            compiler.editor.memo = &memo;
             compiler.hole_inference_sink = &holes;
             try compiler.analyze();
             // Every block went through the memo, so its path is the one

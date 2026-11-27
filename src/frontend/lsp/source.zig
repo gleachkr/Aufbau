@@ -409,6 +409,4 @@ pub fn isIdentStart(ch: u8) bool {
     return std.ascii.isAlphabetic(ch) or ch == '_';
 }
 
-pub fn isIdentChar(ch: u8) bool {
-    return std.ascii.isAlphanumeric(ch) or ch == '_';
-}
+pub const isIdentChar = @import("../idents.zig").isIdentChar;

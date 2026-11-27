@@ -23,9 +23,7 @@ const HoleHovers = struct {
         try std.testing.expectEqual(0, found.assertions.items.len);
         return .{
             .snapshot = try Snapshot.build(allocator, .{
-                .mm0_uri = "file:///test.mm0",
                 .mm0_text = mm0_text,
-                .proof_uri = "file:///test.auf",
                 .proof_text = proof_text,
             }),
             .found = found,

@@ -165,7 +165,7 @@ pub fn lookupRuleApplicationId(
     const declared_later = rule_catalog.declaredLater(application.rule_name, mm0_pos);
     // The catalog spans the whole `.mm0`, beyond what the check memo's
     // fingerprint covers; the memo re-verifies this lookup on a hit.
-    if (self.check_memo) |memo| {
+    if (self.editor.memo) |memo| {
         memo.noteCatalogLookup(application.rule_name, declared_later != null);
     }
     if (declared_later) |entry| {

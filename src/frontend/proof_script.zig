@@ -225,13 +225,27 @@ pub const ProofBlock = struct {
     /// `lines` is then empty; `withLines` parses them.
     known_body: ?u64 = null,
 
+    /// The body's text in `src`, the text the block was parsed from.
+    pub fn bodyText(self: ProofBlock, src: []const u8) []const u8 {
+        return src[self.header_span.end..self.body_end];
+    }
+
+    /// The body as a parser may be told of it (`KnownBodies`): its length
+    /// and the hash of its text in `src`.
+    pub fn body(self: ProofBlock, src: []const u8) KnownBodies.Body {
+        const text = self.bodyText(src);
+        return .{
+            .len = text.len,
+            .hash = self.known_body orelse KnownBodies.bodyHash(text),
+        };
+    }
+
     /// The block without its lines, for `withLines` to parse again. `src` is
     /// the text the block was parsed from.
     pub fn withoutLines(self: ProofBlock, src: []const u8) ProofBlock {
         var bare = self;
         bare.lines = &.{};
-        bare.known_body = self.known_body orelse
-            KnownBodies.bodyHash(src[self.header_span.end..self.body_end]);
+        bare.known_body = self.body(src).hash;
         return bare;
     }
 
@@ -1792,9 +1806,7 @@ fn isIdentStart(ch: u8) bool {
     return std.ascii.isAlphabetic(ch) or ch == '_';
 }
 
-fn isIdentChar(ch: u8) bool {
-    return std.ascii.isAlphanumeric(ch) or ch == '_';
-}
+const isIdentChar = @import("./idents.zig").isIdentChar;
 
 /// The proof-search placeholders, without their trailing `?`. This list is
 /// the one place they are enumerated: the lexer below, and the LSP's

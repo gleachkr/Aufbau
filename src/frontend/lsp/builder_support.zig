@@ -67,12 +67,8 @@ pub fn proofSpanRange(span: proof_script.Span) SourceRange {
     };
 }
 
-pub fn proofMathTextSpan(span: proof_script.Span) parse.MathSpan {
-    return .{
-        .start = @min(span.start + 1, span.end),
-        .end = if (span.end > span.start) span.end - 1 else span.end,
-    };
-}
+pub const proofMathTextSpan =
+    @import("../compiler/pipeline/common.zig").proofMathTextSpan;
 
 pub fn targetRangeIfAvailable(decl: Declaration, use_start: usize) ?SourceRange {
     if (decl.name_range.start <= use_start) return decl.name_range;
