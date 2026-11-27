@@ -186,6 +186,9 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- A line that states a member beside a context hole (`_ctx , p ⊢ …`) checks
+  when the rule lists that member in another position, or repeats it. The
+  same holds for a named unknown the proof has given such a shape.
 - A line with a hole beside a visible part, such as `F a ∧ _wff` checked
   by a `@view`/`@recover` ∀-elimination, failed: the view's conclusion
   did not match it, and `@recover` could not read its target through the

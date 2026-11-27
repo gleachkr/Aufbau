@@ -1,0 +1,13 @@
+member_order
+------------
+
+l1: $ p ⊢ p $ by ax
+l2: $ _ctx , p ⊢ p ∧ q $ by and_intro [l1, #1]
+l3: $ p , q ⊢ p ∧ q $ by and_intro [l1, #1]
+
+member_repeated
+---------------
+
+l1: $ p ⊢ p $ by ax
+l2: $ _ctx , p ⊢ p ∧ q $ by and_intro [l1, #1]
+l3: $ p , q ⊢ p ∧ q $ by and_intro [l1, #1]

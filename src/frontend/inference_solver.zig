@@ -629,7 +629,15 @@ pub const Solver = struct {
                 const matches = try self.matchHoleyExpr(tmpl_arg, actual_arg, space, current);
                 try next.appendSlice(self.allocator, matches);
             }
-            if (next.items.len == 0) return &.{};
+            if (next.items.len == 0) {
+                // Under an ACUI combiner the stated members line up with
+                // the template's only modulo order, so a positional miss
+                // says nothing: the line's fill checks the members.
+                if (!self.registry.hasStructuralCombiner(app.term_id)) return &.{};
+                const out = try self.allocator.alloc(BranchState, 1);
+                out[0] = try BranchStateOps.cloneState(self, state);
+                return out;
+            }
             states = next;
         }
         return try states.toOwnedSlice(self.allocator);

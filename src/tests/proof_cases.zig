@@ -558,6 +558,9 @@ const proof_cases = [_]ProofCase{
     // The line's hole is hidden from its own check, and the pre-pass
     // solves it from the cited premises.
     .{ .stem = "pass_hole_abstract_hidden_target", .outcome = .pass },
+    // A member stated beside a context hole lines up with the rule's
+    // members only modulo order.
+    .{ .stem = "pass_hole_acui_member_order", .outcome = .pass },
     .{
         .stem = "fail_hole_fallback_first_diag",
         .outcome = .{ .fail = error.HoleConclusionMismatch },
