@@ -103,3 +103,6 @@ theorem unknown_view_consumer (u: set) {x: set}:
 -- A context name fixed through a @view rule's literal context.
 theorem unknown_view_context (a: wff) (u: set) {x: set}:
   $ nd (hyp a) (A. x (P x /\ Q x)) $ > $ nd (hyp a) (P u /\ Q u) $;
+-- The same with an anonymous context hole: it takes the forced shape too.
+theorem hole_view_context (a: wff) (u: set) {x: set}:
+  $ nd (hyp a) (A. x (P x /\ Q x)) $ > $ nd (hyp a) (P u /\ Q u) $;

@@ -561,6 +561,9 @@ const proof_cases = [_]ProofCase{
     // A member stated beside a context hole lines up with the rule's
     // members only modulo order.
     .{ .stem = "pass_hole_acui_member_order", .outcome = .pass },
+    // A forced shape shows nothing of a part under a `@rewrite` head that
+    // still has open parts, for an anonymous hole and for a name.
+    .{ .stem = "pass_hole_shape_open_rewrite", .outcome = .pass },
     .{
         .stem = "fail_hole_fallback_first_diag",
         .outcome = .{ .fail = error.HoleConclusionMismatch },

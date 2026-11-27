@@ -11,3 +11,9 @@ unknown_view_context
 
 l1: $ nd ?G1 (P u /\ Q u) $ by all_elim_w [#1]
 l2: $ nd (hyp a) (P u /\ Q u) $ by reit [l1]
+
+hole_view_context
+-----------------
+
+l1: $ nd _ctx (P u /\ Q u) $ by all_elim_w [#1]
+l2: $ nd (hyp a) (P u /\ Q u) $ by reit [l1]

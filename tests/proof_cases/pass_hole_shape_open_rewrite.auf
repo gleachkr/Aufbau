@@ -1,0 +1,11 @@
+redex_shape
+-----------
+
+l1: $ _ctx ⊢ top $ by same [#2]
+l2: $ both c , (b ∧ top) ⊢ top $ by repl (x := $ x $) [#1, l1]
+
+redex_shape_named
+-----------------
+
+l1: $ ?G1 ⊢ top $ by same [#2]
+l2: $ both c , (b ∧ top) ⊢ top $ by repl (x := $ x $) [#1, l1]

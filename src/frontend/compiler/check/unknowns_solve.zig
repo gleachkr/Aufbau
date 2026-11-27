@@ -79,7 +79,9 @@ pub fn solve(inputs: Inputs, out: *Unknowns.Unknowns) !void {
     var places = solver.places.iterator();
     while (places.next()) |entry| {
         const value = try solver.resolveFully(entry.value_ptr.*);
-        if (!solver.mentionsVariable(value)) try out.placed.put(inputs.allocator, entry.key_ptr.*, value);
+        if (solver.isVariable(value)) continue;
+        const shown = if (solver.mentionsVariable(value)) try solver.visibleShape(value) else value;
+        if (!solver.isVariable(shown)) try out.placed.put(inputs.allocator, entry.key_ptr.*, shown);
     }
     var it = solver.names.iterator();
     while (it.next()) |entry| {
@@ -101,7 +103,8 @@ pub fn solve(inputs: Inputs, out: *Unknowns.Unknowns) !void {
                 else => {},
             }
         } else if (solver.mentionsVariable(value)) {
-            try out.partial.put(inputs.allocator, name, value);
+            const shown = try solver.visibleShape(value);
+            if (!solver.isVariable(shown)) try out.partial.put(inputs.allocator, name, shown);
         } else {
             try out.bound.put(inputs.allocator, name, value);
         }
@@ -1592,6 +1595,40 @@ const Solver = struct {
     fn mentionsVariable(self: *Solver, expr: ExprId) bool {
         self.seen.begin();
         return self.mentionsFromIn(expr, 0);
+    }
+
+    /// What a resolved `value` that mentions a variable shows of itself.
+    /// A part under a `@rewrite` head that mentions one shows nothing: what
+    /// it rewrites to waits on the variable, so it is a variable of its own.
+    fn visibleShape(self: *Solver, value: ExprId) !ExprId {
+        var shown: std.AutoHashMapUnmanaged(ExprId, ExprId) = .empty;
+        defer shown.deinit(self.inputs.allocator);
+        return self.visibleShapeIn(value, &shown);
+    }
+
+    fn visibleShapeIn(
+        self: *Solver,
+        value: ExprId,
+        shown: *std.AutoHashMapUnmanaged(ExprId, ExprId),
+    ) !ExprId {
+        const theorem = self.inputs.theorem;
+        const app = switch (theorem.interner.node(value).*) {
+            .app => |app| app,
+            else => return value,
+        };
+        if (shown.get(value)) |known| return known;
+        const result = if (!self.mentionsVariable(value))
+            value
+        else if (self.rewriteOnly(app.term_id))
+            try self.mint(try SurfaceExpr.exprIdSortName(theorem, &self.inputs.theory.env, value))
+        else blk: {
+            const args = try theorem.allocator.alloc(ExprId, app.args.len);
+            defer theorem.allocator.free(args);
+            for (app.args, args) |arg, *out| out.* = try self.visibleShapeIn(arg, shown);
+            break :blk try theorem.interner.internApp(app.term_id, args);
+        };
+        try shown.put(self.inputs.allocator, value, result);
+        return result;
     }
 };
 

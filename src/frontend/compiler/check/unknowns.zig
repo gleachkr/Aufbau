@@ -30,8 +30,9 @@ pub const Unknowns = struct {
     /// open parts as placeholders. `substitute` writes it into a line with
     /// those parts as holes.
     partial: std.StringHashMapUnmanaged(ExprId) = .empty,
-    /// The value the pre-pass solved for an anonymous hole, by where the
-    /// hole is written (`placeOf`).
+    /// What the pre-pass found for an anonymous hole, by where the hole is
+    /// written (`placeOf`): its value, or the shape forced on it, with its
+    /// open parts as placeholders.
     placed: std.AutoHashMapUnmanaged(usize, ExprId) = .empty,
     /// The statements the pre-pass read, by the address of their text:
     /// the walk takes them from here instead of reading them again.
@@ -220,7 +221,10 @@ pub const Unknowns = struct {
         switch (surface.*) {
             .variable => return try theorem.internParsedExpr(surface),
             .hole => |hole| {
-                const name = hole.name orelse return self.placed.get(placeOf(hole) orelse return null);
+                const name = hole.name orelse {
+                    const value = self.placed.get(placeOf(hole) orelse return null) orelse return null;
+                    return if (theorem.containsPlaceholder(value)) null else value;
+                };
                 const value = self.bound.get(name) orelse return null;
                 return if (theorem.containsPlaceholder(value)) null else value;
             },
@@ -263,7 +267,7 @@ pub const Unknowns = struct {
             .hole => |hole| {
                 const name = hole.name orelse {
                     const value = self.placed.get(placeOf(hole) orelse return expr) orelse return expr;
-                    return (try self.surfaceOf(allocator, theorem, parser, value, false)) orelse expr;
+                    return (try self.surfaceOf(allocator, theorem, parser, value, true)) orelse expr;
                 };
                 if (self.bound.get(name)) |value| {
                     return (try self.surfaceOf(allocator, theorem, parser, value, false)) orelse expr;

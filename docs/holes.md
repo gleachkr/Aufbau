@@ -103,8 +103,11 @@ before its line is checked, so with `theorem t: $ P $` the proof
 l1: $ _wff $ by exact?
 ```
 
-searches for `P`. A hole the pre-pass does not force in full is left to
-its own line's check, which fills it as described under **Elaboration**:
+searches for `P`. A hole the pre-pass forces only in part is written as
+its forced shape, the open parts holes again, as a named unknown is (see
+**How names are solved**): a context hole whose line a later
+`G , p ⊢ …` premise cites is checked as `_ctx , p`. Whatever is left open
+is filled by the line's own check, as described under **Elaboration**:
 only that check may fill a hole by preference (the smallest context, the
 unit) where the lines force nothing, since no other line shares the hole.
 
@@ -227,7 +230,10 @@ shape, with the parts still open as holes: a part that stands for another
 name as that name, any other part as an anonymous hole. With a later
 conjunction elimination `l2: $ P u $ by and_l [l1]`, the line
 `l1: $ ?f $ by all_elim [#1]` is checked as `$ P u ∧ _ $`, so
-`all_elim`'s `@recover` can read `u` off the visible conjunct. The line still binds the name itself, to
+`all_elim`'s `@recover` can read `u` off the visible conjunct. A part of
+a shape under a `@rewrite` head that still has open parts shows nothing,
+and is written as one hole: `[a / x] ?r` may rewrite to anything once `?r`
+is known. The line still binds the name itself, to
 all of what it checked as. An unsolved name is a hole whose first fill
 binds it: every later
 occurrence takes that value, and a later line that fills it differently is

@@ -79,8 +79,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   or the theorem's conclusion (for the last line) may fix the hole before
   its line is checked. A last line `l1: $ _wff $ by exact?` now searches
   for the theorem's conclusion, and a line that used to fail because its
-  own check left a hole open may now check. What the lines do not force
-  is still filled by the line's own check, as before.
+  own check left a hole open may now check. A hole the lines force only
+  in part is checked with that shape written in, as a named unknown is.
+  What the lines do not force is still filled by the line's own check, as
+  before.
 - Comparing expressions through definitions is deterministic: the later
   definition is unfolded and the two sides are matched, with no search
   over unfoldings. Lean0's block-heavy `model-fold` part, which took 507 s
@@ -186,6 +188,9 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- A named unknown whose forced shape held a substitution with open parts
+  (`[a / x] ?r`) made its line fail: the substitution was written into the
+  line as visible structure. Such a part is now written as a hole.
 - A line that states a member beside a context hole (`_ctx , p ⊢ …`) checks
   when the rule lists that member in another position, or repeats it. The
   same holds for a named unknown the proof has given such a shape.
