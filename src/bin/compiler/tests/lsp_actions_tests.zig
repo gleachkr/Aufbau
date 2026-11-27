@@ -259,10 +259,7 @@ test "LSP survives proofs nested to the parser's limit and past it" {
         .textDocument = .{ .uri = proof_uri },
         .position = position,
     });
-    _ = try session.handler.@"textDocument/codeAction"(
-        arena,
-        try codeActionParamsAt(proof_uri, deepest, "top_i"),
-    );
+    _ = try session.codeActionsAt(proof_uri, deepest, "top_i");
     _ = try session.handler.@"textDocument/documentSymbol"(arena, .{
         .textDocument = .{ .uri = proof_uri },
     });
@@ -270,10 +267,7 @@ test "LSP survives proofs nested to the parser's limit and past it" {
     // One level more is a parse error.
     const too_deep = try nestedKeepProof(arena, mm0.ProofScript.max_inline_depth + 1);
     session.transport.clearMessages();
-    try session.handler.@"textDocument/didChange"(arena, .{
-        .textDocument = .{ .uri = proof_uri, .version = 2 },
-        .contentChanges = &.{.{ .text_document_content_change_whole_document = .{ .text = too_deep } }},
-    });
+    try session.change(proof_uri, 2, too_deep);
     try std.testing.expect(session.transport.containsMessage("more than 1024 levels"));
 }
 
@@ -358,10 +352,7 @@ test "LSP code action search cache is freed when the document closes" {
     _ = try session.codeActions(proof_uri, lsp_search_exact_proof_text, "exact?");
     try std.testing.expect(session.searchResults(proof_uri) != null);
 
-    try session.handler.@"textDocument/didClose"(
-        session.arena(),
-        .{ .textDocument = .{ .uri = proof_uri } },
-    );
+    try session.close(proof_uri);
     try std.testing.expect(session.searchResults(proof_uri) == null);
 }
 
@@ -444,8 +435,6 @@ test "LSP placeholder status diagnostics upgrade after code action search" {
     session.init();
     defer session.deinit();
 
-    const arena = session.arena();
-
     try session.open(mm0_uri, lsp_search_mm0_text);
     session.transport.clearMessages();
     try session.open(proof_uri, lsp_search_exact_proof_text);
@@ -459,14 +448,7 @@ test "LSP placeholder status diagnostics upgrade after code action search" {
     // Running the search via code actions records the outcome and re-publishes
     // the placeholder diagnostic as info (severity 3) with the found proof.
     session.transport.clearMessages();
-    _ = try session.handler.@"textDocument/codeAction"(
-        arena,
-        try codeActionParamsAt(
-            proof_uri,
-            lsp_search_exact_proof_text,
-            "exact?",
-        ),
-    );
+    _ = try session.codeActionsAt(proof_uri, lsp_search_exact_proof_text, "exact?");
     try std.testing.expectEqual(@as(usize, 1), session.searchOutcomes(proof_uri));
     try std.testing.expectEqual(
         mm0.CompilerSupport.Search.SearchStatus.found,
@@ -483,25 +465,13 @@ test "LSP placeholder status diagnostics upgrade after code action search" {
     // A cache-hit code action publishes nothing new (the outcome is already
     // recorded and published).
     session.transport.clearMessages();
-    _ = try session.handler.@"textDocument/codeAction"(
-        arena,
-        try codeActionParamsAt(
-            proof_uri,
-            lsp_search_exact_proof_text,
-            "exact?",
-        ),
-    );
+    _ = try session.codeActionsAt(proof_uri, lsp_search_exact_proof_text, "exact?");
     try std.testing.expectEqual(@as(usize, 0), session.transport.message_count);
 
     // An edit drops the recorded outcome: the placeholder returns to the
     // "not yet searched" warning.
     session.transport.clearMessages();
-    try session.handler.@"textDocument/didChange"(arena, .{
-        .textDocument = .{ .uri = proof_uri, .version = 2 },
-        .contentChanges = &.{
-            .{ .text_document_content_change_whole_document = .{ .text = lsp_search_exact_proof_text } },
-        },
-    });
+    try session.change(proof_uri, 2, lsp_search_exact_proof_text);
     try std.testing.expectEqual(@as(usize, 0), session.searchOutcomes(proof_uri));
     try std.testing.expect(
         session.transport.containsMessage("search not yet run"),
@@ -533,16 +503,11 @@ test "LSP placeholder status diagnostics report a search miss as error" {
     session.init();
     defer session.deinit();
 
-    const arena = session.arena();
-
     try session.open(mm0_uri, miss_mm0_text);
     try session.open(proof_uri, miss_proof_text);
 
     session.transport.clearMessages();
-    _ = try session.handler.@"textDocument/codeAction"(
-        arena,
-        try codeActionParamsAt(proof_uri, miss_proof_text, "exact?"),
-    );
+    _ = try session.codeActionsAt(proof_uri, miss_proof_text, "exact?");
     try std.testing.expect(session.transport.containsMessage(
         "exact? search failed: no rule application closes this goal",
     ));
@@ -684,10 +649,7 @@ test "LSP placeholder diagnostics stay on bodies the check memo knows" {
     try std.testing.expect(session.checks().kept == 3);
 
     session.transport.clearMessages();
-    try session.handler.@"textDocument/didChange"(arena, .{
-        .textDocument = .{ .uri = proof_uri, .version = 2 },
-        .contentChanges = &.{.{ .text_document_content_change_whole_document = .{ .text = after } }},
-    });
+    try session.change(proof_uri, 2, after);
     const ranges = try session.transport.publishedRanges(arena, proof_uri);
     try std.testing.expectEqual(@as(usize, 2), ranges.len);
     try expectRangeText(after, ranges[0], "auto?");

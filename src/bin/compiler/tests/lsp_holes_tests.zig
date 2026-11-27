@@ -219,20 +219,12 @@ fn expectFillHolesAction(setup: FillSetup) !void {
     switch (setup) {
         .closed => try session.handler.putDocument(proof_uri, proof_text, 1),
         .open, .edited => {
-            try session.handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
-                .uri = proof_uri,
-                .languageId = .{ .custom_value = "aufbau" },
-                .version = 1,
-                .text = if (setup == .open)
-                    proof_text
-                else
-                    try std.mem.replaceOwned(u8, arena, proof_text, "_wff $", "p $"),
-            } });
+            try session.open(proof_uri, if (setup == .open)
+                proof_text
+            else
+                try std.mem.replaceOwned(u8, arena, proof_text, "_wff $", "p $"));
             if (setup == .edited) {
-                try session.handler.@"textDocument/didChange"(arena, .{
-                    .textDocument = .{ .uri = proof_uri, .version = 2 },
-                    .contentChanges = &.{.{ .text_document_content_change_whole_document = .{ .text = proof_text } }},
-                });
+                try session.change(proof_uri, 2, proof_text);
             }
             try std.testing.expect(session.transport.publishedNone(proof_uri));
         },

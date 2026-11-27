@@ -609,6 +609,27 @@ test "compiler dependency diagnostics explain one-sided violations" {
 // Multi-file units: imports and includes resolved through the document
 // store (what the browser host relies on) and through disk.
 
+test "LSP serial host analyses a change before the next message" {
+    const mm0_uri = "file:///tmp/lsp-serial-host.mm0";
+    const proof_uri = "file:///tmp/lsp-serial-host.auf";
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ top $ by nope []
+    ;
+
+    var session: Session = undefined;
+    session.initSerial();
+    defer session.deinit();
+    // The session runs no analysis itself.
+    session.analyzeLater();
+
+    try session.open(mm0_uri, lsp_search_mm0_text);
+    try session.open(proof_uri, proof_text);
+    try std.testing.expect(!session.handler.hasPendingAnalysis());
+    try std.testing.expect(session.transport.published(proof_uri, "nope"));
+}
+
 test "LSP diagnostic on a stray non-ASCII character covers the whole character" {
     const mm0_uri = "file:///tmp/lsp-stray-unicode.mm0";
     const proof_uri = "file:///tmp/lsp-stray-unicode.auf";

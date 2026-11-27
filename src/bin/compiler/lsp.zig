@@ -720,10 +720,35 @@ fn searchOffersRule(
     return false;
 }
 
+/// What reads the handler's messages, which settles when its analyses run.
+pub const Host = union(enum) {
+    /// Each message is handled to its end before the next is read (the
+    /// browser worker, `lsp_wasm.zig`). A change is analysed at once and
+    /// whole: nothing can come between two passes, no request waits to be
+    /// answered meanwhile, and what the handler writes is not seen until
+    /// the message is handled, so a check shows no progress.
+    serial,
+    /// Input is read ahead into a queue (the native server,
+    /// `lsp_input.zig`). A change leaves its root pending, and the host
+    /// calls `Handler.analyzePending` when nothing is queued. An analysis
+    /// checks the proofs of the open files first and publishes on them,
+    /// shows its progress, and stops when the queue says so; a request
+    /// asks the same to learn that the client cancelled it.
+    queued: mm0.AnalysisInterrupt,
+
+    fn interrupt(self: Host) ?mm0.AnalysisInterrupt {
+        return switch (self) {
+            .serial => null,
+            .queued => |stop| stop,
+        };
+    }
+};
+
 pub const Handler = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     transport: *lsp.Transport,
+    host: Host,
     docs: std.StringHashMapUnmanaged(OpenDocument),
     /// The file texts units are built from, one copy of each across them.
     texts: FileTexts,
@@ -743,11 +768,6 @@ pub const Handler = struct {
     /// The documents whose diagnostics are out of date, by the URI whose
     /// analysis covers them, in the order they last changed (owned).
     pending: std.StringArrayHashMapUnmanaged(PendingAnalysis),
-    /// Set by the native server (`lsp_input.zig`): a changed document is
-    /// analysed once no input is waiting, and the analysis stops when this
-    /// says so. Null analyses each change as it arrives (the browser host,
-    /// tests).
-    interrupt: ?mm0.AnalysisInterrupt,
     offset_encoding: lsp.offsets.Encoding,
     snippet_support: bool,
     /// Whether the client opens a document at a selection on request
@@ -767,11 +787,13 @@ pub const Handler = struct {
         allocator: std.mem.Allocator,
         io: std.Io,
         transport: *lsp.Transport,
+        host: Host,
     ) Handler {
         return .{
             .allocator = allocator,
             .io = io,
             .transport = transport,
+            .host = host,
             .docs = .empty,
             .texts = FileTexts.init(allocator),
             .nav_cache = .empty,
@@ -781,7 +803,6 @@ pub const Handler = struct {
             .analysis_holes = .empty,
             .check_memo = mm0.CheckMemo.init(allocator),
             .pending = .empty,
-            .interrupt = null,
             .offset_encoding = .@"utf-16",
             .snippet_support = false,
             .show_document_support = false,
@@ -1924,9 +1945,9 @@ pub const Handler = struct {
         }
     }
 
-    /// Mark `uri`'s diagnostics out of date. Without an interrupt they are
-    /// brought up to date at once; with one, when no input is waiting
-    /// (`lsp_input.zig`).
+    /// Mark `uri`'s diagnostics out of date. A serial host has them brought
+    /// up to date at once; a queued one asks for that when no input is
+    /// waiting.
     fn analyzeSoon(
         self: *Handler,
         arena: std.mem.Allocator,
@@ -1940,7 +1961,7 @@ pub const Handler = struct {
         try self.pending.put(self.allocator, owned, .{});
         // A proof file's analysis covers its `.mm0`.
         if (try self.siblingMm0Uri(arena, key)) |mm0_uri| try self.dropPending(mm0_uri);
-        if (self.interrupt == null) try self.analyzePending();
+        if (self.host == .serial) try self.analyzePending();
     }
 
     /// The URI whose analysis covers `uri`: a `.mm0` whose proof file is
@@ -2008,10 +2029,9 @@ pub const Handler = struct {
     }
 
     /// Whether checks show their progress: the client shows what the server
-    /// starts, and the native server's output reaches it as it goes (the
-    /// browser host's waits for the message to be handled).
+    /// starts, and the host lets it see the output as it is written.
     fn showsProgress(self: *const Handler) bool {
-        return self.progress_support and self.interrupt != null;
+        return self.progress_support and self.host == .queued;
     }
 
     fn now(self: *const Handler) i96 {
@@ -2064,7 +2084,7 @@ pub const Handler = struct {
 
     /// Whether the client cancelled the request being answered.
     fn requestCancelled(self: *Handler) bool {
-        const interrupt = self.interrupt orelse return false;
+        const interrupt = self.host.interrupt() orelse return false;
         return interrupt.stopRequested();
     }
 
@@ -2223,15 +2243,15 @@ pub const Handler = struct {
         defer if (holes_owned) holes.deinit();
         compiler.hole_inference_sink = &holes;
         compiler.check_memo = self.checkMemoFor(roots.mm0_uri);
-        compiler.interrupt = self.interrupt;
-        // The editor shows the open files, so their proofs are checked first
-        // and their diagnostics published, then the rest. Without an
-        // interrupt nothing could come between the two, so all is checked
-        // at once.
+        compiler.interrupt = self.host.interrupt();
+        // The editor shows the open files, so a queued host has their
+        // proofs checked first and their diagnostics published, then the
+        // rest.
+        const own_first = self.host == .queued;
         const own: []const mm0.CompilerDiagnosticSpan =
-            if (self.interrupt != null) try self.ownProofSpans(arena, unit) else &.{};
+            if (own_first) try self.ownProofSpans(arena, unit) else &.{};
         var scope: mm0.CheckScope = .{ .spans = own };
-        if (self.interrupt != null and !pending.own_checked) compiler.check_scope = &scope;
+        if (own_first and !pending.own_checked) compiler.check_scope = &scope;
         var progress: CheckProgress = .{
             .handler = self,
             .pending = pending,
@@ -3339,21 +3359,35 @@ pub const DocumentKind = enum {
 };
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator) !void {
+    try serve(io, allocator, .stdin(), .stdout(), .{}, std.log.err);
+}
+
+pub const ServeOptions = struct {
+    /// How long a check runs before its progress shows.
+    progress_delay_ns: i96 = std.time.ns_per_s,
+};
+
+/// Serve the client at the other end of `read_from` and `write_to` until
+/// it ends the session or the input does. `log` reports a message the
+/// server could not handle; null drops it.
+pub fn serve(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    read_from: std.Io.File,
+    write_to: std.Io.File,
+    options: ServeOptions,
+    comptime log: ?fn (comptime []const u8, anytype) void,
+) !void {
     var read_buffer: [4096]u8 = undefined;
-    var input = Input.init(allocator, io, &read_buffer, .stdin(), .stdout());
+    var input = Input.init(allocator, io, &read_buffer, read_from, write_to);
     defer input.deinit();
 
-    var handler = Handler.init(allocator, io, &input.transport);
+    var handler = Handler.init(allocator, io, &input.transport, input.host());
     defer handler.deinit();
+    handler.progress_delay_ns = options.progress_delay_ns;
     input.attach(&handler);
 
-    try lsp.basic_server.run(
-        io,
-        allocator,
-        &input.transport,
-        &handler,
-        std.log.err,
-    );
+    try lsp.basic_server.run(io, allocator, &input.transport, &handler, log);
 }
 
 pub fn uriToPath(

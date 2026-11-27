@@ -38,6 +38,7 @@ pub export fn process_lsp_message(message_ptr: u32, message_len: u32) u32 {
             allocator,
             browser_io,
             &browser_transport.transport,
+            .serial,
         );
         lsp_handler_initialized = true;
     }

@@ -537,12 +537,7 @@ test "LSP navigation cache invalidates changed mm0 sibling" {
     try std.testing.expect(first_hover != null);
     try std.testing.expectEqual(@as(usize, 1), session.indexedRoots());
 
-    try session.handler.@"textDocument/didChange"(arena, .{
-        .textDocument = .{ .uri = mm0_uri, .version = 2 },
-        .contentChanges = &.{
-            .{ .text_document_content_change_whole_document = .{ .text = changed_mm0_text } },
-        },
-    });
+    try session.change(mm0_uri, 2, changed_mm0_text);
     try std.testing.expectEqual(@as(usize, 0), session.indexedRoots());
 
     const hover_result = try session.handler.@"textDocument/hover"(arena, .{
@@ -580,9 +575,7 @@ test "LSP navigation cache invalidates closed proof sibling" {
     try std.testing.expect(hover_result != null);
     try std.testing.expectEqual(@as(usize, 1), session.indexedRoots());
 
-    try session.handler.@"textDocument/didClose"(arena, .{
-        .textDocument = .{ .uri = proof_uri },
-    });
+    try session.close(proof_uri);
     try std.testing.expectEqual(@as(usize, 0), session.indexedRoots());
 }
 

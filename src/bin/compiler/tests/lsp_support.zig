@@ -121,13 +121,28 @@ pub const Session = struct {
     transport: TestTransport,
     handler: Handler,
     arena_state: std.heap.ArenaAllocator,
+    /// Whether changed documents are left pending (`analyzeLater`).
+    later: bool,
 
+    /// A session served as the native server serves one, with every
+    /// analysis run to its end as soon as it is pending.
     pub fn init(self: *Session) void {
+        self.initServed(.{ .queued = .{ .context = self, .stopFn = neverStop } });
+    }
+
+    /// A session served as the browser worker serves one.
+    pub fn initSerial(self: *Session) void {
+        self.initServed(.serial);
+    }
+
+    fn initServed(self: *Session, host: lsp_server.Host) void {
+        self.later = false;
         self.transport = .{};
         self.handler = Handler.init(
             std.testing.allocator,
             std.testing.io,
             &self.transport.transport,
+            host,
         );
         self.arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     }
@@ -149,20 +164,53 @@ pub const Session = struct {
             .version = 1,
             .text = text,
         } });
+        try self.settle();
     }
 
-    /// The code actions offered at the first `needle` of `text`, the text
-    /// of the document `uri`.
+    /// Replace the text of the open document `uri`.
+    pub fn change(self: *Session, uri: []const u8, version: i32, text: []const u8) !void {
+        try self.handler.@"textDocument/didChange"(self.arena(), .{
+            .textDocument = .{ .uri = uri, .version = version },
+            .contentChanges = &.{
+                .{ .text_document_content_change_whole_document = .{ .text = text } },
+            },
+        });
+        try self.settle();
+    }
+
+    /// Close the document `uri`.
+    pub fn close(self: *Session, uri: []const u8) !void {
+        try self.handler.@"textDocument/didClose"(self.arena(), .{
+            .textDocument = .{ .uri = uri },
+        });
+        try self.settle();
+    }
+
+    /// The answer to a code-action request at the first `needle` of `text`,
+    /// the text of the document `uri`.
+    pub fn codeActionsAt(
+        self: *Session,
+        uri: []const u8,
+        text: []const u8,
+        needle: []const u8,
+    ) !CodeActionResult {
+        const result = try self.handler.@"textDocument/codeAction"(
+            self.arena(),
+            try codeActionParamsAt(uri, text, needle),
+        );
+        // A search that ran left its marker's diagnostic to publish.
+        try self.settle();
+        return result;
+    }
+
+    /// The code actions offered there, of which there must be some.
     pub fn codeActions(
         self: *Session,
         uri: []const u8,
         text: []const u8,
         needle: []const u8,
     ) ![]const CodeActionItem {
-        return expectCodeActionItems(try self.handler.@"textDocument/codeAction"(
-            self.arena(),
-            try codeActionParamsAt(uri, text, needle),
-        ));
+        return expectCodeActionItems(try self.codeActionsAt(uri, text, needle));
     }
 
     // What the handler keeps, read here and nowhere else in the tests.
@@ -204,9 +252,16 @@ pub const Session = struct {
         return error.FileNotInUnit;
     }
 
-    /// Leave documents that change pending, as the native server does.
+    /// Leave documents that change pending until the test runs their
+    /// analyses itself.
     pub fn analyzeLater(self: *Session) void {
-        self.handler.interrupt = .{ .context = self, .stopFn = neverStop };
+        self.later = true;
+    }
+
+    /// Run the pending analyses, as the native server does once no input
+    /// is waiting.
+    pub fn settle(self: *Session) !void {
+        if (!self.later) try self.handler.analyzePending();
     }
 
     pub fn neverStop(_: *anyopaque) bool {

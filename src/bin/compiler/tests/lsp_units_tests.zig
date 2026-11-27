@@ -108,12 +108,7 @@ test "LSP re-analyses importers when an imported document changes" {
     try std.testing.expectEqual(@as(usize, 1), session.indexedRoots());
 
     session.transport.clearMessages();
-    try session.handler.@"textDocument/didChange"(arena, .{
-        .textDocument = .{ .uri = lib_uri, .version = 2 },
-        .contentChanges = &.{
-            .{ .text_document_content_change_whole_document = .{ .text = "provable sort wff;\nterm top: wff;\n" } },
-        },
-    });
+    try session.change(lib_uri, 2, "provable sort wff;\nterm top: wff;\n");
     // The library's own set, then the proof re-checked against it.
     try std.testing.expect(session.transport.publishedNone(lib_uri));
     try std.testing.expect(session.transport.containsMessage(proof_uri));
@@ -159,7 +154,6 @@ test "LSP check memo replays library blocks across roots" {
     var session: Session = undefined;
     session.init();
     defer session.deinit();
-    const arena = session.arena();
 
     try session.handler.putDocument(lib_mm0_uri, lib_mm0_text, 1);
     try session.handler.putDocument(main_mm0_uri, main_mm0_text, 1);
@@ -179,12 +173,7 @@ test "LSP check memo replays library blocks across roots" {
 
     // An edit to the root's proof re-checks that block alone.
     session.transport.clearMessages();
-    try session.handler.@"textDocument/didChange"(arena, .{
-        .textDocument = .{ .uri = main_auf_uri, .version = 2 },
-        .contentChanges = &.{
-            .{ .text_document_content_change_whole_document = .{ .text = "main_thm\n---\np: $ top $ by lib_thm [] \n" } },
-        },
-    });
+    try session.change(main_auf_uri, 2, "main_thm\n---\np: $ top $ by lib_thm [] \n");
     try std.testing.expect(session.transport.publishedNone(main_auf_uri));
     try std.testing.expectEqual(@as(usize, 2), session.checks().replayed);
     try std.testing.expectEqual(@as(usize, 3), session.checks().run);
@@ -192,12 +181,7 @@ test "LSP check memo replays library blocks across roots" {
     // A library edit that keeps its outcome re-checks the library block
     // once, and the root's block replays.
     session.transport.clearMessages();
-    try session.handler.@"textDocument/didChange"(arena, .{
-        .textDocument = .{ .uri = lib_auf_uri, .version = 2 },
-        .contentChanges = &.{
-            .{ .text_document_content_change_whole_document = .{ .text = "lib_thm\n---\np: $ top $ by ax_top [] \n" } },
-        },
-    });
+    try session.change(lib_auf_uri, 2, "lib_thm\n---\np: $ top $ by ax_top [] \n");
     try std.testing.expect(session.transport.publishedNone(lib_auf_uri));
     try std.testing.expect(session.transport.publishedNone(main_auf_uri));
     // Library root: 1 miss. Importing root: library block hit (same body
@@ -287,9 +271,7 @@ test "LSP resolves imports from disk and reports on the imported file" {
 
     // Closing the root clears what it published for the library.
     session.transport.clearMessages();
-    try session.handler.@"textDocument/didClose"(arena, .{
-        .textDocument = .{ .uri = mm0_uri },
-    });
+    try session.close(mm0_uri);
     try std.testing.expect(session.transport.publishedNone(lib_uri));
 }
 
@@ -315,12 +297,7 @@ test "LSP keeps a closed library's diagnostics up while its root is checked agai
     try std.testing.expect(session.transport.published(lib_uri, "nope"));
 
     session.transport.clearMessages();
-    try session.handler.@"textDocument/didChange"(arena, .{
-        .textDocument = .{ .uri = proof_uri, .version = 2 },
-        .contentChanges = &.{
-            .{ .text_document_content_change_whole_document = .{ .text = lsp_import_proof_text ++ "\n" } },
-        },
-    });
+    try session.change(proof_uri, 2, lsp_import_proof_text ++ "\n");
     try std.testing.expect(session.transport.published(lib_uri, "nope"));
     try std.testing.expect(!session.transport.publishedNone(lib_uri));
 }
@@ -411,12 +388,7 @@ test "LSP resolves proof includes against open library files" {
     // Editing the library re-checks the root; breaking the lemma is the
     // root's problem to show.
     session.transport.clearMessages();
-    try session.handler.@"textDocument/didChange"(arena, .{
-        .textDocument = .{ .uri = lib_uri, .version = 2 },
-        .contentChanges = &.{
-            .{ .text_document_content_change_whole_document = .{ .text = "lemma lib_top: $ top $\n-------\nl1: $ top $ by nope []\n" } },
-        },
-    });
+    try session.change(lib_uri, 2, "lemma lib_top: $ top $\n-------\nl1: $ top $ by nope []\n");
     try std.testing.expect(session.transport.containsMessage(lib_uri));
     try std.testing.expect(session.transport.containsMessage("nope"));
     // Its own analysis, which finds no theory, leaves it to the root.
@@ -473,7 +445,6 @@ test "LSP reports a missing nested include" {
     var session: Session = undefined;
     session.init();
     defer session.deinit();
-    const arena = session.arena();
 
     try session.handler.putDocument(mm0_uri, lsp_import_lib_text ++ "\ntheorem main: $ top $;\n", 1);
     try session.handler.putDocument(lib_uri, lib_text, 1);
@@ -491,12 +462,7 @@ test "LSP reports a missing nested include" {
 
     // Fixing the library re-checks the root and clears both.
     session.transport.clearMessages();
-    try session.handler.@"textDocument/didChange"(arena, .{
-        .textDocument = .{ .uri = lib_uri, .version = 2 },
-        .contentChanges = &.{
-            .{ .text_document_content_change_whole_document = .{ .text = lib_text["include \"gone.auf\";\n".len..] } },
-        },
-    });
+    try session.change(lib_uri, 2, lib_text["include \"gone.auf\";\n".len..]);
     try std.testing.expect(session.transport.publishedNone(lib_uri));
     try std.testing.expect(session.transport.publishedNone(proof_uri));
 }
@@ -548,29 +514,15 @@ const DiskUnit = struct {
     }
 
     fn open(self: *DiskUnit, name: []const u8, text: []const u8) !void {
-        try self.session.handler.@"textDocument/didOpen"(self.session.arena(), .{
-            .textDocument = .{
-                .uri = try self.uri(name),
-                .languageId = .{ .custom_value = "aufbau" },
-                .version = 1,
-                .text = text,
-            },
-        });
+        try self.session.open(try self.uri(name), text);
     }
 
     fn change(self: *DiskUnit, name: []const u8, version: i32, text: []const u8) !void {
-        try self.session.handler.@"textDocument/didChange"(self.session.arena(), .{
-            .textDocument = .{ .uri = try self.uri(name), .version = version },
-            .contentChanges = &.{
-                .{ .text_document_content_change_whole_document = .{ .text = text } },
-            },
-        });
+        try self.session.change(try self.uri(name), version, text);
     }
 
     fn close(self: *DiskUnit, name: []const u8) !void {
-        try self.session.handler.@"textDocument/didClose"(self.session.arena(), .{
-            .textDocument = .{ .uri = try self.uri(name) },
-        });
+        try self.session.close(try self.uri(name));
     }
 
     /// Expect the last `needle` of `name`, a document with text `text`, to be
@@ -779,14 +731,7 @@ test "LSP requests from a proof file spelled another way join that file" {
     const spelled = try std.mem.concat(arena, u8, &.{
         plain[0 .. plain.len - "ain.auf".len], "%61in.auf",
     });
-    try unit.session.handler.@"textDocument/didOpen"(arena, .{
-        .textDocument = .{
-            .uri = spelled,
-            .languageId = .{ .custom_value = "aufbau" },
-            .version = 1,
-            .text = proof,
-        },
-    });
+    try unit.session.open(spelled, proof);
     // The unit joined from main.mm0 has main.auf as it is on disk: absent.
     try unit.expectDefined("main.mm0", main, "top", "lib.mm0", 1);
     const location = try expectDefinitionLocation(

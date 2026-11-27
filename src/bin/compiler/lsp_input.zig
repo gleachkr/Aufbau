@@ -21,6 +21,7 @@ const std = @import("std");
 const lsp = @import("lsp");
 const mm0 = @import("mm0");
 const Handler = @import("./lsp.zig").Handler;
+const Host = @import("./lsp.zig").Host;
 
 const Id = lsp.JsonRPCMessage.ID;
 
@@ -76,11 +77,14 @@ pub const Input = struct {
         self.* = undefined;
     }
 
-    /// Run `handler`'s pending analyses when nothing is queued, and give
-    /// them the interrupt that stops them (`Handler.interrupt`).
+    /// The host a handler reading from this input is served by.
+    pub fn host(self: *Input) Host {
+        return .{ .queued = .{ .context = self, .stopFn = stopRequested } };
+    }
+
+    /// Run `handler`'s pending analyses when nothing is queued.
     pub fn attach(self: *Input, handler: *Handler) void {
         self.handler = handler;
-        handler.interrupt = .{ .context = self, .stopFn = stopRequested };
     }
 
     fn readJsonMessage(

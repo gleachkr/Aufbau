@@ -100,16 +100,14 @@ const StdioClient = struct {
     }
 
     fn serve(read_from: std.Io.File, write_to: std.Io.File, progress_delay_ns: i96) void {
-        const allocator = std.testing.allocator;
-        const io = std.testing.io;
-        var read_buffer: [4096]u8 = undefined;
-        var input = Input.init(allocator, io, &read_buffer, read_from, write_to);
-        defer input.deinit();
-        var handler = Handler.init(allocator, io, &input.transport);
-        defer handler.deinit();
-        handler.progress_delay_ns = progress_delay_ns;
-        input.attach(&handler);
-        lsp.basic_server.run(io, allocator, &input.transport, &handler, null) catch {};
+        lsp_server.serve(
+            std.testing.io,
+            std.testing.allocator,
+            read_from,
+            write_to,
+            .{ .progress_delay_ns = progress_delay_ns },
+            null,
+        ) catch {};
     }
 
     /// Say that the client shows progress the server starts; the server
@@ -542,10 +540,7 @@ test "LSP input stops an analysis for a request, but not for a cancelled one" {
         client.from_server[1],
     );
     defer input.deinit();
-    var handler = Handler.init(std.testing.allocator, std.testing.io, &input.transport);
-    defer handler.deinit();
-    input.attach(&handler);
-    const interrupt = handler.interrupt.?;
+    const interrupt = input.host().queued;
 
     try std.testing.expect(!interrupt.stopRequested());
     try client.hoverHole(1);

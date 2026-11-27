@@ -725,7 +725,7 @@ fn session(seeds: []const harness.Seed, input: harness.Input) !void {
         .handler = &handler,
     };
     defer state.deinit();
-    handler = server.Handler.init(input.gpa, std.testing.io, &state.transport);
+    handler = server.Handler.init(input.gpa, std.testing.io, &state.transport, .serial);
     defer handler.deinit();
     lsp.basic_server.run(std.testing.io, input.gpa, &state.transport, &handler, null) catch |err| switch (err) {
         error.EndOfStream => {},
