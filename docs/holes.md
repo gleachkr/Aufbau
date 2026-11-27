@@ -164,7 +164,9 @@ successful check must agree with:
   line's `[x := ?t] (∀y P(x, y))` must equal the `∀` the second cites, which
   only the rule pushing the substitution under `∀y` gives, with `?t`
   avoiding `y`;
-- an equation under a definition unfolds the later definition, with a
+- an equation between two applications of one definition equates their
+  arguments, when the definition's body fixes each of them. Any other
+  equation under a definition unfolds the later definition, with a
   fresh unknown for each of its hidden variables, and equates the body
   with the other side. A line `$ ?a ∉ 0 $` cited where a rule expects
   `¬ p`, with `p` fixed to `c ∈ 0` by another premise, fixes `?a` as `c`.

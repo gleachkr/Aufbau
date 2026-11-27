@@ -49,6 +49,7 @@ const NameExprMap = @import("./types.zig").NameExprMap;
 const Unknowns = @import("./unknowns.zig");
 const CompilerVars = @import("../vars.zig");
 const AcuiBag = @import("../../acui_bag.zig");
+const HeadClass = @import("../../head_class.zig");
 const Canonicalizer = @import("../../normalizer.zig").Canonicalizer;
 
 pub const Inputs = struct {
@@ -129,15 +130,12 @@ const Solver = struct {
     statements: std.StringHashMapUnmanaged(ExprId) = .empty,
     work: std.ArrayListUnmanaged([2]ExprId) = .empty,
     /// Bag equations not decided yet: retried while bindings are made.
-    postponed: std.ArrayListUnmanaged([2]ExprId) = .empty,
-    /// Bindings made so far, to tell whether a retry round made progress.
-    /// A variable minted during the round does not count: a waiting
-    /// equation that unfolds a definition mints its hidden variables anew
-    /// at every retry, and binding those tells no equation anything.
+    postponed: std.ArrayListUnmanaged(Waiting) = .empty,
+    /// Owns the `Waiting.vars` lists.
+    waiting_arena: ?std.heap.ArenaAllocator = null,
+    /// Bindings made so far, to tell whether deciding the chains and the
+    /// rewrite steps made progress.
     progress: usize = 0,
-    /// The first expression id of the retry round under way; a variable
-    /// at or past it was minted during the round.
-    round_start: ExprId = std.math.maxInt(ExprId),
     /// The variables a trial bound, in order, so it can undo them.
     trail: std.ArrayListUnmanaged(ExprId) = .empty,
     /// Lines citing a `@fallback` chain, decided after the other lines.
@@ -154,6 +152,19 @@ const Solver = struct {
     /// Equations a rewrite step was committed for, so it is not again.
     steps_done: std.ArrayListUnmanaged([2]ExprId) = .empty,
 
+    /// An equation that waits for more bindings.
+    const Waiting = struct {
+        pair: [2]ExprId,
+        /// The unbound variables the two sides mentioned when the
+        /// equation was last tried. Nothing else can change what it says,
+        /// so it is tried again only once one of them is bound. (Trying
+        /// every waiting equation again on any binding ran without end on
+        /// one that unfolds a definition, whose hidden variables are
+        /// minted and bound anew each time, and cost a pass over all of
+        /// them per binding.)
+        vars: []const ExprId,
+    };
+
     const Choice = struct {
         app: RuleApplication,
         goal: ExprId,
@@ -169,6 +180,7 @@ const Solver = struct {
         self.statements.deinit(allocator);
         self.work.deinit(allocator);
         self.postponed.deinit(allocator);
+        if (self.waiting_arena) |*arena| arena.deinit();
         self.trail.deinit(allocator);
         for (self.choices.items) |choice| allocator.free(choice.rules);
         self.choices.deinit(allocator);
@@ -247,19 +259,63 @@ const Solver = struct {
         }
     }
 
-    /// Solve the pending equations, retrying the postponed ones while
-    /// bindings are made.
+    /// Solve the pending equations, retrying each postponed one once a
+    /// variable it waits on is bound.
     fn settle(self: *Solver) !void {
         try self.drain();
-        const outer = self.round_start;
-        defer self.round_start = outer;
-        while (self.postponed.items.len != 0) {
-            const before = self.progress;
-            self.round_start = @intCast(self.inputs.theorem.interner.count());
-            try self.work.appendSlice(self.inputs.allocator, self.postponed.items);
-            self.postponed.clearRetainingCapacity();
+        while (true) {
+            var kept: usize = 0;
+            for (self.postponed.items) |waiting| {
+                if (self.woken(waiting)) {
+                    try self.work.append(self.inputs.allocator, waiting.pair);
+                } else {
+                    self.postponed.items[kept] = waiting;
+                    kept += 1;
+                }
+            }
+            if (kept == self.postponed.items.len) break;
+            self.postponed.shrinkRetainingCapacity(kept);
             try self.drain();
-            if (self.progress == before) break;
+        }
+    }
+
+    /// Whether a variable `waiting` waits on has been bound.
+    fn woken(self: *const Solver, waiting: Waiting) bool {
+        for (waiting.vars) |variable| {
+            if (self.variables.get(variable).? != null) return true;
+        }
+        return false;
+    }
+
+    /// Make `lhs = rhs` wait for one of its unbound variables.
+    fn postpone(self: *Solver, lhs: ExprId, rhs: ExprId) !void {
+        const allocator = self.inputs.allocator;
+        var vars: std.ArrayListUnmanaged(ExprId) = .empty;
+        defer vars.deinit(allocator);
+        var seen: std.AutoHashMapUnmanaged(ExprId, void) = .empty;
+        defer seen.deinit(allocator);
+        try self.collectVariables(lhs, &vars, &seen);
+        try self.collectVariables(rhs, &vars, &seen);
+        if (self.waiting_arena == null) self.waiting_arena = std.heap.ArenaAllocator.init(allocator);
+        try self.postponed.append(allocator, .{
+            .pair = .{ lhs, rhs },
+            .vars = try self.waiting_arena.?.allocator().dupe(ExprId, vars.items),
+        });
+    }
+
+    fn collectVariables(
+        self: *Solver,
+        expr: ExprId,
+        vars: *std.ArrayListUnmanaged(ExprId),
+        seen: *std.AutoHashMapUnmanaged(ExprId, void),
+    ) !void {
+        const resolved = self.resolve(expr);
+        const slot = try seen.getOrPut(self.inputs.allocator, resolved);
+        if (slot.found_existing) return;
+        if (self.isVariable(resolved)) return vars.append(self.inputs.allocator, resolved);
+        switch (self.inputs.theorem.interner.node(resolved).*) {
+            .app => |app| for (app.args) |arg| try self.collectVariables(arg, vars, seen),
+            else => {},
         }
     }
 
@@ -465,7 +521,7 @@ const Solver = struct {
         }
         const trail_mark = self.trail.items.len;
         const progress_mark = self.progress;
-        const postponed = try allocator.dupe([2]ExprId, self.postponed.items);
+        const postponed = try allocator.dupe(Waiting, self.postponed.items);
         defer allocator.free(postponed);
         defer {
             for (self.trail.items[trail_mark..]) |variable| {
@@ -527,11 +583,11 @@ const Solver = struct {
 
     fn decideSteps(self: *Solver) !void {
         const allocator = self.inputs.allocator;
-        const pending = try allocator.dupe([2]ExprId, self.postponed.items);
+        const pending = try allocator.dupe(Waiting, self.postponed.items);
         defer allocator.free(pending);
-        for (pending) |pair| {
-            const lhs = try self.normalForm(pair[0]);
-            const rhs = try self.normalForm(pair[1]);
+        for (pending) |waiting| {
+            const lhs = try self.normalForm(waiting.pair[0]);
+            const rhs = try self.normalForm(waiting.pair[1]);
             if (self.stuckHead(lhs) != null and self.rigid(rhs, lhs)) {
                 try self.decideStep(lhs, rhs);
             } else if (self.stuckHead(rhs) != null and self.rigid(lhs, rhs)) {
@@ -674,7 +730,7 @@ const Solver = struct {
             try self.variables.put(self.inputs.allocator, narrowed, null);
             if (self.in_trial) try self.trail.append(self.inputs.allocator, resolved);
             self.variables.getPtr(resolved).?.* = narrowed;
-            if (resolved < self.round_start) self.progress += 1;
+            self.progress += 1;
             return;
         }
         switch (theorem.interner.node(resolved).*) {
@@ -819,10 +875,14 @@ const Solver = struct {
         if (self.decided(lhs_normal) and self.decided(rhs_normal)) {
             return self.equate(lhs_normal, rhs_normal);
         }
-        try self.postponed.append(self.inputs.allocator, .{ lhs, rhs });
+        try self.postpone(lhs, rhs);
     }
 
-    /// `lhs = rhs` with a side headed by a definition: the later
+    /// `lhs = rhs` with a side headed by a definition. Two applications of
+    /// one definition that every argument determines (`argDetermined`) are
+    /// equal just when their arguments are, so those are equated; unfolding
+    /// both instead would walk the two bodies to the bottom, once per use
+    /// of each nested definition. Otherwise the later
     /// definition unfolds (a definition mentions only earlier ones, so
     /// this ends), and its body is equated with the other side. A
     /// definition application equals only what its body equals, so this
@@ -832,6 +892,19 @@ const Solver = struct {
     fn definitionPair(self: *Solver, lhs: ExprId, rhs: ExprId) !void {
         const lhs_def = self.definitionHead(lhs);
         const rhs_def = self.definitionHead(rhs);
+        if (lhs_def != null and rhs_def != null and lhs_def.? == rhs_def.?) {
+            const theorem = self.inputs.theorem;
+            const theory = self.inputs.theory;
+            const lhs_app = theorem.interner.node(self.resolve(lhs)).app;
+            const rhs_app = theorem.interner.node(self.resolve(rhs)).app;
+            const determined = for (0..lhs_app.args.len) |i| {
+                if (!HeadClass.argDetermined(&theory.env, &theory.registry, lhs_app.term_id, i)) break false;
+            } else lhs_app.args.len == rhs_app.args.len;
+            if (determined) {
+                for (lhs_app.args, rhs_app.args) |l, r| try self.equate(l, r);
+                return;
+            }
+        }
         const unfold_lhs = lhs_def != null and (rhs_def == null or lhs_def.? >= rhs_def.?);
         if (unfold_lhs) {
             try self.equate(try self.unfoldDefinition(lhs), rhs);
@@ -935,7 +1008,7 @@ const Solver = struct {
         if (self.undecided(combiner.head) or self.anyUndecidedLeaf(left.items) or
             self.anyUndecidedLeaf(right.items))
         {
-            try self.postponed.append(allocator, .{ lhs, rhs });
+            try self.postpone(lhs, rhs);
             return;
         }
         const done = switch (combiner.law) {
@@ -946,7 +1019,7 @@ const Solver = struct {
                 try self.bagSequence(combiner, left.items, right.items),
             .idempotent_sequence => false,
         };
-        if (!done) try self.postponed.append(allocator, .{ lhs, rhs });
+        if (!done) try self.postpone(lhs, rhs);
     }
 
     /// The leaves of `expr` under `combiner`, in order, resolved, without
@@ -1260,7 +1333,7 @@ const Solver = struct {
         if (allowed != std.math.maxInt(u55)) try self.restrict(value, allowed);
         if (self.in_trial) try self.trail.append(self.inputs.allocator, variable);
         self.variables.getPtr(variable).?.* = value;
-        if (variable < self.round_start) self.progress += 1;
+        self.progress += 1;
     }
 
     fn occurs(self: *Solver, variable: ExprId, expr: ExprId) !bool {
